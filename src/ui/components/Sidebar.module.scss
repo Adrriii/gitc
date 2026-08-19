@@ -1,0 +1,255 @@
+.side {
+  width: var(--sidebar-w);
+  flex: none;
+  background: var(--bg-1);
+  border-right: 1px solid var(--line-hard);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.top {
+  padding: 8px;
+  flex: none;
+}
+
+.filter {
+  width: 100%;
+  background: var(--bg-inset);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 4px 7px;
+  color: var(--fg);
+  font-size: 12px;
+  outline: none;
+
+  &:focus {
+    border-color: var(--accent);
+  }
+  &::placeholder {
+    color: var(--fg-faint);
+  }
+}
+
+.scroll {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--fg-dim);
+  border-bottom: 1px solid var(--line);
+  user-select: none;
+  cursor: default;
+
+  &:hover {
+    background: var(--bg-3);
+  }
+}
+
+.arrow {
+  font-size: 11px;
+  line-height: 1;
+  width: 10px;
+  color: var(--fg-muted);
+}
+
+.name {
+  flex: 1;
+}
+
+// One slot holding both the count and the add button, so the header keeps
+// its width whichever is showing.
+.slot {
+  position: relative;
+  min-width: 20px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.count {
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+
+.add {
+  position: absolute;
+  right: -2px;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 18px;
+  border-radius: var(--radius);
+  border: 1px solid var(--green-line);
+  background: var(--green-bg);
+  color: var(--green-fg);
+
+  &:hover {
+    background: var(--green-line);
+  }
+}
+
+.head:hover .count {
+  visibility: hidden;
+}
+
+.head:hover .add {
+  display: flex;
+}
+
+.emptyHint {
+  font-size: 10px;
+  color: var(--fg-faint);
+}
+
+.ref {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: var(--fg-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  cursor: default;
+
+  &:hover {
+    background: var(--bg-3);
+    color: var(--fg);
+  }
+
+  // The checked-out branch: filled, not just tinted, so it is unmistakable.
+  &.current {
+    color: var(--chip-head-fg);
+    font-weight: 600;
+    background: var(--chip-head);
+
+    &:hover {
+      background: var(--accent-line);
+      color: var(--fg-bright);
+    }
+
+    .refIco {
+      color: var(--green);
+    }
+  }
+}
+
+.group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px 4px 8px;
+  font-size: 12px;
+  color: var(--fg-dim);
+  cursor: default;
+  user-select: none;
+
+  &:hover {
+    background: var(--bg-3);
+  }
+}
+
+// A folder of branches: `adri/feature1/login` nests instead of repeating its
+// prefix on every row, which the ~208px sidebar cannot afford.
+.folder {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: var(--fg-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  cursor: default;
+  user-select: none;
+
+  &:hover {
+    background: var(--bg-3);
+    color: var(--fg);
+  }
+}
+
+// The eye and the kebab both occupy fixed slots so a row does not reflow when
+// they appear. The reference reveals them on hover; a hidden ref keeps its eye
+// lit, because the way back must not be hidden behind hovering a dimmed row.
+.eye,
+.kebab {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  // The base button rule pads 1px 6px, which leaves 4px of content width in
+  // an 18px box and squashes the glyph to a dot. It has to be reset here.
+  padding: 0;
+  border-radius: var(--radius);
+  border: none;
+  background: none;
+  color: var(--fg-faint);
+  visibility: hidden;
+
+  svg {
+    flex: none;
+  }
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.09);
+    color: var(--fg);
+  }
+
+  &.pinned {
+    visibility: visible;
+    color: var(--green);
+  }
+}
+
+.ref:hover .eye,
+.ref:hover .kebab,
+.folder:hover .eye,
+.folder:hover .kebab,
+.group:hover .eye,
+.group:hover .kebab {
+  visibility: visible;
+}
+
+.ref:hover .eye,
+.folder:hover .eye,
+.group:hover .eye {
+  color: var(--green);
+}
+
+// A hidden ref still lists - it has to, or there would be nowhere to click to
+// bring it back - but it reads as switched off.
+.dim {
+  opacity: 0.45;
+}
+
+.folderCount {
+  padding-left: 6px;
+  font-size: 10px;
+  color: var(--fg-faint);
+}
+
+.refIco {
+  color: var(--fg-faint);
+  font-size: 11px;
+  flex: none;
+  width: 10px;
+}
+
+.refName {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

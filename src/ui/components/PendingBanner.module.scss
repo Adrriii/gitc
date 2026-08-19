@@ -1,0 +1,57 @@
+.bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 12px;
+  height: 30px;
+  font-size: 12px;
+  color: var(--amber-fg);
+  background: var(--amber-bg);
+  border-bottom: 1px solid var(--amber-bg);
+}
+
+// Conflicts are a stronger state than "still running", and read as such.
+.conflicted {
+  color: var(--red-fg);
+  background: var(--red-bg);
+  border-bottom-color: var(--red-line);
+}
+
+.icon {
+  font-size: 12px;
+}
+
+.text b {
+  text-transform: capitalize;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.action,
+.abort {
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: var(--radius);
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  color: inherit;
+  background: rgba(255, 255, 255, 0.07);
+
+  &:not(:disabled):hover {
+    background: rgba(255, 255, 255, 0.16);
+  }
+  &:disabled {
+    opacity: 0.45;
+  }
+}
+
+.abort {
+  border-color: var(--red-line);
+  background: var(--red-line);
+
+  &:not(:disabled):hover {
+    background: var(--red-line);
+  }
+}

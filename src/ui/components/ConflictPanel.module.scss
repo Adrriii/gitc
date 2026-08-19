@@ -1,0 +1,347 @@
+.panel {
+  // Rendered in place of <Panel>, so it carries the panel's own chrome:
+  // without these its contents float over the graph background.
+  width: var(--panel-w);
+  flex: none;
+  background: var(--bg-1);
+  border-left: 1px solid var(--line-hard);
+
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  height: 34px;
+  padding: 0 12px;
+  font-size: 12px;
+  color: var(--amber-fg);
+  background: var(--amber-bg);
+  border-bottom: 1px solid var(--amber-bg);
+}
+
+.warn {
+  color: var(--amber);
+  flex: none;
+}
+
+.headText {
+  font-weight: 600;
+}
+
+.subject {
+  flex: none;
+  padding: 10px 12px;
+  font-size: 12px;
+  color: var(--fg-dim);
+  border-bottom: 1px solid var(--line);
+}
+
+// Branch names, so nothing has to say "ours" or "theirs".
+.chip {
+  display: inline-block;
+  background: var(--chip-head);
+  color: var(--chip-head-fg);
+  border-radius: var(--radius);
+  padding: 1px 7px;
+  font-size: 11px;
+}
+
+.stashNote {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+.bareDone {
+  font-size: 12px;
+  color: var(--fg-dim);
+  line-height: 1.5;
+}
+
+.error {
+  margin: 8px 12px;
+  padding: 6px 9px;
+  border: 1px solid var(--red-line);
+  border-radius: var(--radius);
+  background: var(--red-bg);
+  color: var(--red-fg);
+  font-size: 11px;
+  white-space: pre-wrap;
+}
+
+.section {
+  display: flex;
+  align-items: center;
+  flex: none;
+  padding: 12px 12px 6px;
+  font-size: 12px;
+  color: var(--fg-dim);
+  background: var(--bg-1);
+}
+
+.sectionName {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.caret {
+  color: var(--fg-muted);
+  flex: none;
+}
+
+.markAll {
+  font-size: 11px;
+  padding: 3px 9px;
+  border-radius: var(--radius);
+  border: 1px solid var(--amber);
+  color: var(--amber-fg);
+  background: transparent;
+
+  &:not(:disabled):hover {
+    background: rgba(208, 138, 62, 0.16);
+  }
+}
+
+// Both lists scroll on their own so a long one never buries the other or the
+// Continue button. The conflicted list gets twice the share: it is the work,
+// and it carries per-file action buttons that are useless below the fold.
+.list {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.listMain {
+  flex: 2 1 0;
+}
+
+.empty {
+  padding: 4px 12px 8px;
+  font-size: 11px;
+  color: var(--fg-faint);
+}
+
+.file {
+  padding: 6px 12px 8px;
+  border-bottom: 1px solid var(--bg-2);
+
+  &:hover {
+    background: var(--bg-3);
+  }
+}
+
+.fileClickable {
+  cursor: pointer;
+}
+
+.fileActive {
+  background: var(--accent-bg);
+
+  &:hover {
+    background: var(--accent-bg);
+  }
+}
+
+.row1 {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.warnSmall {
+  color: var(--amber);
+  flex: none;
+}
+
+.name {
+  display: block;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dir {
+  color: var(--fg-muted);
+}
+.base {
+  color: var(--fg);
+}
+
+.why {
+  display: block;
+  font-size: 11px;
+  color: var(--fg-muted);
+  padding: 2px 0 0 19px;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 6px 0 0 19px;
+}
+
+.act,
+.actPrimary {
+  font-size: 11px;
+  padding: 3px 9px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--bg-3);
+  color: var(--fg-dim);
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+
+  &:not(:disabled):hover {
+    background: var(--bg-4);
+    color: var(--fg);
+  }
+}
+
+.actPrimary {
+  border-color: var(--accent-line);
+  background: var(--accent-line);
+  color: var(--accent-fg);
+
+  &:not(:disabled):hover {
+    background: var(--accent-line);
+  }
+}
+
+.resolvedRow {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 12px;
+  font-size: 12px;
+  min-width: 0;
+
+  &:hover {
+    background: var(--bg-3);
+  }
+}
+
+.ok {
+  color: var(--green);
+  flex: none;
+}
+
+.undo {
+  margin-left: auto;
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--fg-muted);
+  visibility: hidden;
+
+  &:hover {
+    background: var(--bg-4);
+    color: var(--fg);
+  }
+}
+
+.resolvedRow:hover .undo {
+  visibility: visible;
+}
+
+// ------------------------------------------------------------------ footer
+
+.footer {
+  flex: none;
+  padding: 10px 12px 12px;
+  border-top: 1px solid var(--line);
+}
+
+.progress {
+  margin-bottom: 10px;
+}
+
+.progressText {
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+.progressSubject {
+  font-size: 13px;
+  color: var(--fg-bright);
+  margin: 2px 0 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.progressBar {
+  height: 3px;
+  border-radius: var(--radius);
+  background: var(--bg-3);
+  overflow: hidden;
+}
+
+.progressFill {
+  height: 100%;
+  background: var(--accent);
+}
+
+.buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.continue {
+  flex: 1;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  border: 1px solid var(--green-line);
+  background: var(--green-bg);
+  color: var(--green-fg);
+  font-size: 12px;
+
+  &:not(:disabled):hover {
+    background: var(--green-line);
+  }
+
+  &:disabled {
+    background: var(--bg-2);
+    border-color: var(--line);
+    color: var(--fg-faint);
+  }
+}
+
+.skip,
+.abort {
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--bg-4);
+  color: var(--fg);
+  font-size: 12px;
+
+  &:not(:disabled):hover {
+    background: var(--bg-4);
+  }
+}
+
+.abort {
+  border-color: var(--red-line);
+  background: var(--red-line);
+  color: var(--red-fg);
+
+  &:not(:disabled):hover {
+    background: var(--red-line);
+  }
+}

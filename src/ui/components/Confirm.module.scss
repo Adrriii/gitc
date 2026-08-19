@@ -1,0 +1,76 @@
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dialog {
+  width: 420px;
+  background: var(--bg-2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
+  padding: 18px 20px 14px;
+}
+
+.title {
+  font-size: 15px;
+  color: var(--fg-bright);
+  margin-bottom: 10px;
+}
+
+.body {
+  font-size: 12px;
+  color: var(--fg-dim);
+  line-height: 1.6;
+
+  p {
+    margin: 0 0 6px;
+  }
+
+  b {
+    color: var(--fg);
+  }
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.cancel,
+.confirm,
+.destructive {
+  padding: 6px 16px;
+  border-radius: var(--radius);
+  font-size: 12px;
+  border: 1px solid var(--line);
+  background: var(--bg-4);
+  color: var(--fg);
+
+  &:hover {
+    background: var(--bg-4);
+  }
+}
+
+.confirm {
+  border-color: var(--accent-line);
+  background: var(--accent-line);
+  color: var(--accent-fg);
+}
+
+.destructive {
+  border-color: var(--red-line);
+  background: var(--red-line);
+  color: var(--red-fg);
+
+  &:hover {
+    background: var(--red-line);
+  }
+}

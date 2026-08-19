@@ -1,0 +1,481 @@
+$ours-bg: var(--chip-head);
+$theirs-bg: var(--amber-bg);
+$picked: rgba(255, 255, 255, 0.09);
+
+.wrap {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg-0);
+}
+
+.pathBar {
+  height: 30px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  background: var(--bg-1);
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+}
+
+.warn {
+  color: var(--amber);
+  flex: none;
+}
+
+.pathBase {
+  color: var(--fg-bright);
+  font-weight: 600;
+}
+
+.countTodo {
+  font-size: 11px;
+  color: var(--amber);
+}
+
+.countDone {
+  font-size: 11px;
+  color: var(--green-fg);
+}
+
+.spacer {
+  flex: 1;
+}
+
+.nav {
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+
+.navBtn,
+.close {
+  width: 22px;
+  height: 20px;
+  border-radius: var(--radius);
+  color: var(--fg-dim);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+
+  &:hover {
+    background: var(--bg-4);
+    color: var(--fg);
+  }
+}
+
+.save {
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: var(--radius);
+  border: 1px solid var(--green-line);
+  background: var(--green-bg);
+  color: var(--green-fg);
+
+  &:not(:disabled):hover {
+    background: var(--green-line);
+  }
+  &:disabled {
+    background: var(--bg-2);
+    border-color: var(--line);
+    color: var(--fg-faint);
+  }
+}
+
+.error {
+  flex: none;
+  margin: 6px 8px;
+  padding: 6px 9px;
+  border: 1px solid var(--red-line);
+  border-radius: var(--radius);
+  background: var(--red-bg);
+  color: var(--red-fg);
+  font-size: 11px;
+}
+
+.note {
+  padding: 24px;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+// ------------------------------------------------------------- A / B panes
+
+.sides {
+  flex: 1 1 55%;
+  display: flex;
+  min-height: 0;
+}
+
+.side {
+  flex: 1 1 50%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--bg-3);
+}
+
+.sideHead {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  background: var(--bg-1);
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+}
+
+.sideTag {
+  width: 18px;
+  height: 18px;
+  border-radius: var(--radius);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--chip-head);
+  color: var(--chip-head-fg);
+}
+
+.sideTagB {
+  background: var(--amber-bg);
+  color: var(--amber-fg);
+}
+
+.sideName {
+  color: var(--fg-bright);
+  font-weight: 600;
+}
+
+.sideHint {
+  color: var(--fg-faint);
+  font-size: 11px;
+}
+
+.sideBody {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.line {
+  display: flex;
+  align-items: flex-start;
+  white-space: pre;
+  min-height: 18px;
+}
+
+.num {
+  flex: none;
+  width: 40px;
+  padding-right: 8px;
+  text-align: right;
+  color: var(--fg-faint);
+  user-select: none;
+}
+
+.tick {
+  flex: none;
+  width: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 18px;
+}
+
+.text {
+  flex: 1;
+  white-space: pre;
+  color: var(--fg);
+  padding-right: 12px;
+}
+
+// A row that exists only to keep the two panes level.
+.filler {
+  background: repeating-linear-gradient(
+    45deg,
+    transparent,
+    transparent 4px,
+    rgba(255, 255, 255, 0.05) 4px,
+    rgba(255, 255, 255, 0.05) 5px
+  );
+}
+
+.hunk {
+  border-top: 1px solid var(--bg-2);
+  border-bottom: 1px solid var(--bg-2);
+  margin: 2px 0;
+}
+
+.hunkOurs {
+  background: $ours-bg;
+}
+
+.hunkTheirs {
+  background: $theirs-bg;
+}
+
+// The conflict the navigation is pointing at.
+.hunkCurrent {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+// Decided: the block steps back so the undecided ones stand out.
+.hunkDone {
+  opacity: 0.78;
+}
+
+.hunkHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 8px 3px 40px;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-size: 11px;
+  color: var(--fg-dim);
+}
+
+.hunkNo {
+  color: var(--fg-muted);
+}
+
+.takeBtn {
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--fg-dim);
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.14);
+    color: var(--fg);
+  }
+}
+
+.takeBtnOn {
+  border-color: var(--green-line);
+  background: var(--green-bg);
+  color: var(--green-fg);
+}
+
+.doneTag,
+.todoTag {
+  margin-left: auto;
+  font-size: 10px;
+  padding: 1px 7px;
+  border-radius: 8px;
+}
+
+.doneTag {
+  background: rgba(74, 156, 94, 0.22);
+  color: var(--green-fg);
+}
+
+.todoTag {
+  background: rgba(208, 138, 62, 0.2);
+  color: var(--amber-fg);
+}
+
+.linePicked {
+  background: $picked;
+}
+
+// A checkbox that belongs in a dark app rather than the platform's own.
+.box {
+  position: relative;
+  width: 13px;
+  height: 13px;
+  display: inline-flex;
+  cursor: pointer;
+
+  input {
+    position: absolute;
+    opacity: 0;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    cursor: pointer;
+  }
+}
+
+.boxMark {
+  width: 13px;
+  height: 13px;
+  border-radius: var(--radius);
+  border: 1px solid var(--fg-faint);
+  background: var(--bg-inset);
+  transition:
+    background 90ms ease-out,
+    border-color 90ms ease-out;
+
+  &::after {
+    content: "";
+    position: absolute;
+    left: 4px;
+    top: 1px;
+    width: 3px;
+    height: 7px;
+    border: solid var(--bg-inset);
+    border-width: 0 2px 2px 0;
+    transform: rotate(45deg) scale(0);
+    transition: transform 90ms ease-out;
+  }
+}
+
+.box input:hover + .boxMark {
+  border-color: var(--fg-muted);
+}
+
+.box input:checked + .boxMark {
+  background: var(--accent);
+  border-color: var(--accent);
+
+  &::after {
+    transform: rotate(45deg) scale(1);
+  }
+}
+
+.box input:focus-visible + .boxMark {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+// -------------------------------------------------------------- output pane
+
+.outputPane {
+  flex: 1 1 45%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--line-hard);
+}
+
+.outputHead {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 10px;
+  background: var(--bg-1);
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+}
+
+.outputTitle {
+  color: var(--fg-bright);
+  font-weight: 600;
+}
+
+.manualTag {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  color: var(--amber-fg);
+}
+
+.resetBtn {
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  color: var(--fg-dim);
+  background: var(--bg-3);
+
+  &:hover {
+    background: var(--bg-4);
+    color: var(--fg);
+  }
+}
+
+.warnTag {
+  font-size: 11px;
+  color: var(--red-fg);
+}
+
+.outputHint {
+  font-size: 11px;
+  color: var(--fg-faint);
+}
+
+.outputBody {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  background: var(--line-hard);
+}
+
+.outputGutter {
+  flex: none;
+  width: 48px;
+  overflow: hidden;
+  padding: 8px 0;
+  text-align: right;
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--fg-faint);
+  user-select: none;
+}
+
+.outNum {
+  padding-right: 8px;
+  height: 18px;
+}
+
+// The highlighted copy and the real textarea are stacked and must agree on
+// every metric, or the caret drifts away from the text under it.
+.outputStack {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+.outputOverlay,
+.outputText {
+  margin: 0;
+  padding: 8px 12px 8px 0;
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 12px;
+  line-height: 18px;
+  white-space: pre;
+  tab-size: 4;
+}
+
+.outputOverlay {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  color: var(--fg);
+  pointer-events: none;
+}
+
+.outputText {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  resize: none;
+  border: none;
+  outline: none;
+  background: transparent;
+  // The overlay supplies the colour; the textarea supplies the caret and
+  // the selection.
+  color: transparent;
+  caret-color: var(--fg-bright);
+  overflow: auto;
+
+  &::selection {
+    background: rgba(74, 143, 212, 0.35);
+  }
+}

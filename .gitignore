@@ -1,0 +1,12 @@
+node_modules/
+tools/
+dist/
+build/
+*.exe
+*.pdb
+*.ll
+
+# Written by scripts/version.mjs and scripts/embed.mjs at build time.
+src/generated/
+
+.gitc-browser-profile/

@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!--
+    gitc's mark: a capital C drawn as three commit nodes on one lane.
+
+    The letter has to win over the nodes, or the shape reads as a cluster
+    rather than a C. So the lane is the dominant stroke and the nodes are rings
+    sitting ON it at about two and a half times its width - clearly commits,
+    without becoming blobs that close the letter up. The arc is wide (radius 74) to give the letter room, and its mouth
+    spans 104 degrees, which is open enough to be a C and not a broken circle.
+
+    Everything is set by having to survive 16px: three nodes and no more, no
+    detail inside them, and a 22-wide lane that still resolves to ~1.4px there.
+
+    Geometry: centre (128,128), radius 74, terminals at -52 and +52 degrees.
+  -->
+  <rect width="256" height="256" rx="56" fill="#0f1115"/>
+  <rect x="4" y="4" width="248" height="248" rx="52" fill="none" stroke="#1e2127" stroke-width="8"/>
+
+  <!-- The lane. large-arc-flag=1 because the sweep is 256 degrees; sweep=0
+       runs it counter-clockwise, up over the top and round to the bottom. -->
+  <path d="M173.6 69.7 A74 74 0 1 0 173.6 186.3"
+        fill="none" stroke="#4f8cff" stroke-width="22" stroke-linecap="round"/>
+
+  <!-- The three commits: both terminals and the far left of the arc. -->
+  <g fill="#0f1115" stroke="#4f8cff" stroke-width="16">
+    <circle cx="173.6" cy="69.7" r="20"/>
+    <circle cx="54" cy="128" r="20"/>
+    <circle cx="173.6" cy="186.3" r="20"/>
+  </g>
+</svg>

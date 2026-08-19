@@ -1,0 +1,235 @@
+// Design tokens.
+//
+// Every colour in the app resolves to one of these. Components referring to a
+// raw hex is how the palette drifted into six shades of the same grey, so the
+// rule is: if a component needs a colour that is not here, the token set is
+// missing one - add it here rather than inline it there.
+//
+// They are CSS custom properties rather than Sass variables so the whole
+// palette stays live in devtools and can be retuned without a rebuild.
+
+:root {
+  // Surfaces, as an elevation scale rather than a set of one-off greys. The
+  // app floor is the darkest thing on screen and every panel sits above it;
+  // anything that needs to read as "inset" (inputs, the diff gutter) goes
+  // below it instead. Numbering them means a new component picks a level
+  // rather than inventing another near-duplicate of #2c2f36.
+  --bg-0: #0f1115; // the floor: graph canvas
+  --bg-1: #131519; // chrome: sidebar, toolbar, panels
+  --bg-2: #171a20; // raised: menus, dialogs, buttons
+  --bg-3: #1c2027; // hover
+  --bg-4: #22262e; // active / pressed
+  --bg-inset: #0b0d10; // inputs and wells, below the floor
+
+  // One hairline does almost all the separation work; the strong one is for
+  // dividers that carry real structure, and the hard one for outer edges.
+  --line: #1e2127;
+  --line-strong: #2a2e36;
+  --line-hard: #08090b;
+
+  --fg: #c9ccd1;
+  --fg-bright: #eceef1;
+  --fg-dim: #9aa0a8;
+  --fg-muted: #6f757e;
+  --fg-faint: #545a63;
+
+  --accent: #4f8cff;
+  --accent-hover: #6b9dff;
+  --accent-line: #2f5fb0;
+  --accent-bg: #16263f;
+  --accent-fg: #d5e3ff;
+
+  // Semantic colours double as diff and status colours, each with a surface
+  // tint and a legible foreground so callers never mix their own.
+  --green: #3fb950;
+  --green-bg: #10261a;
+  --green-line: #2a5c34;
+  --green-fg: #7ee787;
+  --red: #f85149;
+  --red-bg: #2b1416;
+  --red-line: #6e2b28;
+  --red-fg: #ff9d97;
+  --amber: #d29922;
+  --amber-bg: #2a2013;
+  --amber-fg: #e3b341;
+  --purple: #a371f7;
+  --cyan: #39c5cf;
+
+  // The checked-out branch, which has to stand out from every other chip.
+  --chip-head: #16324f;
+  --chip-head-fg: #cfe3ff;
+
+  --radius: 3px;
+  --radius-lg: 5px;
+
+  --row-h: 26px;
+  --lane-w: 14px;
+  --tabbar-h: 30px;
+  --toolbar-h: 44px;
+  --sidebar-w: 208px;
+  --panel-w: 400px;
+
+  --mono: "Cascadia Mono", Consolas, "JetBrains Mono", "Courier New", monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  background: var(--bg-0);
+  color: var(--fg);
+  // A 20px line box in a 26px row leaves 3px above and below - enough to
+  // separate rows without the airy 22px leading that pushed the old layout
+  // toward 28px rows.
+  font: 12px/20px "Segoe UI", system-ui, Inter, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+
+  &:disabled {
+    cursor: default;
+    opacity: 0.45;
+  }
+}
+
+input {
+  font: inherit;
+}
+
+::-webkit-scrollbar {
+  width: 11px;
+  height: 11px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+// Where a horizontal and a vertical scrollbar meet. Chromium paints this
+// white by default, which shows up as a bright square in a dark app.
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #2b3038;
+  border-radius: var(--radius-lg);
+  border: 3px solid transparent;
+  background-clip: content-box;
+
+  &:hover {
+    background: #3a404a;
+    background-clip: content-box;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Syntax highlighting tokens.
+//
+// These are global rather than module-scoped on purpose: the highlighted HTML
+// is injected as a string carrying highlight.js's own `hljs-*` class names, so
+// a hashed module class would never match it.
+//
+// The palette is VS Code Dark+, which reads correctly on the dark surfaces
+// here and is the scheme most people already have in their editor.
+// ---------------------------------------------------------------------------
+
+.hljs-keyword,
+.hljs-literal,
+.hljs-symbol,
+.hljs-name,
+.hljs-link,
+.hljs-selector-tag {
+  color: #569cd6;
+}
+
+.hljs-built_in,
+.hljs-type,
+.hljs-class .hljs-title {
+  color: #4ec9b0;
+}
+
+.hljs-number,
+.hljs-meta .hljs-number {
+  color: #b5cea8;
+}
+
+.hljs-string,
+.hljs-meta .hljs-string,
+.hljs-char.escape_ {
+  color: #ce9178;
+}
+
+.hljs-regexp,
+.hljs-template-tag {
+  color: #d16969;
+}
+
+.hljs-title,
+.hljs-title.function_,
+.hljs-section,
+.hljs-function .hljs-title {
+  color: #dcdcaa;
+}
+
+.hljs-variable,
+.hljs-template-variable,
+.hljs-attr,
+.hljs-attribute,
+.hljs-property,
+.hljs-params,
+.hljs-selector-attr,
+.hljs-selector-class,
+.hljs-selector-id {
+  color: #9cdcfe;
+}
+
+.hljs-comment,
+.hljs-quote {
+  color: #6a9955;
+  font-style: italic;
+}
+
+.hljs-doctag {
+  color: #608b4e;
+}
+
+.hljs-meta,
+.hljs-meta .hljs-keyword {
+  color: #c586c0;
+}
+
+.hljs-tag {
+  color: #808080;
+}
+
+.hljs-bullet,
+.hljs-operator,
+.hljs-punctuation {
+  color: #d7ba7d;
+}
+
+.hljs-emphasis {
+  font-style: italic;
+}
+.hljs-strong {
+  font-weight: 600;
+}
+
+.hljs-deletion,
+.hljs-addition {
+  // gitc paints add/remove backgrounds itself; the highlighter must not.
+  background: none;
+}

@@ -1,0 +1,303 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  // The panel itself never scrolls; only .lists does. That is what keeps the
+  // commit box on screen with a hundred changed files.
+  overflow: hidden;
+}
+
+// Holds the two file groups. It does not scroll itself - each group does.
+.lists {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  // A backstop: the two halves plus the fixed headers always fit, but if a
+  // future change breaks that, content clips here rather than painting over
+  // the commit box below.
+  overflow: hidden;
+}
+
+// The two lists split whatever is left after the fixed headers, exactly in
+// half, whatever they contain. `flex: 1 1 0` is what makes it a share of the
+// space rather than a function of content: a zero basis means neither list's
+// length enters the calculation, so the divider never moves.
+//
+// Both lists are always rendered - the empty-state line lives inside one
+// rather than replacing it - because a list that vanishes when empty would
+// hand its half to the other and the split would stop being fixed.
+.fileList {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.emptyList {
+  flex: none;
+  padding: 4px 12px 8px;
+  font-size: 11px;
+  color: var(--fg-faint);
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  flex: none;
+  padding: 0 12px;
+  font-size: 12px;
+  color: var(--fg-dim);
+  border-bottom: 1px solid var(--line);
+}
+
+.branchChip {
+  background: var(--chip-head);
+  color: var(--chip-head-fg);
+  border-radius: var(--radius);
+  padding: 1px 7px;
+  font-size: 11px;
+}
+
+.error {
+  margin: 8px 12px;
+  padding: 6px 9px;
+  border: 1px solid var(--red-line);
+  border-radius: var(--radius);
+  background: var(--red-bg);
+  color: var(--red-fg);
+  font-size: 11px;
+  white-space: pre-wrap;
+}
+
+.section {
+  display: flex;
+  align-items: center;
+  // Never shrinks: it is a sibling of the scrolling list, not inside it, so
+  // it stays put without needing position: sticky.
+  flex: none;
+  background: var(--bg-1);
+  padding: 12px 12px 6px;
+  font-size: 12px;
+  color: var(--fg-dim);
+}
+
+.sectionName {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.caret {
+  color: var(--fg-muted);
+  flex: none;
+}
+
+.stageAll,
+.unstageAll {
+  font-size: 11px;
+  padding: 3px 9px;
+  border-radius: var(--radius);
+  border: 1px solid var(--green);
+  color: var(--green-fg);
+  background: transparent;
+
+  &:not(:disabled):hover {
+    background: rgba(74, 156, 94, 0.16);
+  }
+}
+
+.unstageAll {
+  border-color: var(--red);
+  color: var(--red-fg);
+
+  &:not(:disabled):hover {
+    background: rgba(181, 68, 60, 0.16);
+  }
+}
+
+.file {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: none;
+  padding: 5px 12px;
+  font-size: 12px;
+  color: var(--fg-dim);
+  white-space: nowrap;
+  overflow: hidden;
+
+  &:hover {
+    background: var(--bg-3);
+  }
+}
+
+.fileActive {
+  background: var(--accent-bg);
+
+  &:hover {
+    background: var(--accent-bg);
+  }
+}
+
+.st {
+  flex: none;
+  width: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.mod {
+  color: var(--amber);
+}
+.add {
+  color: var(--green);
+}
+.del {
+  color: var(--red);
+}
+
+.name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.dir {
+  color: var(--fg-muted);
+}
+.base {
+  color: var(--fg);
+}
+
+// Row actions stay hidden until the row is hovered, so a long file list
+// doesn't read as a wall of buttons.
+.rowActions {
+  flex: none;
+  display: flex;
+  gap: 2px;
+  visibility: hidden;
+}
+
+.file:hover .rowActions {
+  visibility: visible;
+}
+
+.iconBtn {
+  width: 21px;
+  height: 19px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius);
+  color: var(--fg-dim);
+  font-size: 12px;
+  line-height: 1;
+
+  &:not(:disabled):hover {
+    background: var(--line-strong);
+    color: var(--fg);
+  }
+}
+
+// ------------------------------------------------------------- commit box
+
+.commitBox {
+  flex: none;
+  padding: 10px 12px 12px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.amend {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--fg-dim);
+  cursor: pointer;
+}
+
+.summaryRow {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.summary {
+  flex: 1;
+  padding: 7px 44px 7px 10px;
+  background: var(--bg-inset);
+  border: 1px solid var(--bg-2);
+  border-radius: var(--radius);
+  color: var(--fg);
+  outline: none;
+
+  &:focus {
+    border-color: var(--accent);
+  }
+  &::placeholder {
+    color: var(--fg-faint);
+  }
+}
+
+.counter {
+  position: absolute;
+  right: 10px;
+  font-size: 11px;
+  color: var(--fg-faint);
+}
+
+.over {
+  color: var(--amber);
+}
+
+.description {
+  min-height: 66px;
+  resize: vertical;
+  padding: 7px 10px;
+  background: var(--bg-inset);
+  border: 1px solid var(--bg-2);
+  border-radius: var(--radius);
+  color: var(--fg);
+  font: inherit;
+  outline: none;
+
+  &:focus {
+    border-color: var(--accent);
+  }
+  &::placeholder {
+    color: var(--fg-faint);
+  }
+}
+
+.commitBtn {
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--green-line);
+  background: var(--green-bg);
+  color: var(--green-fg);
+  font-size: 12px;
+
+  &:not(:disabled):hover {
+    background: var(--green-line);
+  }
+
+  &:disabled {
+    background: var(--bg-2);
+    border-color: var(--line);
+    color: var(--fg-faint);
+  }
+}
+
+.confirmLine {
+  color: var(--fg-dim);
+}

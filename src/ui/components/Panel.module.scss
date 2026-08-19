@@ -1,0 +1,321 @@
+.panel {
+  width: var(--panel-w);
+  flex: none;
+  background: var(--bg-1);
+  border-left: 1px solid var(--line-hard);
+  overflow-y: auto;
+}
+
+// The staging panel does its own scrolling internally, so the outer panel
+// must not add a second scroll container around it.
+.panelFlush {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 12px;
+  font-size: 12px;
+  color: var(--fg-dim);
+  border-bottom: 1px solid var(--line);
+}
+
+.mono {
+  font-family: Consolas, "Cascadia Mono", monospace;
+  color: var(--fg);
+}
+
+.branchChip {
+  background: var(--chip-head);
+  color: var(--chip-head-fg);
+  border-radius: var(--radius);
+  padding: 1px 7px;
+  font-size: 11px;
+}
+
+.message {
+  margin: 12px;
+  padding: 10px 12px;
+  background: var(--bg-inset);
+  border: 1px solid var(--bg-2);
+  border-radius: var(--radius);
+  min-height: 92px;
+}
+
+.subject {
+  font-size: 15px;
+  color: var(--fg-bright);
+  line-height: 1.35;
+  margin-bottom: 8px;
+}
+
+.body {
+  font-size: 12px;
+  color: var(--fg-dim);
+  white-space: pre-wrap;
+  line-height: 1.5;
+}
+
+.person {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+}
+
+.avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius);
+  background: var(--bg-4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: var(--fg);
+  flex: none;
+}
+
+.who {
+  font-size: 13px;
+  color: var(--fg);
+}
+
+.pwhen {
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+.parents {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+.coAuthors {
+  padding: 2px 12px 8px;
+}
+
+.coLabel {
+  font-size: 11px;
+  color: var(--fg-muted);
+  margin: 2px 0 6px;
+}
+
+.coPerson {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  min-width: 0;
+}
+
+.coName {
+  font-size: 12px;
+  color: var(--fg);
+  flex: none;
+}
+
+.coEmail {
+  font-size: 11px;
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.filesHead {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 12px 6px;
+  font-size: 12px;
+}
+
+.mod {
+  color: var(--amber);
+}
+.add {
+  color: var(--green);
+}
+.del {
+  color: var(--red);
+}
+.ren {
+  color: var(--accent);
+}
+
+// The commit list in a multi-selection scrolls on its own, so a long run
+// can't push the combined file list off the panel.
+.mlist {
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.toggle {
+  margin-left: auto;
+  display: flex;
+
+  button {
+    font-size: 11px;
+    padding: 3px 10px;
+    border: 1px solid var(--line);
+    color: var(--fg-dim);
+    background: var(--bg-3);
+
+    &:first-child {
+      border-radius: var(--radius) 0 0 3px;
+    }
+    &:last-child {
+      border-radius: 0 3px 3px 0;
+      border-left: none;
+    }
+    &.on {
+      background: var(--bg-4);
+      color: var(--fg);
+    }
+  }
+}
+
+.file {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 12px;
+  font-size: 12px;
+  color: var(--fg-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  cursor: pointer;
+
+  &:hover {
+    background: var(--bg-3);
+  }
+}
+
+.fileActive {
+  background: var(--accent-bg);
+
+  &:hover {
+    background: var(--accent-bg);
+  }
+}
+
+.st {
+  flex: none;
+  width: 10px;
+  text-align: center;
+}
+.stM {
+  color: var(--amber);
+}
+.stA {
+  color: var(--green);
+}
+.stD {
+  color: var(--red);
+}
+.stR {
+  color: var(--accent);
+}
+
+.dir {
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.base {
+  color: var(--fg);
+  flex: none;
+}
+
+.section {
+  display: flex;
+  align-items: center;
+  padding: 12px 12px 6px;
+  font-size: 12px;
+  color: var(--fg-dim);
+}
+
+.sectionName {
+  flex: 1;
+}
+
+.stageAll,
+.unstageAll {
+  font-size: 11px;
+  padding: 3px 9px;
+  border-radius: var(--radius);
+  border: 1px solid var(--green);
+  color: var(--green-fg);
+  background: transparent;
+}
+
+.unstageAll {
+  border-color: var(--red);
+  color: var(--red-fg);
+}
+
+.multi {
+  padding: 10px 12px;
+  font-size: 12px;
+  color: var(--fg-dim);
+}
+
+.mrow {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 10px;
+  margin: 0 12px 6px;
+  background: var(--bg-inset);
+  border: 1px solid var(--bg-2);
+  border-radius: var(--radius);
+
+  .avatar {
+    width: 26px;
+    height: 26px;
+    font-size: 10px;
+  }
+}
+
+.mtext {
+  flex: 1;
+  min-width: 0;
+}
+
+.msubject {
+  display: block;
+  color: var(--fg);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mmeta {
+  display: block;
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+
+.mhash {
+  font-family: Consolas, monospace;
+  font-size: 11px;
+  color: var(--fg-dim);
+  flex: none;
+}
+
+.empty {
+  padding: 40px 12px;
+  text-align: center;
+  color: var(--fg-faint);
+  font-size: 12px;
+}

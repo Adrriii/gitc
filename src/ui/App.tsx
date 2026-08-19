@@ -1,0 +1,1025 @@
+import { useCallback, useEffect, useMemo, useState } from "react";
+import type { ConflictState, GraphPayload, OpArgs, Ref, Session } from "./types";
+import { api } from "./api";
+import { VERSION } from "../generated/version";
+import { TabBar } from "./components/TabBar";
+import { Toolbar } from "./components/Toolbar";
+import { Sidebar } from "./components/Sidebar";
+import { Graph } from "./components/Graph";
+import { DiffView } from "./components/DiffView";
+import type { DiffTarget } from "./components/DiffView";
+import { Panel } from "./components/Panel";
+import { Welcome } from "./components/Welcome";
+import { ContextMenu } from "./components/ContextMenu";
+import type { MenuItem } from "./components/ContextMenu";
+import { PendingBanner } from "./components/PendingBanner";
+import { ConflictPanel } from "./components/ConflictPanel";
+import { MergeEditor } from "./components/MergeEditor";
+import { Prompt } from "./components/Prompt";
+import { Confirm } from "./components/Confirm";
+import { Choose } from "./components/Choose";
+import { Form } from "./components/Form";
+import type { Field } from "./components/Form";
+import { useHeartbeat } from "./useHeartbeat";
+import { useRepoWatch } from "./useRepoWatch";
+import { rangeSelect, toggleSelect } from "./selection";
+import s from "./App.module.scss";
+
+interface MenuState {
+  x: number;
+  y: number;
+  items: MenuItem[];
+}
+
+interface PromptState {
+  title: string;
+  label: string;
+  placeholder?: string;
+  initial?: string;
+  confirmLabel: string;
+  validate?: (v: string) => string | null;
+  onConfirm: (v: string) => void;
+}
+
+interface ChooseState {
+  title: string;
+  body?: string;
+  options: { value: string; label: string; hint?: string }[];
+  onPick: (value: string) => void;
+}
+
+interface FormState {
+  title: string;
+  body?: string;
+  fields: Field[];
+  confirmLabel: string;
+  onConfirm: (values: Record<string, string>) => void;
+}
+
+interface ConfirmState {
+  title: string;
+  body: React.ReactNode;
+  confirmLabel: string;
+  destructive?: boolean;
+  onConfirm: () => void;
+}
+
+/**
+ * Enough of git's ref-name rules to catch a typo before git does.
+ *
+ * Not a full implementation of check-ref-format - just the mistakes someone
+ * actually makes while typing a branch name into a box.
+ */
+function validateRefName(value: string): string | null {
+  const v = value.trim();
+  if (v.length === 0) return null;
+  if (v.startsWith("-") || v.startsWith("/") || v.endsWith("/")) return "Cannot start with - or /";
+  if (v.endsWith(".lock")) return "Cannot end with .lock";
+  if (v.includes("..") || v.includes("//")) return "Cannot contain .. or //";
+  if (/[\s~^:?*[\\]/.test(v)) return "Cannot contain spaces or ~ ^ : ? * [ \\";
+  return null;
+}
+
+/**
+ * Remote names live in the same namespace as ref path components, so they
+ * follow the same rules - plus one of their own: a slash would make
+ * `origin/main` ambiguous between the remote and a branch inside it.
+ */
+function validateRemoteName(value: string): string | null {
+  const v = value.trim();
+  if (v.length === 0) return null;
+  if (v.includes("/")) return "A remote name cannot contain /";
+  return validateRefName(v);
+}
+
+/** Rejects only what is certainly not a URL - git accepts a great deal. */
+function validateRemoteUrl(value: string): string | null {
+  const v = value.trim();
+  if (v.length === 0) return null;
+  if (/\s/.test(v)) return "A URL cannot contain spaces";
+  return null;
+}
+
+export function App() {
+  const dead = useHeartbeat();
+  const [session, setSession] = useState<Session | null>(null);
+  const [data, setData] = useState<GraphPayload | null>(null);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [anchor, setAnchor] = useState<string | null>(null);
+  const [openFile, setOpenFile] = useState<{
+    path: string;
+    target: DiffTarget;
+    label: string;
+  } | null>(null);
+  const [menu, setMenu] = useState<MenuState | null>(null);
+  const [prompt, setPrompt] = useState<PromptState | null>(null);
+  const [confirm, setConfirm] = useState<ConfirmState | null>(null);
+  const [choose, setChoose] = useState<ChooseState | null>(null);
+  const [form, setForm] = useState<FormState | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [reloadToken, setReloadToken] = useState(0);
+  const [conflicts, setConflicts] = useState<ConflictState | null>(null);
+  /** The conflicted file open in the merge editor, if any. */
+  const [mergeFile, setMergeFile] = useState<string | null>(null);
+
+  const refresh = useCallback(() => setReloadToken((n) => n + 1), []);
+
+  useEffect(() => {
+    api.session().then(setSession).catch((e: Error) => setError(e.message));
+  }, []);
+
+  const activeId = session?.activeId ?? null;
+  const activeTab = session?.tabs.find((t) => t.id === activeId) ?? null;
+
+  useEffect(() => {
+    if (!activeId) {
+      setData(null);
+      return;
+    }
+    let live = true;
+    setLoading(true);
+    api
+      .graph(activeId)
+      .then((d) => {
+        if (!live) return;
+        setData(d);
+        // Keep the selection across a refresh where it still exists, so an
+        // operation doesn't throw you back to the top of the graph.
+        setSelected((prev) => {
+          const stillValid = prev.filter((h) => h === "WIP" || d.commits.some((c) => c.hash === h));
+          if (prev.includes("WIP") && d.status.length > 0) return ["WIP"];
+          if (stillValid.length > 0) return stillValid;
+          return d.status.length > 0 ? ["WIP"] : d.commits[0] ? [d.commits[0].hash] : [];
+        });
+        setError(null);
+      })
+      .catch((e: Error) => live && setError(e.message))
+      .finally(() => live && setLoading(false));
+    return () => {
+      live = false;
+    };
+  }, [activeId, reloadToken]);
+
+  // Conflict detail is only fetched while something is actually pending, so
+  // the common case costs nothing.
+  const pendingKind = data?.pending.kind ?? "";
+  useEffect(() => {
+    if (!activeId || pendingKind.length === 0) {
+      setConflicts(null);
+      return;
+    }
+    let live = true;
+    api
+      .conflicts(activeId)
+      .then((c) => live && setConflicts(c))
+      .catch(() => live && setConflicts(null));
+    return () => {
+      live = false;
+    };
+  }, [activeId, pendingKind, reloadToken]);
+
+  // Pick up changes made outside gitc - an editor, a terminal, a build.
+  useRepoWatch(activeId, refresh);
+
+  // A notice is transient; an error stays until the next action clears it.
+  useEffect(() => {
+    if (notice === null) return;
+    const id = window.setTimeout(() => setNotice(null), 4000);
+    return () => window.clearTimeout(id);
+  }, [notice]);
+
+  /** Runs a repository operation and folds the outcome back into the UI. */
+  const runOp = useCallback(
+    async (args: OpArgs) => {
+      if (!activeTab) return;
+      setBusy(true);
+      setError(null);
+      setMenu(null);
+      try {
+        const r = await api.op(activeTab.id, args);
+        // A conflict comes back ok:false with a next step rather than as an
+        // error; the banner takes over from there.
+        if (!r.ok) setError(r.note);
+        else if (r.note.length > 0) setNotice(r.note);
+      } catch (e) {
+        setError((e as Error).message);
+      } finally {
+        setBusy(false);
+        refresh();
+      }
+    },
+    [activeTab, refresh],
+  );
+
+  const open = useCallback(async (path: string) => {
+    try {
+      const r = await api.open(path);
+      setSession(r.session);
+      setError(null);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }, []);
+
+  const onSelect = useCallback(
+    (hash: string, additive: boolean, range: boolean) => {
+      if (!data) return;
+      if (hash === "WIP") {
+        setSelected(["WIP"]);
+        setAnchor(null);
+        return;
+      }
+      setSelected((prev) => {
+        if (prev.includes("WIP")) {
+          setAnchor(hash);
+          return [hash];
+        }
+        if (range) {
+          const from = anchor ?? (prev.length > 0 ? prev[0] : null);
+          if (from !== null) return rangeSelect(data.commits, from, hash);
+        }
+        setAnchor(hash);
+        return additive ? toggleSelect(data.commits, prev, hash) : [hash];
+      });
+    },
+    [data, anchor],
+  );
+
+  const onOpenFile = useCallback(
+    (path: string, staged: boolean, untracked: boolean) => {
+      if (!data) return;
+      let target: DiffTarget;
+      let label: string;
+      if (selected.includes("WIP")) {
+        target = { kind: "wip", staged, untracked };
+        label = staged ? "staged changes" : "the working tree";
+      } else if (selected.length > 1) {
+        const chosen = data.commits.filter((c) => selected.includes(c.hash));
+        target = { kind: "range", from: chosen[chosen.length - 1].hash, to: chosen[0].hash };
+        label = `${chosen.length} commits`;
+      } else if (selected.length === 1) {
+        target = { kind: "commit", sha: selected[0] };
+        label = `commit ${selected[0].substring(0, 7)}`;
+      } else {
+        return;
+      }
+      setOpenFile({ path, target, label });
+    },
+    [data, selected],
+  );
+
+  useEffect(() => {
+    if (openFile === null && mergeFile === null) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      // The merge editor holds unsaved work, so it closes first and alone.
+      if (mergeFile !== null) setMergeFile(null);
+      else setOpenFile(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [openFile, mergeFile]);
+
+  useEffect(() => {
+    setOpenFile(null);
+  }, [selected.join(",")]);
+
+  // Once the operation finishes there is nothing left to merge.
+  useEffect(() => {
+    if (pendingKind.length === 0) setMergeFile(null);
+  }, [pendingKind]);
+
+  const branch = data?.head.branch ?? null;
+
+  // --- context menus --------------------------------------------------------
+
+  const commitMenu = useCallback(
+    (hash: string, x: number, y: number): void => {
+      // Right-clicking outside the selection moves to that commit; inside it
+      // keeps the run, so the menu can act on all of it.
+      setSelected((prev) => {
+        if (prev.includes(hash)) return prev;
+        setAnchor(hash);
+        return [hash];
+      });
+
+      const chosen = selected.includes(hash) ? selected.filter((h) => h !== "WIP") : [hash];
+      const many = chosen.length > 1;
+      const short = hash.substring(0, 7);
+      const on = branch ?? "HEAD";
+
+      setMenu({
+        x,
+        y,
+        items: [
+          {
+            label: "Checkout this commit",
+            action: () =>
+              setConfirm({
+                title: "Check out this commit?",
+                body: (
+                  <p>
+                    This detaches HEAD at <b>{short}</b>. Commits made while detached belong to no
+                    branch, so create one before moving away if you want to keep them.
+                  </p>
+                ),
+                confirmLabel: "Checkout",
+                onConfirm: () => {
+                  setConfirm(null);
+                  void runOp({ op: "checkoutCommit", shas: [hash] });
+                },
+              }),
+          },
+          { separator: true },
+          {
+            label: "Create branch here",
+            action: () =>
+              setPrompt({
+                title: "Create branch",
+                label: `Branch at ${short}`,
+                placeholder: "feature/my-work",
+                confirmLabel: "Create & checkout",
+                validate: validateRefName,
+                onConfirm: (name) => {
+                  setPrompt(null);
+                  void runOp({ op: "createBranch", name, shas: [hash], checkout: true });
+                },
+              }),
+          },
+          {
+            label: many ? `Cherry pick ${chosen.length} commits` : "Cherry pick commit",
+            action: () => void runOp({ op: "cherryPick", shas: chosen }),
+          },
+          {
+            label: `Rebase ${on} onto this commit`,
+            action: () =>
+              setConfirm({
+                title: `Rebase ${on} onto ${short}?`,
+                body: (
+                  <p>
+                    This rewrites the commits on <b>{on}</b>. If they have already been pushed,
+                    anyone else who has them will have to reconcile.
+                  </p>
+                ),
+                confirmLabel: "Rebase",
+                onConfirm: () => {
+                  setConfirm(null);
+                  void runOp({ op: "rebaseOnto", ref: hash });
+                },
+              }),
+          },
+          {
+            label: many ? `Revert ${chosen.length} commits` : "Revert commit",
+            action: () => void runOp({ op: "revert", shas: chosen }),
+          },
+          { separator: true },
+          {
+            label: `Reset ${on} here, keep changes`,
+            action: () => void runOp({ op: "reset", shas: [hash], mode: "mixed" }),
+          },
+          {
+            label: `Reset ${on} here, discard changes`,
+            action: () =>
+              setConfirm({
+                title: "Discard everything after this commit?",
+                body: (
+                  <p>
+                    <b>{on}</b> moves to <b>{short}</b> and the working tree is reset to match.
+                    Uncommitted changes, and any commits after it, are lost.
+                  </p>
+                ),
+                confirmLabel: "Reset hard",
+                destructive: true,
+                onConfirm: () => {
+                  setConfirm(null);
+                  void runOp({ op: "reset", shas: [hash], mode: "hard" });
+                },
+              }),
+          },
+          { separator: true },
+          {
+            label: "Create tag here",
+            action: () =>
+              setPrompt({
+                title: "Create tag",
+                label: `Tag at ${short}`,
+                placeholder: "v1.0.0",
+                confirmLabel: "Create tag",
+                validate: validateRefName,
+                onConfirm: (name) => {
+                  setPrompt(null);
+                  void runOp({ op: "createTag", name, shas: [hash] });
+                },
+              }),
+          },
+          {
+            label: "Copy commit sha",
+            action: () => {
+              void navigator.clipboard.writeText(hash);
+              setNotice("copied " + short);
+              setMenu(null);
+            },
+          },
+        ],
+      });
+    },
+    [selected, branch, runOp],
+  );
+
+  /**
+   * Hides or shows refs in the graph.
+   *
+   * The UI owns the set and posts the whole thing, rather than sending a
+   * delta: a folder toggle touches a dozen refs at once, and reconciling a
+   * dozen deltas against a set the engine also edits is a race for no gain.
+   * The engine answers with the rebuilt graph, so one round trip covers it.
+   */
+  const setHidden = useCallback(
+    async (refs: string[], hide: boolean) => {
+      if (!activeTab || refs.length === 0) return;
+      const next = new Set(data?.hidden ?? []);
+      for (const r of refs) {
+        if (hide) next.add(r);
+        else next.delete(r);
+      }
+      setMenu(null);
+      try {
+        setData(await api.setHidden(activeTab.id, [...next]));
+      } catch (e) {
+        setError((e as Error).message);
+      }
+    },
+    [activeTab, data?.hidden],
+  );
+
+  /** The menu on a branch folder, which is a display device git knows nothing about. */
+  const folderMenu = useCallback(
+    (label: string, refs: string[], x: number, y: number) => {
+      const hiddenSet = new Set(data?.hidden ?? []);
+      const allHidden = refs.length > 0 && refs.every((r) => hiddenSet.has(r));
+      const count = refs.length;
+      setMenu({
+        x,
+        y,
+        items: [
+          {
+            label: allHidden ? `Show ${label} in the graph` : `Hide ${label} in the graph`,
+            hint: count === 1 ? "1 branch" : `${count} branches`,
+            action: () => void setHidden(refs, !allHidden),
+          },
+        ],
+      });
+    },
+    [data?.hidden, setHidden],
+  );
+
+  const refMenu = useCallback(
+    (ref: Ref, x: number, y: number): void => {
+      const isCurrent = ref.kind === "local" && ref.short === branch;
+      const hiddenNow = (data?.hidden ?? []).includes(ref.short);
+      const items: MenuItem[] = [];
+
+      if (ref.kind === "tag") {
+        items.push({
+          label: `Checkout ${ref.short}`,
+          action: () => void runOp({ op: "checkout", ref: ref.short }),
+        });
+        items.push({ separator: true });
+        items.push({
+          label: `Delete tag ${ref.short}`,
+          action: () =>
+            setConfirm({
+              title: "Delete tag?",
+              body: (
+                <p>
+                  Tag <b>{ref.short}</b> will be deleted locally.
+                </p>
+              ),
+              confirmLabel: "Delete",
+              destructive: true,
+              onConfirm: () => {
+                setConfirm(null);
+                void runOp({ op: "deleteTag", ref: ref.short });
+              },
+            }),
+        });
+      } else {
+        if (!isCurrent) {
+          items.push({
+            label: `Checkout ${ref.short}`,
+            action: () => void runOp({ op: "checkout", ref: ref.short }),
+          });
+          items.push({
+            label: `Merge ${ref.short} into ${branch ?? "HEAD"}`,
+            action: () => void runOp({ op: "merge", ref: ref.short }),
+          });
+          items.push({
+            label: `Fast-forward to ${ref.short}`,
+            action: () => void runOp({ op: "fastForward", ref: ref.short }),
+          });
+          items.push({
+            label: `Rebase ${branch ?? "HEAD"} onto ${ref.short}`,
+            action: () => void runOp({ op: "rebaseOnto", ref: ref.short }),
+          });
+        }
+        items.push({ separator: true });
+        items.push({
+          label: "Create branch here",
+          action: () =>
+            setPrompt({
+              title: "Create branch",
+              label: `Branch from ${ref.short}`,
+              confirmLabel: "Create & checkout",
+              validate: validateRefName,
+              onConfirm: (name) => {
+                setPrompt(null);
+                void runOp({ op: "createBranch", name, ref: ref.short, checkout: true });
+              },
+            }),
+        });
+
+        if (ref.kind === "local") {
+          items.push({
+            label: "Rename branch",
+            action: () =>
+              setPrompt({
+                title: "Rename branch",
+                label: "New name",
+                initial: ref.short,
+                confirmLabel: "Rename",
+                validate: validateRefName,
+                onConfirm: (name) => {
+                  setPrompt(null);
+                  void runOp({ op: "renameBranch", ref: ref.short, name });
+                },
+              }),
+          });
+          items.push({
+            // A branch cannot be deleted while it is checked out; saying so is
+            // better than offering an action that always fails.
+            label: isCurrent ? "Delete (checked out)" : `Delete ${ref.short}`,
+            action: isCurrent
+              ? undefined
+              : () =>
+                  setConfirm({
+                    title: "Delete branch?",
+                    body: (
+                      <p>
+                        <b>{ref.short}</b> will be deleted. If it holds commits that exist nowhere
+                        else, git refuses — and gitc reports that rather than forcing it.
+                      </p>
+                    ),
+                    confirmLabel: "Delete",
+                    destructive: true,
+                    onConfirm: () => {
+                      setConfirm(null);
+                      void runOp({ op: "deleteBranch", ref: ref.short });
+                    },
+                  }),
+          });
+        }
+
+        if (ref.kind === "remote" && ref.remote !== null) {
+          const remote = ref.remote;
+          const bare = ref.short.substring(remote.length + 1);
+          items.push({
+            label: `Delete ${bare} on ${remote}`,
+            action: () =>
+              setConfirm({
+                title: "Delete remote branch?",
+                body: (
+                  <p>
+                    <b>{bare}</b> will be deleted on <b>{remote}</b>. This affects everyone using
+                    that remote, not just you.
+                  </p>
+                ),
+                confirmLabel: "Delete on remote",
+                destructive: true,
+                onConfirm: () => {
+                  setConfirm(null);
+                  void runOp({ op: "deleteRemoteBranch", ref: bare, remote });
+                },
+              }),
+          });
+        }
+
+        items.push({ separator: true });
+        items.push({
+          label: hiddenNow
+            ? `Show ${ref.short} in the graph`
+            : `Hide ${ref.short} in the graph`,
+          action: () => void setHidden([ref.short], !hiddenNow),
+        });
+        items.push({ separator: true });
+        items.push({
+          label: "Copy branch name",
+          action: () => {
+            void navigator.clipboard.writeText(ref.short);
+            setNotice("copied " + ref.short);
+            setMenu(null);
+          },
+        });
+      }
+
+      setMenu({ x, y, items });
+    },
+    [branch, data?.hidden, runOp, setHidden],
+  );
+
+  const addRemote = useCallback(() => {
+    setForm({
+      title: "Add remote",
+      body: "The remote is fetched as soon as it is added, so its branches appear right away.",
+      fields: [
+        {
+          key: "name",
+          label: "Name",
+          placeholder: "origin",
+          initial: "origin",
+          validate: validateRemoteName,
+        },
+        {
+          key: "url",
+          label: "URL",
+          placeholder: "https://github.com/you/repo.git",
+          validate: validateRemoteUrl,
+        },
+      ],
+      confirmLabel: "Add remote",
+      onConfirm: (v) => {
+        setForm(null);
+        void runOp({ op: "addRemote", name: v.name, message: v.url });
+      },
+    });
+  }, [runOp]);
+
+  /**
+   * The menu on a remote's own row.
+   *
+   * Modelled on the reference's, minus the two things gitc does not do: pull
+   * requests are out of scope, and hide/solo belong to graph filtering, which
+   * does not exist yet. Prune is split out because the reference folds it into
+   * fetch, and it is occasionally wanted on its own.
+   */
+  const remoteMenu = useCallback(
+    (remote: string, refs: string[], x: number, y: number) => {
+      const detail = (data?.remoteDetail ?? []).find((r) => r.name === remote);
+      const url = detail?.url ?? "";
+      const hiddenSet = new Set(data?.hidden ?? []);
+      const allHidden = refs.length > 0 && refs.every((r) => hiddenSet.has(r));
+
+      const items: MenuItem[] = [
+        { label: `Fetch ${remote}`, action: () => void runOp({ op: "fetchRemote", ref: remote }) },
+        {
+          label: `Prune ${remote}`,
+          hint: "drop branches deleted on the remote",
+          action: () => void runOp({ op: "pruneRemote", ref: remote }),
+        },
+        { separator: true },
+        {
+          label: allHidden ? `Show ${remote} in the graph` : `Hide ${remote} in the graph`,
+          hint: refs.length === 1 ? "1 branch" : `${refs.length} branches`,
+          action: () => void setHidden(refs, !allHidden),
+        },
+        { separator: true },
+        {
+          label: `Edit ${remote}`,
+          action: () =>
+            setForm({
+              title: "Edit remote",
+              fields: [
+                {
+                  key: "name",
+                  label: "Name",
+                  initial: remote,
+                  validate: validateRemoteName,
+                },
+                { key: "url", label: "URL", initial: url, validate: validateRemoteUrl },
+              ],
+              confirmLabel: "Save",
+              onConfirm: (v) => {
+                setForm(null);
+                // Two separate git commands, so only the halves that actually
+                // changed are run - renaming a remote to its own name is an
+                // error, not a no-op.
+                if (v.url !== url) {
+                  void runOp({ op: "setRemoteUrl", ref: remote, message: v.url });
+                }
+                if (v.name !== remote) {
+                  void runOp({ op: "renameRemote", ref: remote, name: v.name });
+                }
+              },
+            }),
+        },
+        {
+          label: `Remove ${remote}`,
+          danger: true,
+          action: () =>
+            setConfirm({
+              title: "Remove remote?",
+              body: (
+                <p>
+                  <b>{remote}</b> and its remote-tracking branches will be removed from this
+                  repository. Nothing is deleted on the server, and you can add it back.
+                </p>
+              ),
+              confirmLabel: "Remove remote",
+              destructive: true,
+              onConfirm: () => {
+                setConfirm(null);
+                void runOp({ op: "removeRemote", ref: remote });
+              },
+            }),
+        },
+      ];
+
+      if (url.length > 0) {
+        items.push({ separator: true });
+        items.push({
+          label: `Copy link to remote: ${remote}`,
+          action: () => {
+            void navigator.clipboard.writeText(url);
+            setNotice("copied " + url);
+            setMenu(null);
+          },
+        });
+      }
+
+      setMenu({ x, y, items });
+    },
+    [data?.remoteDetail, data?.hidden, runOp, setHidden],
+  );
+
+  /**
+   * Right-click on a branch or tag chip in the graph.
+   *
+   * The chip carries only a kind and a name, so the matching Ref is looked up
+   * and handed to the same menu the sidebar uses - one menu, one behaviour,
+   * wherever a branch appears.
+   */
+  const chipMenu = useCallback(
+    (kind: string, name: string, x: number, y: number) => {
+      if (!data) return;
+      const ref = data.refs.find((r) => r.kind === kind && r.short === name);
+      if (ref === undefined) return;
+      refMenu(ref, x, y);
+    },
+    [data, refMenu],
+  );
+
+  // --- toolbar --------------------------------------------------------------
+
+  const toolbar = useMemo(
+    () => ({
+      onFetch: () => void runOp({ op: "fetch" }),
+      onPull: () => void runOp({ op: "pull" }),
+      /**
+       * Pushing a branch that has no upstream has to pick a destination. One
+       * remote needs no question; several must not be guessed at, because
+       * publishing to the wrong one is not something you can quietly undo.
+       */
+      onPush: () => {
+        const remotes = data?.remotes ?? [];
+        const hasUpstream = (data?.upstream ?? null) !== null;
+        if (hasUpstream || remotes.length <= 1) {
+          void runOp({ op: "push" });
+          return;
+        }
+        setChoose({
+          title: "Push to which remote?",
+          body: `${branch ?? "This branch"} has no upstream yet. The remote you pick becomes its upstream.`,
+          options: remotes.map((r) => ({ value: r, label: r })),
+          onPick: (remote) => {
+            setChoose(null);
+            void runOp({ op: "push", remote });
+          },
+        });
+      },
+      onStash: () => void runOp({ op: "stash" }),
+      onPop: () => void runOp({ op: "stashPop" }),
+      onBranch: () =>
+        setPrompt({
+          title: "Create branch",
+          label: `Branch from ${branch ?? "HEAD"}`,
+          placeholder: "feature/my-work",
+          confirmLabel: "Create & checkout",
+          validate: validateRefName,
+          onConfirm: (name) => {
+            setPrompt(null);
+            void runOp({ op: "createBranch", name, checkout: true });
+          },
+        }),
+    }),
+    [runOp, branch, data],
+  );
+
+  const conflictCount = useMemo(() => {
+    if (!data) return 0;
+    return data.status.filter(
+      (f) => f.index === "U" || f.worktree === "U" || (f.index === "A" && f.worktree === "A"),
+    ).length;
+  }, [data]);
+
+  if (dead) {
+    return <div className={s.boot}>gitc has stopped. You can close this window.</div>;
+  }
+  if (!session) {
+    return <div className={s.boot}>{error ?? "Starting gitc…"}</div>;
+  }
+
+  return (
+    <div className={s.root}>
+      <TabBar
+        session={session}
+        onActivate={(id) => api.activate(id).then(setSession)}
+        onClose={(id) => api.close(id).then(setSession)}
+        onNew={() => setSession({ ...session, activeId: null })}
+      />
+
+      {!activeTab || !data ? (
+        <Welcome session={session} onOpen={open} error={error} />
+      ) : (
+        <div className={s.app}>
+          <Toolbar
+            repo={activeTab.name}
+            branch={data.head.branch ?? "detached"}
+            busy={busy}
+            onFetch={toolbar.onFetch}
+            onPull={toolbar.onPull}
+            onPush={toolbar.onPush}
+            onBranch={toolbar.onBranch}
+            onStash={toolbar.onStash}
+            onPop={toolbar.onPop}
+          />
+
+          <PendingBanner
+            pending={data.pending}
+            conflictCount={conflictCount}
+            busy={busy}
+            onContinue={() => void runOp({ op: "continue", ref: data.pending.kind })}
+            onSkip={() => void runOp({ op: "skip", ref: data.pending.kind })}
+            onAbort={() => void runOp({ op: "abort", ref: data.pending.kind })}
+          />
+
+          <div className={s.body}>
+            <Sidebar
+              data={data}
+              onContext={refMenu}
+              onCheckout={(ref) => void runOp({ op: "checkout", ref })}
+              onRemoteContext={remoteMenu}
+              onFolderContext={folderMenu}
+              onSetHidden={(refs, hide) => void setHidden(refs, hide)}
+              onAddRemote={addRemote}
+              onNewBranch={() =>
+                setPrompt({
+                  title: "Create branch",
+                  label: `Branch from ${branch ?? "HEAD"}`,
+                  placeholder: "feature/my-work",
+                  confirmLabel: "Create & checkout",
+                  validate: validateRefName,
+                  onConfirm: (name) => {
+                    setPrompt(null);
+                    void runOp({ op: "createBranch", name, checkout: true });
+                  },
+                })
+              }
+            />
+            {mergeFile !== null && conflicts !== null ? (
+              <MergeEditor
+                tabId={activeTab.id}
+                path={mergeFile}
+                oursLabel={
+                  conflicts.progress !== null && (conflicts.progress.ontoName ?? "").length > 0
+                    ? conflicts.progress.ontoName
+                    : "current"
+                }
+                theirsLabel={
+                  conflicts.progress !== null && (conflicts.progress.branch ?? "").length > 0
+                    ? conflicts.progress.branch
+                    : "incoming"
+                }
+                onResolved={() => {
+                  setMergeFile(null);
+                  refresh();
+                }}
+                onClose={() => setMergeFile(null)}
+              />
+            ) : openFile === null ? (
+              <Graph
+                data={data}
+                selected={selected}
+                onSelect={onSelect}
+                onContext={commitMenu}
+                onRefContext={chipMenu}
+                onRefCheckout={(kind, name) =>
+                  void runOp({ op: kind === "tag" ? "checkout" : "checkout", ref: name })
+                }
+                menuOpen={menu !== null}
+                onQuickCommit={(summary) => {
+                  if (!activeTab) return;
+                  void api
+                    .commit(activeTab.id, summary, "", false)
+                    .then((r) => setNotice(`committed ${r.hash.substring(0, 7)}`))
+                    .catch((e: Error) => setError(e.message))
+                    .finally(refresh);
+                }}
+              />
+            ) : (
+              <DiffView
+                tabId={activeTab.id}
+                target={openFile.target}
+                path={openFile.path}
+                contextLabel={openFile.label}
+                onClose={() => setOpenFile(null)}
+              />
+            )}
+            {conflicts !== null && conflicts.operation.length > 0 ? (
+              <ConflictPanel
+                tabId={activeTab.id}
+                state={conflicts}
+                busy={busy}
+                openPath={openFile?.path ?? null}
+                onOpenConflict={(p) => {
+                  setOpenFile(null);
+                  setMergeFile(p);
+                }}
+                onChanged={refresh}
+                onContinue={() => void runOp({ op: "continue", ref: conflicts.operation })}
+                onSkip={() => void runOp({ op: "skip", ref: conflicts.operation })}
+                onAbort={() => void runOp({ op: "abort", ref: conflicts.operation })}
+              />
+            ) : (
+              <Panel
+                data={data}
+                tabId={activeTab.id}
+                selected={selected}
+                onOpenFile={onOpenFile}
+                openPath={openFile?.path ?? null}
+                onChanged={refresh}
+              />
+            )}
+          </div>
+
+          <div className={s.status}>
+            <span>{loading ? "Loading…" : `Viewing ${data.commits.length} commits`}</span>
+            {notice !== null && <span className={s.notice}>{notice}</span>}
+            {error !== null && <span className={s.error}>{error}</span>}
+            <span className={s.spacer} />
+            <span className={s.path}>{activeTab.path}</span>
+            <span className={s.version} title={`gitc ${VERSION}`}>
+              v{VERSION}
+            </span>
+          </div>
+        </div>
+      )}
+
+      {menu && (
+        <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />
+      )}
+      {prompt && (
+        <Prompt
+          title={prompt.title}
+          label={prompt.label}
+          placeholder={prompt.placeholder}
+          initial={prompt.initial}
+          confirmLabel={prompt.confirmLabel}
+          validate={prompt.validate}
+          onConfirm={prompt.onConfirm}
+          onCancel={() => setPrompt(null)}
+        />
+      )}
+      {choose && (
+        <Choose
+          title={choose.title}
+          body={choose.body}
+          options={choose.options}
+          onPick={choose.onPick}
+          onCancel={() => setChoose(null)}
+        />
+      )}
+      {form && (
+        <Form
+          title={form.title}
+          body={form.body}
+          fields={form.fields}
+          confirmLabel={form.confirmLabel}
+          onConfirm={form.onConfirm}
+          onCancel={() => setForm(null)}
+        />
+      )}
+      {confirm && (
+        <Confirm
+          title={confirm.title}
+          body={confirm.body}
+          confirmLabel={confirm.confirmLabel}
+          destructive={confirm.destructive}
+          onConfirm={confirm.onConfirm}
+          onCancel={() => setConfirm(null)}
+        />
+      )}
+    </div>
+  );
+}
