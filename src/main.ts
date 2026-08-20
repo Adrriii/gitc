@@ -75,6 +75,18 @@ let session: Session = loadSession();
 // a browser that forked in a way that detaches the process we spawned.
 let lastPing = 0;
 let sawFirstPing = false;
+
+/**
+ * Identifies this process to the window, so a window can tell that the engine
+ * underneath it has been replaced.
+ *
+ * The window used to notice a restart by the port going silent. That stopped
+ * being true when an update learned to start its replacement properly: the
+ * new engine answers on the same port, so the old window's heartbeat kept
+ * succeeding and it sat there on the update dialog forever while the new
+ * window opened beside it. A name for each process makes the swap visible.
+ */
+const INSTANCE = String(process.pid) + "-" + String(Date.now());
 // Generous on purpose. This is a backstop: the browser-exit hook is what
 // normally ends the session, and the cost of being wrong here is the app
 // disappearing while someone is using it. Ten seconds was short enough that a
@@ -457,7 +469,7 @@ async function handleApi(
   if (path === "/api/ping") {
     lastPing = Date.now();
     sawFirstPing = true;
-    sendJson(res, "{\"ok\":true}");
+    sendJson(res, JSON.stringify({ ok: true, instance: INSTANCE }));
     return true;
   }
 
@@ -1242,6 +1254,32 @@ async function main(): Promise<void> {
       console.log("--no-window: API only (pair with `npm run dev:ui` on 5173)");
       return;
     }
+
+    // After an update, the window belonging to the version being replaced is
+    // still on screen. It notices that a different process is answering and
+    // reloads onto this one, so it becomes this engine's window - and opening
+    // another would leave the user with two copies of gitc, one of them stuck
+    // on an update that finished in a process that no longer exists.
+    //
+    // Only if it actually checks in, though. A window that was closed during
+    // the update never will, and then this is an ordinary start.
+    if (process.argv.includes("--after-update")) {
+      const giveUpAt = Date.now() + 8000;
+      const waitForWindow = () => {
+        if (sawFirstPing) {
+          console.log("adopted the window from the previous version");
+          return;
+        }
+        if (Date.now() > giveUpAt) {
+          if (!openWindow(url)) console.log("no Chromium browser found - open the URL manually");
+          return;
+        }
+        setTimeout(waitForWindow, 200);
+      };
+      waitForWindow();
+      return;
+    }
+
     if (!openWindow(url)) {
       console.log("no Chromium browser found - open the URL manually");
     }

@@ -107,7 +107,9 @@ export function GitLog({
                   <span className={s.git}>git</span> {call.args}
                   {call.count > 1 && <span className={s.repeat}>×{call.count}</span>}
                 </span>
-                <span className={s.ms}>{call.ms}ms</span>
+                <span className={`${s.ms} ${call.running ? s.pending : ""}`}>
+                  {call.running ? "running" : `${call.ms}ms`}
+                </span>
               </div>
             );
           })

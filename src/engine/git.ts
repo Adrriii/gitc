@@ -5,10 +5,7 @@
 // not be. Reads that are hot enough to matter bypass this and parse .git
 // directly - see refs.ts.
 
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-
-const execFileAsync = promisify(execFile);
+import { spawn } from "node:child_process";
 
 // Field separator for --format output. NUL can't appear in any git field,
 // so splitting on it is unambiguous - unlike the usual pipe/tab guesses,
@@ -101,8 +98,17 @@ function extractCoAuthors(body: string): { body: string; coAuthors: Person[] } {
  * command as it runs and keeps the rest one click away.
  */
 export interface GitCall {
-  /** Monotonic, so the UI can ask for "everything after what I have". */
+  /** Identifies this entry for its whole life. Never changes. */
   id: number;
+  /**
+   * Bumped whenever the entry changes, and what the UI polls against.
+   *
+   * An entry is written when its command STARTS and written again when it
+   * finishes, so "everything after what I have" cannot be a position in the
+   * list - an entry already sent has to be sendable again. The cursor and the
+   * identity are therefore two different numbers.
+   */
+  seq: number;
   /** Milliseconds since the epoch. */
   at: number;
   /** The command as it would be typed, without the leading "git". */
@@ -119,6 +125,8 @@ export interface GitCall {
    * cover about half an hour of idling rather than a day's work.
    */
   count: number;
+  /** Still running. `ms` is meaningless until this goes false. */
+  running: boolean;
 }
 
 /** Two thousand commands is hours of work and a couple of hundred kilobytes. */
@@ -126,6 +134,7 @@ const HISTORY_LIMIT = 2000;
 
 const history: GitCall[] = [];
 let nextCallId = 1;
+let nextSeq = 1;
 
 /**
  * Arguments that exist for gitc's benefit rather than the user's.
@@ -181,46 +190,197 @@ function readable(args: string[]): string[] {
   return out;
 }
 
-function record(repo: string, args: string[], started: number, ok: boolean): void {
+/**
+ * Records that a command has started. Returns its entry's id.
+ *
+ * Recording at the start rather than at the end is what makes the ticker feel
+ * like part of the action: pressing Fetch used to do nothing visible for two
+ * seconds and then produce a burst of commands that had all already run. Now
+ * the command appears as it is issued, and gains its duration when it ends.
+ */
+function begin(repo: string, args: string[]): number {
   // Quoted only where it matters, so the line can be pasted into a terminal.
   const text = readable(args)
     .map((a) => (a.includes(" ") ? '"' + a + '"' : a))
     .join(" ");
-  const ms = Date.now() - started;
 
+  // The same command again, counted rather than repeated - but only into an
+  // entry that finished and succeeded. A failure stays a row of its own,
+  // since "this ran five times" and "this failed" are different facts and
+  // collapsing them would report four successes as failures.
   const last = history.length > 0 ? history[history.length - 1] : undefined;
-  if (last !== undefined && last.args === text && last.repo === repo && last.ok === ok) {
-    // The same command again: count it rather than repeating it. The id moves
-    // so pollers asking for "anything after N" still receive the update.
+  if (
+    last !== undefined &&
+    last.args === text &&
+    last.repo === repo &&
+    !last.running &&
+    last.ok
+  ) {
     last.count += 1;
-    last.at = started;
-    last.ms = ms;
-    last.id = nextCallId;
-    nextCallId += 1;
-    return;
+    last.at = Date.now();
+    last.ms = 0;
+    last.running = true;
+    last.seq = nextSeq;
+    nextSeq += 1;
+    return last.id;
   }
 
+  const id = nextCallId;
+  nextCallId += 1;
   history.push({
-    id: nextCallId,
-    at: started,
+    id,
+    seq: nextSeq,
+    at: Date.now(),
     args: text,
     repo,
-    ms,
-    ok,
+    ms: 0,
+    ok: true,
     count: 1,
+    running: true,
   });
-  nextCallId += 1;
+  nextSeq += 1;
   // Trimmed from the front, so the newest are always the ones kept.
   while (history.length > HISTORY_LIMIT) history.shift();
+  return id;
 }
 
-/** The calls newer than `after`. Pass 0 for everything held. */
+/** Records how a started command ended. */
+function finish(id: number, started: number, ok: boolean): void {
+  // From the end: the command that just finished is almost always among the
+  // last few started.
+  for (let i = history.length - 1; i >= 0; i--) {
+    const call = history[i];
+    if (call.id !== id) continue;
+
+    // A failure that landed on a row counting earlier successes is split off,
+    // so the row keeps saying what actually happened to each run.
+    if (!ok && call.count > 1) {
+      call.count -= 1;
+      call.running = false;
+      call.seq = nextSeq;
+      nextSeq += 1;
+
+      const fresh = nextCallId;
+      nextCallId += 1;
+      history.push({
+        id: fresh,
+        seq: nextSeq,
+        at: started,
+        args: call.args,
+        repo: call.repo,
+        ms: Date.now() - started,
+        ok: false,
+        count: 1,
+        running: false,
+      });
+      nextSeq += 1;
+      while (history.length > HISTORY_LIMIT) history.shift();
+      return;
+    }
+
+    call.ms = Date.now() - started;
+    call.ok = ok;
+    call.running = false;
+    call.seq = nextSeq;
+    nextSeq += 1;
+    return;
+  }
+  // Not found: trimmed out of the history while it ran. Nothing to update.
+}
+
+/**
+ * The calls changed since `after`. Pass 0 for everything held.
+ *
+ * Against the sequence rather than the id, so an entry that started before
+ * the caller's last poll and finished after it is sent again with its
+ * duration filled in.
+ */
 export function gitHistory(after: number): GitCall[] {
   const out: GitCall[] = [];
   for (const call of history) {
-    if (call.id > after) out.push(call);
+    if (call.seq > after) out.push(call);
   }
   return out;
+}
+
+interface Ran {
+  code: number;
+  out: string;
+  err: string;
+}
+
+/**
+ * Runs git without stopping everything else.
+ *
+ * This used to be promisify(execFile), which is awaited and looks
+ * asynchronous and is not: measured against a running engine, a `git fetch`
+ * that sat for twenty seconds answered no request in that time - not even
+ * /api/ping. Everything the window asked for arrived at once when git
+ * finished, which is why an action felt like a pause followed by a burst.
+ * The same measurement with spawn: a 100ms timer fired 197 times during an
+ * identical fetch, so the loop is genuinely free.
+ *
+ * That matters beyond the command log. The window's heartbeat gives up after
+ * ten seconds of silence, so a fetch slow enough - a big repository on a bad
+ * connection - had the window concluding the engine was dead while it was
+ * merely busy.
+ *
+ * stdin stays closed rather than piped: piped stdin is a compile fence here,
+ * which is also why commit messages go in through -F and rebase through
+ * GIT_SEQUENCE_EDITOR.
+ */
+function run(repo: string, args: string[], env?: Record<string, string>): Promise<Ran> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("git", args, {
+      cwd: repo,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: env === undefined ? process.env : { ...process.env, ...env },
+    });
+
+    const out: Uint8Array[] = [];
+    const err: Uint8Array[] = [];
+    let code = 0;
+    let exited = false;
+    let open = 2;
+
+    // Both streams have to END before the output is complete. `exit` can
+    // arrive with bytes still unread, and this compiler has no `close` event
+    // to mean "exited AND drained" - so that condition is assembled here.
+    const settle = () => {
+      if (!exited || open > 0) return;
+      resolve({
+        code,
+        out: Buffer.concat(out).toString("utf8"),
+        err: Buffer.concat(err).toString("utf8"),
+      });
+    };
+
+    const stdout = child.stdout;
+    const stderr = child.stderr;
+    if (stdout === null || stderr === null) {
+      reject(new Error("git produced no output streams"));
+      return;
+    }
+
+    stdout.on("data", (chunk: Buffer) => out.push(chunk));
+    stdout.on("end", () => {
+      open -= 1;
+      settle();
+    });
+    stderr.on("data", (chunk: Buffer) => err.push(chunk));
+    stderr.on("end", () => {
+      open -= 1;
+      settle();
+    });
+
+    child.on("exit", (status: number | null) => {
+      // A signal death reports null; treat it as a failure with no code.
+      code = status === null ? 1 : status;
+      exited = true;
+      settle();
+    });
+    child.on("error", (e: Error) => reject(e));
+  });
 }
 
 export class GitError extends Error {
@@ -245,30 +405,22 @@ export async function git(
   env?: Record<string, string>,
 ): Promise<string> {
   const started = Date.now();
+  const call = begin(repo, args);
+
   try {
-    const { stdout } = await execFileAsync("git", args, {
-      cwd: repo,
-      encoding: "utf8",
-      maxBuffer: 64 * 1024 * 1024,
-      env: env === undefined ? process.env : { ...process.env, ...env },
-    });
-    record(repo, args, started, true);
-    return stdout;
-  } catch (e) {
-    record(repo, args, started, false);
-    const err = e as Error;
-    // execFile's message is "Command failed: <the whole command line>" with
-    // git's stderr appended. The command line is noise to a user - they did
-    // not type it - so keep the part git actually said.
-    const raw = err.message;
-    const marker = String.fromCharCode(10);
-    let detail = raw;
-    const nl = raw.indexOf(marker);
-    if (raw.startsWith("Command failed:") && nl !== -1) {
-      detail = raw.substring(nl + 1).trim();
+    const result = await run(repo, args, env);
+    finish(call, started, result.code === 0);
+    if (result.code !== 0) {
+      const detail = result.err.trim().length > 0 ? result.err.trim() : "git exited with " + String(result.code);
+      throw new GitError(detail, detail);
     }
-    if (detail.length === 0) detail = raw;
-    throw new GitError(detail, detail);
+    return result.out;
+  } catch (e) {
+    if (e instanceof GitError) throw e;
+    // Failing to START git at all - not on PATH, or no permission.
+    finish(call, started, false);
+    const err = e as Error;
+    throw new GitError(err.message, err.message);
   }
 }
 

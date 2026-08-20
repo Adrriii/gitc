@@ -168,17 +168,23 @@ export interface UpdateResult {
 /**
  * A megabyte at a time, so the window keeps being answered.
  *
- * This looks like an odd way to fetch a file, and it is. The reason is that
- * nothing here can download in the background: promisify(execFile) is the
- * only asynchronous form this compiler lowers, and measured against a running
- * engine it does not actually yield - the loop stops for the whole transfer,
- * every request times out, and the timer meant to be watching the file never
- * runs. The first version of this progress bar therefore reported nothing at
- * all, which is how it was caught.
+ * This looks like an odd way to fetch a file, and it is. It was written when
+ * the only asynchronous form known to work here was promisify(execFile),
+ * which - measured against a running engine - does not actually yield: the
+ * loop stops for the whole transfer, every request times out, and a timer
+ * watching the file never runs. The first version of this progress bar
+ * reported nothing at all, which is how that was caught.
  *
  * Ranged requests turn one long block into several short ones. Between
  * chunks the loop runs, the poll gets answered, and the bar moves. The cost
  * is a handful of extra connections on a file this size.
+ *
+ * git.ts has since established that spawn WITH PIPED OUTPUT does yield
+ * properly, so this could become a single request with a timer watching the
+ * file grow. It is left alone deliberately: this is the code path that
+ * delivers every future version, it is verified against a host that honours
+ * ranges and one that ignores them, and simplifying it buys nothing a user
+ * can see.
  */
 // Small enough that a request arriving just after a chunk started is not kept
 // waiting long for it to end - that wait is the resolution of the progress

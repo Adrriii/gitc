@@ -53,7 +53,10 @@ export interface Submodule {
 }
 
 export interface GitCall {
+  /** Stable for the entry's whole life. */
   id: number;
+  /** Bumped on every change; what the poll asks against. */
+  seq: number;
   /** Milliseconds since the epoch. */
   at: number;
   /** The command as typed, without the leading "git". */
@@ -63,6 +66,8 @@ export interface GitCall {
   ok: boolean;
   /** How many times this command ran in a row. */
   count: number;
+  /** Still running - `ms` means nothing yet. */
+  running: boolean;
 }
 
 export interface UpdateProgress {

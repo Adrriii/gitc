@@ -9,11 +9,16 @@ const FAILURES_BEFORE_DEAD = 5;
 /**
  * Keeps the window and the engine bound together as one application.
  *
- * Two directions, both needed:
+ * Three directions:
  *  - the ping tells the engine we are still here, so it can exit when the
  *    window is closed (its browser-exit hook is primary; this is the backstop)
  *  - a failing ping means the engine is gone, so the window closes itself
  *    rather than sitting there showing a dead UI
+ *  - a ping answered by a DIFFERENT engine means this window has been handed
+ *    to a new process, which is what an update is. The window reloads onto
+ *    it: same window, new version, and none of the old state - which was
+ *    stuck on the update dialog, since the update it was watching finished
+ *    in a process that no longer exists.
  *
  * `window.close()` is permitted here because the page was opened as a
  * Chromium --app window. If a browser refuses it, the caller renders a
@@ -25,6 +30,7 @@ export function useHeartbeat(): boolean {
   useEffect(() => {
     let failures = 0;
     let stopped = false;
+    let engine: string | null = null;
 
     const tick = async () => {
       if (stopped) return;
@@ -32,6 +38,20 @@ export function useHeartbeat(): boolean {
         const res = await fetch("/api/ping", { cache: "no-store" });
         if (!res.ok) throw new Error("bad status");
         failures = 0;
+
+        const body = (await res.json()) as { instance?: string };
+        const instance = body.instance ?? null;
+        if (instance !== null) {
+          if (engine === null) {
+            engine = instance;
+          } else if (engine !== instance) {
+            // A different process is answering than the one this page was
+            // loaded from. Reloading is what makes an update look like a
+            // restart of the window rather than a second copy of the app.
+            stopped = true;
+            window.location.reload();
+          }
+        }
       } catch {
         failures += 1;
         if (failures >= FAILURES_BEFORE_DEAD) {

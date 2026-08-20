@@ -5,7 +5,10 @@ import { api } from "./api";
 /** Matches the engine's own cap; the UI never holds more than it is sent. */
 export const GIT_LOG_LIMIT = 2000;
 
-const INTERVAL_MS = 1200;
+// Fast enough that a command appears to arrive as it is issued rather than in
+// a batch afterwards. The poll is one small request that usually answers with
+// an empty list.
+const INTERVAL_MS = 350;
 
 /**
  * Tails the git commands the engine runs.
@@ -15,8 +18,10 @@ const INTERVAL_MS = 1200;
  * command it actually ran, so using gitc leaves you knowing git rather than
  * knowing gitc.
  *
- * Only what the caller does not already hold is fetched - the poll carries the
- * highest id seen, so the common case answers with an empty list.
+ * Only what has changed is fetched - the poll carries the highest sequence
+ * seen, so the common case answers with an empty list. A command is sent
+ * twice: once as it starts, so it can be shown while it runs, and once when
+ * it ends, carrying how long it took.
  */
 export function useGitLog(): { calls: GitCall[]; clear: () => void } {
   const [calls, setCalls] = useState<GitCall[]>([]);
@@ -30,17 +35,29 @@ export function useGitLog(): { calls: GitCall[]; clear: () => void } {
       try {
         const fresh = await api.gitLog(seen.current);
         if (stopped || fresh.length === 0) return;
-        seen.current = fresh[fresh.length - 1].id;
+
+        // The highest sequence in the batch, not the last one in it: an entry
+        // that finished after later ones started is re-sent in list order, so
+        // the last element is not necessarily the newest change.
+        for (const call of fresh) {
+          if (call.seq > seen.current) seen.current = call.seq;
+        }
+
         setCalls((prev) => {
           const next = [...prev];
+          // By id: an entry arrives once when its command starts and again
+          // when it ends, and the second arrival must update the row rather
+          // than add one. Repeats are collapsed by the engine into an
+          // existing entry, which keeps its id, so they land here too.
+          const at = new Map<number, number>();
+          for (let i = 0; i < next.length; i++) at.set(next[i].id, i);
+
           for (const call of fresh) {
-            // The engine collapses a repeated command into the previous entry
-            // and re-sends it with a fresh id, so an arriving call that
-            // matches the tail replaces it rather than adding a row.
-            const last = next.length > 0 ? next[next.length - 1] : undefined;
-            if (last !== undefined && last.args === call.args && last.repo === call.repo) {
-              next[next.length - 1] = call;
+            const index = at.get(call.id);
+            if (index !== undefined) {
+              next[index] = call;
             } else {
+              at.set(call.id, next.length);
               next.push(call);
             }
           }
