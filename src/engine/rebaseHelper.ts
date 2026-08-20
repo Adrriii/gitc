@@ -33,6 +33,8 @@ export function rewriteTodo(specPath: string, todoPath: string): void {
 
   const LF = String.fromCharCode(10);
   const out: string[] = [];
+  /** Index of the last line turned into a squash, or -1. */
+  let lastFold = -1;
 
   for (const line of readFileSync(todoPath, "utf8").split(LF)) {
     const trimmed = line.trim();
@@ -63,12 +65,35 @@ export function rewriteTodo(specPath: string, todoPath: string): void {
 
     if (fold) {
       out.push("squash " + parts.slice(1).join(" "));
+      lastFold = out.length - 1;
     } else {
       out.push(line);
     }
   }
 
-  writeFileSync(todoPath, out.join(LF), "utf8");
+  // Redate the squashed commit to now.
+  //
+  // A squash keeps the oldest commit's author date, so a run of work from last
+  // week collapses into a commit that still claims to be from last week -
+  // which is not when this history came to exist. The committer date moves on
+  // its own during a rebase; only the author date needs saying.
+  //
+  // It goes in as an `exec` immediately after the last fold rather than as an
+  // amend afterwards, because the squashed commit is not necessarily HEAD when
+  // the rebase finishes: anything that came after it is replayed on top.
+  if (lastFold === -1) {
+    writeFileSync(todoPath, out.join(LF), "utf8");
+    return;
+  }
+
+  // Rebuilt rather than spliced: a three-argument splice has no lowering here.
+  const final: string[] = [];
+  for (let i = 0; i < out.length; i++) {
+    final.push(out[i]);
+    if (i === lastFold) final.push("exec git commit --amend --no-edit --date=now");
+  }
+
+  writeFileSync(todoPath, final.join(LF), "utf8");
 }
 
 /**

@@ -108,3 +108,43 @@
     background: var(--accent-line);
   }
 }
+
+// The running commentary of git commands, in the status bar.
+//
+// Deliberately quiet and deliberately present: it is there to be glanced at,
+// and to make clear that everything gitc does is a git command someone could
+// have typed.
+.ticker {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  gap: 5px;
+  padding: 0 8px;
+  border-radius: var(--radius);
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+
+  &:hover {
+    background: var(--bg-2);
+    color: var(--fg-dim);
+  }
+}
+
+.tickerOn {
+  background: var(--bg-3);
+  color: var(--fg-dim);
+}
+
+.tickerGit {
+  flex: none;
+  color: var(--accent);
+}
+
+.tickerArgs {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

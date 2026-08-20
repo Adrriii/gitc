@@ -1,4 +1,5 @@
 import type {
+  GitCall,
   Listing,
   UpdateInfo,
   UpdateResult,
@@ -96,6 +97,10 @@ export const api = {
     return json<FileDiff>(`/api/diff?${q.toString()}`);
   },
 
+  /** The git commands run since `after`. Pass 0 for everything held. */
+  gitLog: (after: number) =>
+    json<{ calls: GitCall[] }>(`/api/gitlog?after=${after}`).then((r) => r.calls),
+
   /** Asks whether a newer gitc has been released. */
   checkUpdate: () => json<UpdateInfo>("/api/update"),
 
@@ -111,7 +116,7 @@ export const api = {
 
   /** A value that changes whenever the repository changes on disk. */
   watch: (id: string) =>
-    json<{ version: string }>(`/api/watch?id=${encodeURIComponent(id)}`),
+    json<{ version: string; fetched: number }>(`/api/watch?id=${encodeURIComponent(id)}`),
 
   conflicts: (id: string) =>
     json<ConflictState>(`/api/conflicts?id=${encodeURIComponent(id)}`),

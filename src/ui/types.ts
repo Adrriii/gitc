@@ -52,6 +52,19 @@ export interface Submodule {
   label: string;
 }
 
+export interface GitCall {
+  id: number;
+  /** Milliseconds since the epoch. */
+  at: number;
+  /** The command as typed, without the leading "git". */
+  args: string;
+  repo: string;
+  ms: number;
+  ok: boolean;
+  /** How many times this command ran in a row. */
+  count: number;
+}
+
 export interface UpdateInfo {
   current: string;
   latest: string;

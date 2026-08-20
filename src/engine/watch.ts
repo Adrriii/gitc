@@ -75,6 +75,25 @@ function refsFingerprint(dir: string, depth: number): string {
 }
 
 /**
+ * When this repository last fetched, in epoch milliseconds; 0 if it never has.
+ *
+ * Read from FETCH_HEAD's mtime rather than remembered in gitc, because the
+ * question is whether the remote data is stale - not whether *gitc* fetched
+ * it. git writes this file on every fetch and every pull, so a fetch run in a
+ * terminal counts exactly as much as one run from here, which is the answer a
+ * person actually wants.
+ */
+export function lastFetch(repo: string): number {
+  const path = join(gitDir(repo), "FETCH_HEAD");
+  if (!existsSync(path)) return 0;
+  try {
+    return statSync(path).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
+
+/**
  * A value that changes whenever anything about the repository changes.
  *
  * Not a checksum of the repository - just something stable that moves when

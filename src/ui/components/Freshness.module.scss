@@ -1,0 +1,46 @@
+// Two readings on the status bar, kept together so they read as one gauge.
+.wrap {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.pill {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+  height: 15px;
+  border-radius: var(--radius);
+  color: var(--fg-faint);
+  font-size: 11px;
+  white-space: nowrap;
+
+  &:hover {
+    background: var(--bg-2);
+    color: var(--fg-dim);
+  }
+}
+
+// Dimmer than the number: which reading this is matters less than how old it
+// is, and the icon already says it.
+.label {
+  color: var(--fg-faint);
+}
+
+.age {
+  color: var(--fg-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+// Old enough to act on. Deliberately not red - nothing is broken, and a
+// status bar that cries wolf stops being read at all.
+.stale {
+  color: var(--amber-fg);
+
+  .label,
+  .age {
+    color: var(--amber-fg);
+  }
+}

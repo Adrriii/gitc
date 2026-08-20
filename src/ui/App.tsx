@@ -11,6 +11,8 @@ import type { DiffTarget } from "./components/DiffView";
 import { Panel } from "./components/Panel";
 import { Welcome } from "./components/Welcome";
 import { Preferences } from "./components/Preferences";
+import { GitLog } from "./components/GitLog";
+import { Freshness } from "./components/Freshness";
 import { ContextMenu } from "./components/ContextMenu";
 import type { MenuItem } from "./components/ContextMenu";
 import { PendingBanner } from "./components/PendingBanner";
@@ -25,6 +27,8 @@ import { useHeartbeat } from "./useHeartbeat";
 import { useRepoWatch } from "./useRepoWatch";
 import { useDragWidth } from "./useDragWidth";
 import { useTheme } from "./theme";
+import { useGitLog } from "./useGitLog";
+import { useFetchInterval } from "./settings";
 import { rangeSelect, toggleSelect } from "./selection";
 import s from "./App.module.scss";
 
@@ -124,6 +128,9 @@ export function App() {
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
   const [updating, setUpdating] = useState(false);
   const { colors: themeColors } = useTheme();
+  const { calls: gitCalls, clear: clearGitLog } = useGitLog();
+  const [logOpen, setLogOpen] = useState(false);
+  const { minutes: fetchMinutes } = useFetchInterval();
   // Both side panels are dragged rather than fixed. The handles are on the
   // inner edge of each, so the sidebar grows rightward and the panel leftward.
   const [sidebarW, dragSidebar] = useDragWidth("gitc.sidebarWidth", 208, 150, 480);
@@ -242,8 +249,38 @@ export function App() {
     };
   }, [activeId, pendingKind, reloadToken]);
 
-  // Pick up changes made outside gitc - an editor, a terminal, a build.
-  useRepoWatch(activeId, refresh);
+  // Pick up changes made outside gitc - an editor, a terminal, a build. It
+  // also reports how current each half of the view is, for the status bar.
+  const freshness = useRepoWatch(activeId, refresh);
+
+  /**
+   * Fetches the active repository on a timer.
+   *
+   * Quiet by design: no spinner, no notice, and a failure - offline, no remote,
+   * credentials wanted - is swallowed. An automatic action nobody asked for
+   * should not be able to interrupt someone with an error, and the ticker
+   * shows the command anyway for anyone who wants to see it happen.
+   */
+  useEffect(() => {
+    if (activeId === null || fetchMinutes === 0) return;
+    let stopped = false;
+
+    const tick = async () => {
+      if (stopped || !document.hasFocus() || document.hidden) return;
+      try {
+        await api.op(activeId, { op: "fetch" });
+        if (!stopped) refresh();
+      } catch {
+        // Left alone on purpose - see above.
+      }
+    };
+
+    const id = window.setInterval(() => void tick(), fetchMinutes * 60 * 1000);
+    return () => {
+      stopped = true;
+      window.clearInterval(id);
+    };
+  }, [activeId, fetchMinutes, refresh]);
 
   // A notice is transient; an error stays until the next action clears it.
   useEffect(() => {
@@ -1170,11 +1207,39 @@ export function App() {
             )}
           </div>
 
+          {logOpen && (
+            <GitLog calls={gitCalls} onClose={() => setLogOpen(false)} onClear={clearGitLog} />
+          )}
+
           <div className={s.status}>
             <span>{loading ? "Loading…" : `Viewing ${data.commits.length} commits`}</span>
+            {/* The ticker: whatever git ran last, and a way into the rest. */}
+            <button
+              className={`${s.ticker} ${logOpen ? s.tickerOn : ""}`}
+              onClick={() => setLogOpen((v) => !v)}
+              title="Every git command gitc has run - click to see them all"
+            >
+              <span className={s.tickerGit}>git</span>{" "}
+              <span className={s.tickerArgs}>
+                {gitCalls.length === 0 ? "…" : gitCalls[gitCalls.length - 1].args}
+              </span>
+            </button>
             {notice !== null && <span className={s.notice}>{notice}</span>}
             {error !== null && <span className={s.error}>{error}</span>}
             <span className={s.spacer} />
+            {/*
+              How current the view is. The threshold for calling the remote
+              stale follows the auto-fetch interval - three missed rounds -
+              so turning fetching up does not leave a permanent warning, and
+              turning it off falls back to half an hour.
+            */}
+            <Freshness
+              signals={freshness}
+              staleMinutes={fetchMinutes > 0 ? fetchMinutes * 3 : 30}
+              hasRemote={data.remotes.length > 0}
+              onRefresh={refresh}
+              onFetch={() => void runOp({ op: "fetch" })}
+            />
             <span className={s.path}>{activeTab.path}</span>
             {update !== null && (
               <button

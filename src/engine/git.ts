@@ -92,6 +92,137 @@ function extractCoAuthors(body: string): { body: string; coAuthors: Person[] } {
   return { body: kept.join(LF).trim(), coAuthors };
 }
 
+/**
+ * Every git command gitc runs, most recent last.
+ *
+ * gitc delegates all of its work to git, and this is the record of it. The
+ * point is not diagnostics: it is that someone using gitc should end up
+ * knowing git better, not more dependent on gitc. The UI shows the latest
+ * command as it runs and keeps the rest one click away.
+ */
+export interface GitCall {
+  /** Monotonic, so the UI can ask for "everything after what I have". */
+  id: number;
+  /** Milliseconds since the epoch. */
+  at: number;
+  /** The command as it would be typed, without the leading "git". */
+  args: string;
+  /** Repository it ran in. */
+  repo: string;
+  ms: number;
+  ok: boolean;
+  /**
+   * How many times this command has just run in a row.
+   *
+   * The watch poll runs `git status` every second or so; without collapsing
+   * repeats the record would be nothing else, and two thousand entries would
+   * cover about half an hour of idling rather than a day's work.
+   */
+  count: number;
+}
+
+/** Two thousand commands is hours of work and a couple of hundred kilobytes. */
+const HISTORY_LIMIT = 2000;
+
+const history: GitCall[] = [];
+let nextCallId = 1;
+
+/**
+ * Arguments that exist for gitc's benefit rather than the user's.
+ *
+ * The record is meant to teach git, and these teach nothing: they are the
+ * machine-readable output formats and locking flags gitc needs in order to
+ * parse what comes back. `git status` is the command someone would type;
+ * `git status --porcelain=v1 -z -uall --no-optional-locks` is the same command
+ * wearing gitc's plumbing.
+ *
+ * Deliberately a list rather than a rule - anything not named here is shown,
+ * so a flag that changes what git DOES can never be hidden by accident.
+ */
+const NOISE_EXACT = [
+  "-z",
+  "--no-optional-locks",
+  "--porcelain",
+  "--no-color",
+  "--null",
+  "-uall",
+];
+
+const NOISE_PREFIX = ["--porcelain=", "--format=", "--pretty=format:", "--max-buffer="];
+
+/** Drops the plumbing, keeping everything that changes what git does. */
+function readable(args: string[]): string[] {
+  const out: string[] = [];
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+
+    // `-c key=value` is configuration for one invocation - core.editor=true to
+    // stop git opening an editor, and the like. Two tokens, both plumbing.
+    if (arg === "-c") {
+      i += 1;
+      continue;
+    }
+
+    if (NOISE_EXACT.includes(arg)) continue;
+
+    let noisy = false;
+    for (const prefix of NOISE_PREFIX) {
+      if (arg.startsWith(prefix)) {
+        noisy = true;
+        break;
+      }
+    }
+    if (noisy) continue;
+
+    out.push(arg);
+  }
+
+  return out;
+}
+
+function record(repo: string, args: string[], started: number, ok: boolean): void {
+  // Quoted only where it matters, so the line can be pasted into a terminal.
+  const text = readable(args)
+    .map((a) => (a.includes(" ") ? '"' + a + '"' : a))
+    .join(" ");
+  const ms = Date.now() - started;
+
+  const last = history.length > 0 ? history[history.length - 1] : undefined;
+  if (last !== undefined && last.args === text && last.repo === repo && last.ok === ok) {
+    // The same command again: count it rather than repeating it. The id moves
+    // so pollers asking for "anything after N" still receive the update.
+    last.count += 1;
+    last.at = started;
+    last.ms = ms;
+    last.id = nextCallId;
+    nextCallId += 1;
+    return;
+  }
+
+  history.push({
+    id: nextCallId,
+    at: started,
+    args: text,
+    repo,
+    ms,
+    ok,
+    count: 1,
+  });
+  nextCallId += 1;
+  // Trimmed from the front, so the newest are always the ones kept.
+  while (history.length > HISTORY_LIMIT) history.shift();
+}
+
+/** The calls newer than `after`. Pass 0 for everything held. */
+export function gitHistory(after: number): GitCall[] {
+  const out: GitCall[] = [];
+  for (const call of history) {
+    if (call.id > after) out.push(call);
+  }
+  return out;
+}
+
 export class GitError extends Error {
   readonly stderr: string;
   constructor(message: string, stderr: string) {
@@ -113,6 +244,7 @@ export async function git(
    */
   env?: Record<string, string>,
 ): Promise<string> {
+  const started = Date.now();
   try {
     const { stdout } = await execFileAsync("git", args, {
       cwd: repo,
@@ -120,8 +252,10 @@ export async function git(
       maxBuffer: 64 * 1024 * 1024,
       env: env === undefined ? process.env : { ...process.env, ...env },
     });
+    record(repo, args, started, true);
     return stdout;
   } catch (e) {
+    record(repo, args, started, false);
     const err = e as Error;
     // execFile's message is "Command failed: <the whole command line>" with
     // git's stderr appended. The command line is noise to a user - they did

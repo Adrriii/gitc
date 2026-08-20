@@ -17,10 +17,11 @@ import {
   readRangeFiles,
   isRepo,
   repoRoot,
+  gitHistory,
 } from "./engine/git.ts";
 import { buildGraph, LANE_COLORS } from "./engine/graph.ts";
 import { runOp } from "./engine/ops.ts";
-import { fingerprint } from "./engine/watch.ts";
+import { fingerprint, lastFetch } from "./engine/watch.ts";
 import {
   readConflictState,
   readConflictVersions,
@@ -433,7 +434,8 @@ async function handleApi(
     lastPing = Date.now();
     sawFirstPing = true;
     try {
-      sendJson(res, JSON.stringify({ version: await fingerprint(tab.path) }));
+      const version = await fingerprint(tab.path);
+      sendJson(res, JSON.stringify({ version, fetched: lastFetch(tab.path) }));
     } catch (e) {
       const err = e as Error;
       send(res, 500, "application/json", JSON.stringify({ error: err.message }));
@@ -488,6 +490,24 @@ async function handleApi(
       return true;
     }
     sendJson(res, JSON.stringify(checkUpdate()));
+    return true;
+  }
+
+  // The git commands gitc has run. `after` is the highest id the caller
+  // already holds, so the common poll returns an empty list.
+  if (path.startsWith("/api/gitlog")) {
+    const q = path.indexOf("?");
+    const params = q === -1 ? "" : path.substring(q + 1);
+    let after = 0;
+    for (const pair of params.split("&")) {
+      const eq = pair.indexOf("=");
+      if (eq === -1) continue;
+      if (pair.substring(0, eq) === "after") {
+        const n = parseInt(pair.substring(eq + 1), 10);
+        if (!isNaN(n)) after = n;
+      }
+    }
+    sendJson(res, JSON.stringify({ calls: gitHistory(after) }));
     return true;
   }
 

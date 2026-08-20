@@ -111,3 +111,27 @@ export function useDiffWrap() {
   const [wrap, set] = useStored<boolean>(WRAP_KEY, true, parseWrap, (v) => (v ? "1" : "0"));
   return { wrap, set };
 }
+
+// --- automatic fetching ------------------------------------------------------
+
+/** Minutes between background fetches. 0 turns it off. */
+export const FETCH_INTERVALS = [0, 1, 5, 15];
+
+const FETCH_KEY = "gitc.fetchMinutes";
+
+function parseFetch(raw: string): number | null {
+  const n = Number(raw);
+  return FETCH_INTERVALS.includes(n) ? n : null;
+}
+
+/**
+ * How often gitc fetches the active repository by itself.
+ *
+ * Only the repository you are looking at, and only while the window has focus:
+ * a git client quietly fetching forty repositories in the background is how
+ * you end up throttled by a forge, and nobody is reading the other tabs.
+ */
+export function useFetchInterval() {
+  const [minutes, set] = useStored<number>(FETCH_KEY, 5, parseFetch);
+  return { minutes, set };
+}

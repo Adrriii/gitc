@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { api } from "../api";
 import type { UpdateInfo } from "../types";
-import { TAB_SIZES, useDiffWrap, useTabSize } from "../settings";
+import { FETCH_INTERVALS, TAB_SIZES, useDiffWrap, useFetchInterval, useTabSize } from "../settings";
 import { PRESETS, TOKEN_GROUPS, useTheme } from "../theme";
 import { VERSION } from "../../generated/version";
 import { Icon } from "./Icon";
@@ -19,11 +19,12 @@ import s from "./Preferences.module.scss";
  * assume are broken.
  */
 
-type Section = "theme" | "editor" | "about";
+type Section = "theme" | "editor" | "repository" | "about";
 
-const SECTIONS: { id: Section; label: string; icon: "eye" | "edit" | "repo" }[] = [
+const SECTIONS: { id: Section; label: string; icon: "eye" | "edit" | "repo" | "fetch" }[] = [
   { id: "theme", label: "Theme", icon: "eye" },
   { id: "editor", label: "Editor", icon: "edit" },
+  { id: "repository", label: "Repository", icon: "fetch" },
   { id: "about", label: "About", icon: "repo" },
 ];
 
@@ -53,6 +54,7 @@ export function Preferences({ onClose }: { onClose: () => void }) {
   const { size: tabSize, set: setTabSize } = useTabSize();
   const { wrap, set: setWrap } = useDiffWrap();
   const theme = useTheme();
+  const { minutes: fetchMinutes, set: setFetchMinutes } = useFetchInterval();
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
   const [checking, setChecking] = useState(false);
 
@@ -186,6 +188,28 @@ export function Preferences({ onClose }: { onClose: () => void }) {
                 <button className={!wrap ? s.on : ""} onClick={() => setWrap(false)}>
                   Scroll
                 </button>
+              </div>
+            </Row>
+          </>
+        )}
+
+        {section === "repository" && (
+          <>
+            <h1>Repository</h1>
+            <Row
+              label="Fetch automatically"
+              hint="Only the repository you are looking at, and only while the window has focus. The command shows in the ticker like any other."
+            >
+              <div className={s.choices}>
+                {FETCH_INTERVALS.map((n) => (
+                  <button
+                    key={n}
+                    className={n === fetchMinutes ? s.on : ""}
+                    onClick={() => setFetchMinutes(n)}
+                  >
+                    {n === 0 ? "Off" : `${n} min`}
+                  </button>
+                ))}
               </div>
             </Row>
           </>
