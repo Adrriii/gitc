@@ -75,11 +75,15 @@ jobs:
           test -f "${{ matrix.built }}"
           "./${{ matrix.built }}" --version
 
+      # These only carry the binary from the build job to the publish job -
+      # the release assets are the lasting copy. A day is plenty, and it stops
+      # every release leaving a duplicate behind in the artifact store.
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.built }}
           if-no-files-found: error
+          retention-days: 1
 
   publish:
     # Only a tag publishes. A manual run stops after building, which is the
