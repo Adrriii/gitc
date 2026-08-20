@@ -795,14 +795,30 @@ async function handleApi(
 // -------------------------------------------------------------- browser
 
 function findBrowser(): string | null {
+  // An explicit choice wins: distributions put Chromium in enough different
+  // places - Flatpak, snap, /usr/local - that no fixed list is ever complete,
+  // and this is the escape hatch that does not need a new release.
+  const override = process.env["GITC_BROWSER"];
+  if (override !== undefined && override.length > 0) {
+    return existsSync(override) ? override : null;
+  }
+
   const candidates = [
     "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+    "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
     "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
     "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
     "/usr/bin/google-chrome",
+    "/usr/bin/google-chrome-stable",
     "/usr/bin/chromium",
     "/usr/bin/chromium-browser",
     "/usr/bin/microsoft-edge",
+    "/usr/local/bin/chromium",
+    "/usr/local/bin/google-chrome",
+    "/snap/bin/chromium",
+    "/var/lib/flatpak/exports/bin/org.chromium.Chromium",
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "/Applications/Chromium.app/Contents/MacOS/Chromium",
   ];
   for (const c of candidates) {
     if (existsSync(c)) return c;

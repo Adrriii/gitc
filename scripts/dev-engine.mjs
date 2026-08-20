@@ -2,27 +2,30 @@
 //
 // Two jobs beyond "start the binary":
 //
-//  1. It runs a COPY. `dist/gitc.exe --no-window` holds a lock on the very
-//     file the next build wants to write, so the link step fails with
-//     "Permission denied" partway through a rebuild.
+//  1. It runs a COPY. On Windows the running binary is locked, so the next
+//     build's link step fails with "Permission denied" partway through.
 //
-//  2. It WATCHES dist/gitc.exe and restarts when it changes. Without this the
+//  2. It WATCHES the built binary and restarts when it changes. Without this the
 //     engine silently serves an older API than the UI expects - which looked
 //     like three separate UI bugs before the cause was understood, each one a
 //     crash on a field the running engine had never heard of.
 
 import { spawn, spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, watch } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, watch } from "node:fs";
 import { join, resolve } from "node:path";
 
 const root = resolve(import.meta.dirname, "..");
-const src = join(root, "dist", "gitc.exe");
+const windows = process.platform === "win32";
+const exe = windows ? "gitc.exe" : "gitc";
+const devExe = windows ? "gitc-dev.exe" : "gitc-dev";
+const src = join(root, "dist", exe);
 const outDir = join(root, "build");
-const dev = join(outDir, "gitc-dev.exe");
+const dev = join(outDir, devExe);
 const extraArgs = process.argv.slice(2);
+const chr10 = String.fromCharCode(10);
 
 if (!existsSync(src)) {
-  console.error("dist/gitc.exe missing - run: npm run build:engine");
+  console.error(`dist/${exe} missing - run: npm run build:engine`);
   process.exit(1);
 }
 if (!existsSync(outDir)) mkdirSync(outDir, { recursive: true });
@@ -36,12 +39,18 @@ function stop() {
     child.kill();
     child = null;
   }
-  // The copy must be free before it can be overwritten.
-  spawnSync("taskkill", ["/F", "/IM", "gitc-dev.exe"], { stdio: "ignore" });
+  // The copy must be free before it can be overwritten. Only Windows needs
+  // this: there, an open executable cannot be replaced, while POSIX is happy
+  // to unlink a running binary's inode.
+  if (windows) {
+    spawnSync("taskkill", ["/F", "/IM", devExe], { stdio: "ignore" });
+  }
 }
 
 function start() {
   copyFileSync(src, dev);
+  // copyFileSync does not carry the executable bit across on POSIX.
+  if (!windows) chmodSync(dev, 0o755);
   child = spawn(dev, ["--no-window", ...extraArgs], { stdio: "inherit" });
   child.on("exit", (code) => {
     if (restarting) return;

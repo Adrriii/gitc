@@ -10,6 +10,7 @@
 //   node scripts/make-icons.mjs
 
 import { spawn } from "node:child_process";
+import { findBrowser, noBrowserMessage } from "./browser.mjs";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, mkdtempSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
@@ -23,19 +24,14 @@ const OUT = join(root, "icons");
 // cover the intermediate DPI scalings.
 const SIZES = [16, 24, 32, 48, 64, 128, 256];
 
-const BROWSERS = [
-  "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
-  "C:/Program Files/Google/Chrome/Application/chrome.exe",
-  "C:/Program Files (x86)/Google/Chrome/Application/chrome.exe",
-  "/usr/bin/chromium",
-];
+
 
 const PORT = 9335;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const browser = BROWSERS.find((b) => existsSync(b));
+const browser = findBrowser();
 if (!browser) {
-  console.error("no Chromium browser found to rasterise with");
+  console.error(noBrowserMessage());
   process.exit(1);
 }
 

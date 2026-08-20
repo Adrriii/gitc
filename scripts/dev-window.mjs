@@ -7,28 +7,19 @@
 // they survive being passed through shells and heredocs without a backslash
 // quietly turning into an escape sequence.
 
+import { findBrowser, noBrowserMessage } from "./browser.mjs";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-const BROWSERS = [
-  "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
-  "C:/Program Files/Microsoft/Edge/Application/msedge.exe",
-  "C:/Program Files/Google/Chrome/Application/chrome.exe",
-  "C:/Program Files (x86)/Google/Chrome/Application/chrome.exe",
-  "/usr/bin/google-chrome",
-  "/usr/bin/chromium",
-  "/usr/bin/chromium-browser",
-  "/usr/bin/microsoft-edge",
-];
+
 
 const url = process.argv[2] ?? "http://127.0.0.1:5173/";
-const browser = BROWSERS.find((b) => existsSync(b));
+const browser = findBrowser();
 
 if (!browser) {
-  console.error("no Chromium browser found; looked in:");
-  for (const b of BROWSERS) console.error("  " + b);
+  console.error(noBrowserMessage());
   process.exit(1);
 }
 

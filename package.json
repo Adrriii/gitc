@@ -10,10 +10,10 @@
   },
   "homepage": "https://github.com/Adrriii/gitc",
   "private": false,
-  "type": "module",
   "engines": {
     "node": ">=24"
   },
+  "type": "module",
   "scripts": {
     "version:sync": "node scripts/version.mjs",
     "dev": "concurrently -n engine,ui -c cyan,magenta \"npm:dev:engine\" \"npm:dev:ui\"",

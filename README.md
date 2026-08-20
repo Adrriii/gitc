@@ -28,23 +28,34 @@ Its initial version has been made overnight with Claude Opus 4.8.
 - **git** in the `PATH`
 - a **Chromium-based browser** (Edge, Chrome, or Chromium) for the display
 
+gitc looks for the browser in the usual places. If yours lives somewhere
+else - Flatpak, snap, a custom prefix - point `GITC_BROWSER` at it.
+
 ## Building from source
 
-You need [Node 24+](https://nodejs.org) and `clang` to build, plus
-[`zig`](https://ziglang.org) on Windows.
+**[Node 24 or newer](https://nodejs.org)** — scriptc, the compiler that turns
+the engine into a binary, requires it. Plus a C toolchain:
+
+| Platform | Needs | Why |
+| -------- | ----- | --- |
+| Linux, macOS | `clang` | scriptc drives it directly |
+| Windows | [`zig`](https://ziglang.org/download/) on `PATH` | scriptc's runtime needs mingw's CRT; a stock clang targets MSVC's, and the build fails on an undefined `ssize_t`. scriptc reaches mingw by calling `zig cc` — there is no `zigcc` binary to install, only zig |
 
 ```sh
 npm install
 npm run build      # typecheck, test, bundle the UI, then compile the binary
 ```
 
-The result is `dist/gitc.exe` (or `dist/gitc`). Run it with a repository path,
-or with none to reopen your last session:
+The result is `dist/gitc` (`dist/gitc.exe` on Windows). Run it with a
+repository path, or with none to reopen your last session:
 
 ```sh
 ./dist/gitc /path/to/repo
 ./dist/gitc --version
 ```
+
+The build checks for both up front and tells you what is missing rather than
+failing somewhere inside the compiler.
 
 For development, `npm run dev` starts the engine and a Vite dev server with hot
 reloading:
