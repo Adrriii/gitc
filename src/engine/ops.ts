@@ -6,6 +6,11 @@
 //
 // Everything here goes through git. None of it touches .git directly.
 
+import { spawn } from "node:child_process";
+import { existsSync, unlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { git, gitOrNull } from "./git.ts";
 import { readPending, readRemotes } from "./refs.ts";
 import { at } from "./safe.ts";
@@ -27,6 +32,8 @@ export interface OpRequest {
   force: boolean;
   /** Check out a branch immediately after creating it. */
   checkout: boolean;
+  /** Repository-relative file path, for the operations that act on one. */
+  path: string;
 }
 
 export interface OpResult {
@@ -38,6 +45,46 @@ export interface OpResult {
 }
 
 const ok = (note: string): OpResult => ({ ok: true, note, pending: "" });
+
+/**
+ * Quotes a path for the editor commands git will run through a shell.
+ *
+ * git hands GIT_SEQUENCE_EDITOR to the shell, so a path with a space in it -
+ * "C:\Users\...\Local\Programs\gitc" being the normal install location -
+ * has to survive that.
+ */
+function quoted(value: string): string {
+  return '"' + value + '"';
+}
+
+/**
+ * Hands a file to whatever the user edits with.
+ *
+ * GITC_EDITOR wins if it is set. Otherwise the platform's own opener decides,
+ * which is the right default: it uses the association the user already chose
+ * for that file type, and it cannot land them in a terminal editor with no
+ * terminal to type into - which is exactly what honouring core.editor would
+ * risk, since vim is a perfectly common value there.
+ */
+function openInEditor(file: string): void {
+  const editor = process.env["GITC_EDITOR"];
+  if (editor !== undefined && editor.length > 0) {
+    spawn(editor, [file], { stdio: "ignore" });
+    return;
+  }
+
+  if (process.platform === "win32") {
+    // The empty argument is start's window-title parameter: without it a
+    // quoted path is taken AS the title and nothing opens.
+    spawn("cmd", ["/c", "start", "", file], { stdio: "ignore" });
+    return;
+  }
+  if (process.platform === "darwin") {
+    spawn("open", [file], { stdio: "ignore" });
+    return;
+  }
+  spawn("xdg-open", [file], { stdio: "ignore" });
+}
 
 /**
  * Runs an operation that can legitimately stop half-way.
@@ -54,9 +101,10 @@ async function conflictProne(
   args: string[],
   label: string,
   done: string,
+  env?: Record<string, string>,
 ): Promise<OpResult> {
   try {
-    await git(repo, args);
+    await git(repo, args, env);
     return ok(done);
   } catch (e) {
     const pending = readPending(repo);
@@ -326,6 +374,109 @@ export async function runOp(repo: string, req: OpRequest): Promise<OpResult> {
     }
 
     // --- managing remotes -------------------------------------------------
+
+    case "squash": {
+      // The selection is a contiguous run of commits, newest first - the UI
+      // only ever offers squash for such a run (see selection.ts).
+      const picked = req.shas;
+      if (picked.length < 2) throw new Error("select at least two commits to squash");
+
+      const newest = at(picked, 0);
+      const oldest = at(picked, picked.length - 1);
+      if (newest === undefined || oldest === undefined) throw new Error("nothing to squash");
+
+      // Everything except the oldest gets folded into it, so the run keeps the
+      // oldest commit's position in history and its author.
+      const folded: string[] = [];
+      for (let i = 0; i < picked.length - 1; i++) {
+        const hash = at(picked, i);
+        if (hash !== undefined) folded.push(hash);
+      }
+
+      const message = req.message.trim();
+      if (message.length === 0) throw new Error("the squashed commit needs a message");
+
+      const stamp = String(Date.now());
+      const specPath = join(tmpdir(), "gitc-squash-" + stamp + ".txt");
+      const msgPath = join(tmpdir(), "gitc-squash-msg-" + stamp + ".txt");
+      writeFileSync(specPath, folded.join(String.fromCharCode(10)), "utf8");
+      writeFileSync(msgPath, message, "utf8");
+
+      // A root commit has no parent to rebase onto, so the whole history is
+      // replayed instead.
+      const parent = await gitOrNull(repo, ["rev-parse", "--verify", oldest + "^"]);
+      const base = parent === null ? "--root" : oldest + "^";
+
+      // gitc drives its own rebase: see engine/rebaseHelper.ts for why the
+      // editors point back at this binary.
+      const self = process.execPath;
+      const env: Record<string, string> = {
+        GIT_SEQUENCE_EDITOR: quoted(self) + " --rebase-todo " + quoted(specPath),
+        GIT_EDITOR: quoted(self) + " --rebase-message " + quoted(msgPath),
+      };
+
+      try {
+        return await conflictProne(
+          repo,
+          ["rebase", "-i", base],
+          "Squash",
+          "squashed " + String(picked.length) + " commits",
+          env,
+        );
+      } finally {
+        for (const file of [specPath, msgPath]) {
+          try {
+            if (existsSync(file)) unlinkSync(file);
+          } catch {
+            // A leftover temp file is not worth failing the operation over.
+          }
+        }
+      }
+    }
+
+    case "submoduleUpdate": {
+      // --init so a submodule that was never checked out works from the same
+      // action: "update" is what someone wants in both cases, and asking them
+      // to notice the difference first is busywork.
+      const target = req.path.trim();
+      const args = ["submodule", "update", "--init", "--recursive"];
+      if (target.length > 0) {
+        args.push("--");
+        args.push(target);
+      }
+      await git(repo, args);
+      return ok(target.length > 0 ? "updated " + target : "updated all submodules");
+    }
+
+    case "submoduleUpdateRemote": {
+      // Moves the submodule to the tip of its configured branch, which leaves
+      // the superproject with a staged pointer change to commit.
+      const target = req.path.trim();
+      const args = ["submodule", "update", "--init", "--remote"];
+      if (target.length > 0) {
+        args.push("--");
+        args.push(target);
+      }
+      await git(repo, args);
+      return ok(
+        (target.length > 0 ? target : "submodules") +
+          " moved to the latest remote commit - commit the pointer to keep it",
+      );
+    }
+
+    case "editFile": {
+      const rel = req.path;
+      if (rel.trim().length === 0) throw new Error("no file to open");
+      const full = join(repo, rel);
+      // A file shown from a commit may not exist in the working tree at all -
+      // deleted since, or never checked out on this branch. Say so rather than
+      // silently opening nothing.
+      if (!existsSync(full)) {
+        throw new Error(rel + " is not in the working tree");
+      }
+      openInEditor(full);
+      return ok("opened " + rel);
+    }
 
     case "addRemote": {
       if (req.name.trim().length === 0) throw new Error("the remote needs a name");

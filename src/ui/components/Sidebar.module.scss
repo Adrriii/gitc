@@ -31,12 +31,36 @@
   }
 }
 
+// The sections column. It does not scroll itself - the open section's body
+// does, so the headers cannot be pushed out of view.
 .scroll {
   flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: none;
+}
+
+// Only the open section competes for the leftover height.
+.sectionOpen {
+  flex: 1;
+}
+
+.body {
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
 }
 
 .head {
+  flex: none;
   display: flex;
   align-items: center;
   gap: 7px;
@@ -252,4 +276,28 @@
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+// A submodule's state, said in as few characters as a 208px sidebar allows.
+.subState {
+  margin-left: auto;
+  padding: 0 5px;
+  border-radius: 999px;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.subWarn {
+  background: var(--amber-bg);
+  color: var(--amber-fg);
+}
+
+.subBad {
+  background: var(--red-bg);
+  color: var(--red-fg);
+}
+
+.subDim {
+  background: var(--bg-3);
+  color: var(--fg-muted);
 }

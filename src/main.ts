@@ -7,7 +7,7 @@
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { join, basename } from "node:path";
+import { join, basename, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
 import {
@@ -47,6 +47,12 @@ import {
 } from "./engine/diff.ts";
 import { readHead, readRefs, readPending, readRemotes } from "./engine/refs.ts";
 import { loadHidden, saveHidden } from "./engine/visibility.ts";
+import { listDir } from "./engine/browse.ts";
+import { readSubmodules } from "./engine/submodules.ts";
+import { install, uninstall, installedBinary, runningFromInstall } from "./engine/install.ts";
+import { rewriteTodo, writeMessage } from "./engine/rebaseHelper.ts";
+import { running, handOff, focusWindow } from "./engine/instance.ts";
+import { check as checkUpdate, apply as applyUpdate, cleanupPrevious } from "./engine/update.ts";
 import { NAME, VERSION } from "./generated/version.ts";
 import { loadSession, saveSession, touchRecent } from "./state.ts";
 import { at } from "./engine/safe.ts";
@@ -63,7 +69,11 @@ let session: Session = loadSession();
 // a browser that forked in a way that detaches the process we spawned.
 let lastPing = 0;
 let sawFirstPing = false;
-const PING_TIMEOUT_MS = 10000;
+// Generous on purpose. This is a backstop: the browser-exit hook is what
+// normally ends the session, and the cost of being wrong here is the app
+// disappearing while someone is using it. Ten seconds was short enough that a
+// single long layout pass could trigger it.
+const PING_TIMEOUT_MS = 60000;
 const HANDOFF_GRACE_MS = 3000;
 
 // --------------------------------------------------------------- avatars
@@ -232,6 +242,7 @@ async function graphPayload(tab: Tab, limit: number): Promise<string> {
   // pending, and the user is left with a broken working tree and no UI.
   if (pending.conflicted && pending.kind.length === 0) pending.kind = "unmerged";
 
+  const submodules = await readSubmodules(tab.path);
   const remoteInfo = readRemotes(tab.path);
   const upstream =
     head.branch === null ? null : (remoteInfo.upstreams.get(head.branch) ?? null);
@@ -247,13 +258,22 @@ async function graphPayload(tab: Tab, limit: number): Promise<string> {
     status,
     pending,
     hidden,
+    submodules,
     colors: LANE_COLORS,
   });
 }
 
 function send(res: import("node:http").ServerResponse, code: number, type: string, body: string): void {
   res.writeHead(code, { "content-type": type, "cache-control": "no-store" });
-  res.end(body);
+  // Encoded to bytes explicitly. Handing res.end a string emits one byte per
+  // code unit - a folder called "Cafe-Munster" arrived with a bare 0xe9 where
+  // the accent belongs, which is Latin-1, not UTF-8. Buffer.from(body, "utf8")
+  // does not fix it either: the encoding argument is ignored here. TextEncoder
+  // is the one that genuinely produces UTF-8.
+  //
+  // Every string this server sends is affected - commit subjects and author
+  // names as much as paths - so it is fixed once, here.
+  res.end(new TextEncoder().encode(body));
 }
 
 function sendJson(res: import("node:http").ServerResponse, body: string): void {
@@ -303,6 +323,8 @@ interface GitOpRequest {
   remote: string;
   force: boolean;
   checkout: boolean;
+  /** Repository-relative file path, for operations that act on one. */
+  path: string;
 }
 interface CommitRequest {
   id: string;
@@ -312,6 +334,11 @@ interface CommitRequest {
 }
 interface IdRequest {
   id: string;
+}
+
+interface OrderRequest {
+  /** Tab ids in their new left-to-right order. */
+  order: string[];
 }
 
 interface HiddenRequest {
@@ -353,6 +380,13 @@ async function handleApi(
   req: import("node:http").IncomingMessage,
   res: import("node:http").ServerResponse,
 ): Promise<boolean> {
+  // ANY request is proof the window is alive, not just the heartbeat. A
+  // renderer busy laying out a large diff stops firing its 2s timer while
+  // still very much running, and treating that silence as a closed window is
+  // what made the app vanish mid-work.
+  lastPing = Date.now();
+  sawFirstPing = true;
+
   // Local avatar overrides: drop <something>.png into %APPDATA%/gitc/avatars
   // and it wins over any remote lookup. This is how you give an identity a
   // face that Gravatar has never heard of - bots and agents mostly - without
@@ -439,6 +473,63 @@ async function handleApi(
     }
     saveSession(session);
     sendJson(res, JSON.stringify(session));
+    return true;
+  }
+
+  if (path === "/api/update") {
+    if (req.method === "POST") {
+      const result = await applyUpdate();
+      sendJson(res, JSON.stringify(result));
+      // Answer first, then go: the UI needs to hear that the update took
+      // before this process disappears out from under it.
+      if (result.restarting) {
+        setTimeout(() => process.exit(0), 400);
+      }
+      return true;
+    }
+    sendJson(res, JSON.stringify(checkUpdate()));
+    return true;
+  }
+
+  if (path === "/api/reorder") {
+    const body = JSON.parse(await readBody(req)) as OrderRequest;
+
+    // Rebuilt from the requested order, then anything the request did not
+    // mention is appended. A tab opened in another window between the drag
+    // starting and finishing would otherwise vanish from the strip.
+    const byId = new Map<string, Tab>();
+    for (const tab of session.tabs) byId.set(tab.id, tab);
+
+    const ordered: Tab[] = [];
+    for (const id of body.order) {
+      const tab = byId.get(id);
+      if (tab !== undefined) {
+        ordered.push(tab);
+        byId.delete(id);
+      }
+    }
+    for (const tab of session.tabs) {
+      if (byId.has(tab.id)) ordered.push(tab);
+    }
+
+    session.tabs = ordered;
+    saveSession(session);
+    sendJson(res, JSON.stringify(session));
+    return true;
+  }
+
+  // Directory listing for the repository picker: completion and the browser
+  // both read from this.
+  if (path.startsWith("/api/ls")) {
+    const q = path.indexOf("?");
+    const params = q === -1 ? "" : path.substring(q + 1);
+    let dir = "";
+    for (const pair of params.split("&")) {
+      const eq = pair.indexOf("=");
+      if (eq === -1) continue;
+      if (pair.substring(0, eq) === "path") dir = decodeURIComponent(pair.substring(eq + 1));
+    }
+    sendJson(res, JSON.stringify(listDir(dir)));
     return true;
   }
 
@@ -634,6 +725,7 @@ async function handleApi(
       remote: body.remote,
       force: body.force,
       checkout: body.checkout,
+      path: body.path,
     };
     try {
       const result = await runOp(tab.path, opReq);
@@ -841,12 +933,21 @@ function openWindow(url: string): boolean {
   // Reusing one directory means the browser settles down after the first run.
   const profile = join(tmpdir(), "gitc-window");
 
+  // On Linux the window manager identifies a window by its WM_CLASS, and a
+  // Chromium started with --app= reports the browser's - so gitc gets the
+  // browser's icon and groups into its taskbar button. --class overrides it,
+  // and a .desktop file with StartupWMClass=gitc (scripts/install-desktop.sh)
+  // then supplies the icon and a separate entry. The flag is X11/Wayland only;
+  // Windows solves the same problem through an AppUserModelID instead.
+  const classArgs = process.platform === "linux" ? ["--class=gitc"] : [];
+
   const child = spawn(
     browser,
     [
       "--app=" + url,
       "--window-size=1600,1000",
       "--user-data-dir=" + profile,
+      ...classArgs,
 
       // Stop the browser behaving like a browser. Without these the window
       // is interrupted by first-run flows, an implicit sign-in to the OS
@@ -893,8 +994,40 @@ async function main(): Promise<void> {
   // which proxies /api here - so the UI hot-reloads against a live engine
   // instead of needing the binary rebuilt for every style tweak.
   let headless = process.env["GITC_NO_WINDOW"] === "1";
-  for (const arg of process.argv) {
+  let portable = false;
+  for (let i = 0; i < process.argv.length; i++) {
+    const arg = at(process.argv, i);
+    if (arg === undefined) continue;
     if (arg === "--no-window") headless = true;
+    if (arg === "--portable") portable = true;
+
+    // Editor modes for interactive rebase. git appends the file it wants
+    // edited, so the arguments are: --rebase-todo <spec> <todo>. Handled
+    // before anything else starts - this invocation is not an app launch, it
+    // is a few milliseconds of file rewriting inside someone else's rebase.
+    if (arg === "--rebase-todo" || arg === "--rebase-message") {
+      const ours = at(process.argv, i + 1);
+      const theirs = at(process.argv, i + 2);
+      if (ours === undefined || theirs === undefined) {
+        console.error("usage: gitc " + arg + " <file> <target>");
+        process.exit(1);
+      }
+      if (arg === "--rebase-todo") rewriteTodo(ours, theirs);
+      else writeMessage(ours, theirs);
+      process.exit(0);
+    }
+
+    // Explicit forms, for scripts and for anyone who wants to undo it. The
+    // normal path needs neither: see selfInstall() below.
+    if (arg === "--install") {
+      for (const line of install().lines) console.log(line);
+      process.exit(0);
+    }
+    if (arg === "--uninstall") {
+      console.log("uninstalling " + NAME);
+      for (const line of uninstall()) console.log(line);
+      process.exit(0);
+    }
     // Answered before anything else starts: a version check should not open a
     // window, restore tabs or touch a repository.
     if (arg === "--version" || arg === "-v") {
@@ -902,6 +1035,31 @@ async function main(): Promise<void> {
       process.exit(0);
     }
   }
+
+  // A binary that was just downloaded installs itself and hands over to the
+  // installed copy, which is the one that actually opens the window. That is
+  // the whole distribution story: download one file, run it, and gitc is
+  // installed, on PATH, with its icon - no arguments, no installer program.
+  //
+  // Skipped for --portable, for headless runs (the dev loop), and once gitc is
+  // already running from where it was installed, which is what stops this from
+  // looping.
+  if (!portable && !headless && !runningFromInstall()) {
+    const report = install();
+    for (const line of report.lines) console.log(line);
+
+    const args: string[] = [];
+    const passthrough = at(process.argv, 2);
+    if (passthrough !== undefined && passthrough.length > 0 && !passthrough.startsWith("--")) {
+      args.push(passthrough);
+    }
+    spawn(report.target, args, { stdio: "ignore" });
+    process.exit(0);
+  }
+
+  // An update leaves the previous binary beside the new one, because Windows
+  // will not delete a running executable. This is the next start.
+  cleanupPrevious();
 
   // Seed the id counter past anything the restored session already uses.
   // This has to happen BEFORE any repo is opened, or a newly opened tab is
@@ -912,12 +1070,56 @@ async function main(): Promise<void> {
     if (!isNaN(n) && n >= nextTabId) nextTabId = n + 1;
   }
 
+  // The port is settable so a second instance, or a machine where something
+  // else already owns 7893, is not a dead end.
+  let port = DEFAULT_PORT;
+  const fromEnv = process.env["GITC_PORT"];
+  if (fromEnv !== undefined && fromEnv.length > 0) {
+    const n = parseInt(fromEnv, 10);
+    if (!isNaN(n) && n > 0) port = n;
+  }
+  for (let i = 0; i < process.argv.length; i++) {
+    const arg = at(process.argv, i);
+    if (arg === undefined) continue;
+    if (arg.startsWith("--port=")) {
+      const n = parseInt(arg.substring(7), 10);
+      if (!isNaN(n) && n > 0) port = n;
+    }
+  }
+
   // A path argument opens that repo; otherwise the saved tabs come back.
   // at() rather than argv[2]: scriptc throws on out-of-range reads.
   const arg = at(process.argv, 2);
+  let wanted: string | null = null;
   if (arg !== undefined && arg.length > 0 && !arg.startsWith("--")) {
-    await openRepo(arg);
+    // "." is the whole point of typing this from a terminal.
+    const resolved = resolve(arg);
+    if (!(await isRepo(resolved))) {
+      console.error(resolved + " is not a git repository");
+      process.exit(1);
+    }
+    wanted = resolved;
   }
+
+  // If gitc is already running, this invocation is a request to that window,
+  // not a second application: hand the repository over, bring it forward, and
+  // leave. Starting a second copy would fight over the port and the session.
+  if (await running(port)) {
+    if (wanted !== null) {
+      const ok = await handOff(port, wanted);
+      if (!ok) {
+        console.error("gitc is running but would not open " + wanted);
+        process.exit(1);
+      }
+      console.log("opened " + wanted + " in the running gitc");
+    } else {
+      console.log("gitc is already running");
+    }
+    focusWindow();
+    process.exit(0);
+  }
+
+  if (wanted !== null) await openRepo(wanted);
   if (session.activeId === null) {
     const head = at(session.tabs, 0);
     if (head !== undefined) session.activeId = head.id;
@@ -948,7 +1150,6 @@ async function main(): Promise<void> {
     send(res, 200, contentType(name), body);
   });
 
-  const port = DEFAULT_PORT;
   // Once the UI has checked in at least once, silence means it is gone.
   // Headless dev servers stay up regardless: reloading the Vite page would
   // otherwise look like the window closing and take the engine down with it.
@@ -958,6 +1159,27 @@ async function main(): Promise<void> {
       if (Date.now() - lastPing > PING_TIMEOUT_MS) shutdown();
     }, 2000);
   }
+
+  // Without this, a taken port is an unhandled 'error' event: the process dies
+  // on a raw EADDRINUSE stack trace that says nothing about what to do next.
+  // Usually the answer is simply that gitc is already running.
+  server.on("error", (e: Error) => {
+    const message = e.message;
+    if (message.includes("EADDRINUSE")) {
+      console.error(
+        "gitc cannot start: port " + String(port) + " is already in use.",
+      );
+      console.error("");
+      console.error("Usually that means gitc is already running - look for its window.");
+      console.error("If something else owns the port, run gitc on another one:");
+      console.error("");
+      console.error("  gitc --port=7894");
+      console.error("  GITC_PORT=7894 gitc");
+      process.exit(1);
+    }
+    console.error("gitc cannot start: " + message);
+    process.exit(1);
+  });
 
   server.listen(port, "127.0.0.1", () => {
     const url = "http://127.0.0.1:" + port + "/";

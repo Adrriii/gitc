@@ -1,4 +1,7 @@
 import type {
+  Listing,
+  UpdateInfo,
+  UpdateResult,
   GraphPayload,
   Session,
   FileChange,
@@ -10,6 +13,35 @@ import type {
   ConflictVersions,
 } from "./types";
 import type { DiffTarget } from "./components/DiffView";
+
+/**
+ * Reads a JSON body that may not be valid UTF-8.
+ *
+ * Paths reach the engine as the operating system's raw bytes and leave it the
+ * same way, so a Windows folder called "Café" arrives as a lone 0xe9 - correct
+ * Windows-1252, invalid UTF-8. `res.json()` would turn every such byte into a
+ * replacement character.
+ *
+ * The engine cannot fix this on its own: inspecting those bytes there means
+ * charCodeAt, which re-reads the string as lenient UTF-8 and destroys them
+ * before they can be re-encoded. The browser, on the other hand, has real
+ * decoders. So the bytes are carried through untouched and decoded here:
+ * strictly as UTF-8 first, which is what Linux and macOS give and what git
+ * emits, and as Windows-1252 when that fails, which is what an ANSI name is.
+ */
+async function jsonBytes<T>(url: string): Promise<T> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(res.statusText);
+
+  const buffer = await res.arrayBuffer();
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(buffer);
+  } catch {
+    text = new TextDecoder("windows-1252").decode(buffer);
+  }
+  return JSON.parse(text) as T;
+}
 
 async function json<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init);
@@ -39,6 +71,9 @@ export const api = {
 
   activate: (id: string) => post<Session>("/api/activate", { id }),
 
+  /** Persists the tab strip's left-to-right order after a drag. */
+  reorder: (order: string[]) => post<Session>("/api/reorder", { order }),
+
   graph: (id: string, limit = 2000) =>
     json<GraphPayload>(`/api/graph?id=${encodeURIComponent(id)}&limit=${limit}`),
 
@@ -60,6 +95,15 @@ export const api = {
     }
     return json<FileDiff>(`/api/diff?${q.toString()}`);
   },
+
+  /** Asks whether a newer gitc has been released. */
+  checkUpdate: () => json<UpdateInfo>("/api/update"),
+
+  /** Downloads and installs it. gitc restarts itself when this succeeds. */
+  applyUpdate: () => post<UpdateResult>("/api/update", {}),
+
+  /** Lists a directory for the repository picker: completion and browsing. */
+  ls: (path: string) => jsonBytes<Listing>(`/api/ls?path=${encodeURIComponent(path)}`),
 
   /** Replaces the hidden-ref set and returns the graph rebuilt without them. */
   setHidden: (id: string, hidden: string[]) =>
@@ -108,6 +152,7 @@ export const api = {
       remote: args.remote ?? "",
       force: args.force ?? false,
       checkout: args.checkout ?? false,
+      path: args.path ?? "",
     }),
 
   // --- mutations. Each returns the fresh status so the panel updates from

@@ -29,6 +29,9 @@ const child = spawn(
     `--app=${url}`,
     "--window-size=1600,1000",
     `--user-data-dir=${join(tmpdir(), "gitc-window")}`,
+    // Matches what the shipped binary passes, so the dev window gets the same
+    // WM_CLASS - and so the .desktop entry applies to it too.
+    ...(process.platform === "linux" ? ["--class=gitc"] : []),
     "--no-first-run",
     "--no-default-browser-check",
     "--no-service-autorun",

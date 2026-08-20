@@ -101,12 +101,24 @@ export class GitError extends Error {
 }
 
 /** Runs git and returns stdout. Rejects with GitError on a non-zero exit. */
-export async function git(repo: string, args: string[]): Promise<string> {
+export async function git(
+  repo: string,
+  args: string[],
+  /**
+   * Extra environment for this call.
+   *
+   * What interactive rebase needs: GIT_SEQUENCE_EDITOR and GIT_EDITOR have to
+   * point at something non-interactive, since a piped stdin is a compile fence
+   * here and there is no terminal for git to open an editor in.
+   */
+  env?: Record<string, string>,
+): Promise<string> {
   try {
     const { stdout } = await execFileAsync("git", args, {
       cwd: repo,
       encoding: "utf8",
       maxBuffer: 64 * 1024 * 1024,
+      env: env === undefined ? process.env : { ...process.env, ...env },
     });
     return stdout;
   } catch (e) {

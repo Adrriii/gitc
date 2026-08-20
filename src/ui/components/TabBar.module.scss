@@ -82,3 +82,36 @@
     color: var(--fg);
   }
 }
+
+.spacer {
+  flex: 1;
+}
+
+.gear {
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  color: var(--fg-muted);
+  cursor: default;
+
+  &:hover {
+    background: var(--bg-2);
+    color: var(--fg);
+  }
+}
+
+// The tab being dragged stays in place but recedes, so the strip does not
+// reflow under the pointer while you are aiming.
+.dragging {
+  opacity: 0.4;
+}
+
+// Where it would land. A line on one edge rather than a gap: a gap moves every
+// other tab as you sweep across, which makes the target hard to hit.
+.dropBefore {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.dropAfter {
+  box-shadow: inset -2px 0 0 var(--accent);
+}

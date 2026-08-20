@@ -20,6 +20,52 @@ export interface Head {
   detached: boolean;
 }
 
+export interface DirEntry {
+  name: string;
+  dir: boolean;
+  /** A git repository - marked before you walk into it. */
+  repo: boolean;
+}
+
+export interface Listing {
+  path: string;
+  repo: boolean;
+  parent: string | null;
+  /** What was typed after the last separator, when it was a partial name. */
+  prefix: string;
+  entries: DirEntry[];
+  truncated: boolean;
+  sep: string;
+  home: string;
+}
+
+export type SubmoduleState = "uninitialized" | "current" | "moved" | "conflicted";
+
+export interface Submodule {
+  name: string;
+  path: string;
+  /** Absolute, so it can be opened as its own repository tab. */
+  absolute: string;
+  url: string;
+  state: SubmoduleState;
+  sha: string;
+  label: string;
+}
+
+export interface UpdateInfo {
+  current: string;
+  latest: string;
+  available: boolean;
+  page: string;
+  error: string;
+}
+
+export interface UpdateResult {
+  ok: boolean;
+  message: string;
+  restarting: boolean;
+}
+
 export interface Remote {
   name: string;
   url: string;
@@ -109,6 +155,8 @@ export interface OpArgs {
   remote?: string;
   force?: boolean;
   checkout?: boolean;
+  /** Repository-relative file path, for operations that act on one. */
+  path?: string;
 }
 
 export interface OpResult {
@@ -132,6 +180,7 @@ export interface GraphPayload {
   pending: Pending;
   /** Ref display names hidden from the graph. */
   hidden: string[];
+  submodules: Submodule[];
   colors: string[];
 }
 

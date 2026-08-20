@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { Session } from "../types";
+import { RepoPicker } from "./RepoPicker";
 import s from "./Welcome.module.scss";
 
 export function Welcome({
@@ -12,7 +13,6 @@ export function Welcome({
   error: string | null;
 }) {
   const [search, setSearch] = useState("");
-  const [manual, setManual] = useState("");
 
   const f = search.trim().toLowerCase();
   const recents = session.recents.filter(
@@ -24,28 +24,10 @@ export function Welcome({
       <div className={s.main}>
         <h1>Repositories</h1>
 
-        {/* A chromeless browser window has no native folder picker, so the
-            path is typed or pasted. A real picker needs a host-side dialog. */}
-        <div className={s.openRow}>
-          <input
-            className={s.pathInput}
-            placeholder="C:\Code\my-project"
-            value={manual}
-            onChange={(e) => setManual(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && manual.trim()) onOpen(manual.trim());
-            }}
-          />
-          <button className={s.btn} onClick={() => manual.trim() && onOpen(manual.trim())}>
-            Open
-          </button>
-          <button className={s.btn} disabled>
-            Clone
-          </button>
-          <button className={s.btn} disabled>
-            Create
-          </button>
-        </div>
+        {/* A chromeless browser window has no native folder dialog, so gitc
+            brings its own: a completing path field over a directory listing
+            that marks repositories before you enter them. */}
+        <RepoPicker onOpen={onOpen} />
 
         {error && <div className={s.error}>{error}</div>}
 

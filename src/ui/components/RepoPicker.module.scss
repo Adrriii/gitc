@@ -1,0 +1,149 @@
+.picker {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  gap: 6px;
+}
+
+.field {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 8px;
+  background: var(--bg-inset);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+
+  &:focus-within {
+    border-color: var(--accent);
+  }
+}
+
+.fieldIco {
+  flex: none;
+  color: var(--fg-faint);
+}
+
+.input {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 0;
+  background: none;
+  border: none;
+  outline: none;
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.open {
+  flex: none;
+  padding: 4px 14px;
+  margin: 3px 0;
+  border-radius: var(--radius);
+  border: 1px solid var(--accent-line);
+  background: var(--accent-line);
+  color: var(--accent-fg);
+  font-size: 12px;
+
+  &:not(:disabled):hover {
+    background: var(--accent);
+  }
+
+  &:disabled {
+    background: none;
+    border-color: var(--line);
+    color: var(--fg-faint);
+  }
+}
+
+// Only rendered when it has something to say, so it costs no height when it
+// does not.
+.crumbs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+.badge {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--green-bg);
+  color: var(--green-fg);
+  font-size: 10px;
+}
+
+.loading {
+  color: var(--fg-faint);
+}
+
+.list {
+  flex: 1;
+  min-height: 0;
+  max-height: 300px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-2);
+  padding: 3px 0;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: var(--fg-dim);
+  cursor: default;
+  white-space: nowrap;
+
+  &:hover {
+    color: var(--fg);
+  }
+}
+
+// Keyboard and mouse share one highlight, so arrowing and pointing cannot
+// disagree about which row is about to be acted on.
+.active {
+  background: var(--bg-4);
+  color: var(--fg-bright);
+}
+
+.rowIco {
+  flex: none;
+  color: var(--fg-faint);
+}
+
+// A repository reads differently from a plain folder at a glance - that is the
+// whole point of probing for .git before you enter.
+.repo {
+  color: var(--fg);
+
+  .rowIco {
+    color: var(--green);
+  }
+}
+
+.name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rowBadge {
+  margin-left: auto;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--green-bg);
+  color: var(--green-fg);
+  font-size: 10px;
+}
+
+.empty {
+  padding: 8px 10px;
+  font-size: 11px;
+  color: var(--fg-faint);
+}

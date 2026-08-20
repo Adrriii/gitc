@@ -22,6 +22,46 @@ Its initial version has been made overnight with Claude Opus 4.8.
 
 **Early.** gitc is somewhat stable in the sense that it wraps git for write operations. But it's still missing core components.
 
+## Install
+
+Download the file for your system from the
+[latest release](https://github.com/Adrriii/gitc/releases/latest) and run it.
+
+| System | File | |
+| ------ | ---- | - |
+| Windows | `gitc.exe` | double-click it |
+| Linux | `gitc` | `chmod +x gitc && ./gitc` |
+
+That is the whole installation. The download **is** gitc: running it copies
+itself into place, puts that directory on your `PATH`, installs the icon and
+the desktop entry, and then starts the app. Afterwards `gitc` works from any
+terminal, and gitc appears in the Start Menu or your application launcher with
+its own icon.
+
+To update, download the new file and run it again. To remove it:
+
+```sh
+gitc --uninstall
+```
+
+Nothing is written outside your own user directories, and nothing needs
+administrator or root.
+
+<details>
+<summary>Where things go</summary>
+
+| | Windows | Linux |
+| - | ------- | ----- |
+| Binary | `%LOCALAPPDATA%\Programs\gitc` | `~/.local/bin` |
+| Icon | beside the binary | `~/.local/share/icons/hicolor` |
+| Launcher entry | Start Menu shortcut | `~/.local/share/applications/gitc.desktop` |
+| Settings | `%APPDATA%\gitc` | `~/.config/gitc` |
+
+Run it with `--portable` to skip all of that and just start the app from where
+it is.
+
+</details>
+
 ## Requirements
 
 - **Windows** or **Linux**

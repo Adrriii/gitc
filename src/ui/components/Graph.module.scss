@@ -79,18 +79,30 @@
   position: relative;
   display: flex;
   align-items: center;
+  // Above the lanes AND above .nodeStack (3), so a chip that grows past this
+  // column covers the graph rather than having a commit node punched through
+  // the middle of the branch name. Still below the menus and hover lists.
+  z-index: 4;
 }
 
+// Right-aligned inside the column, and only as wide as the column - so a long
+// name truncates with an ellipsis rather than covering the graph on every row.
+//
+// Hovering the row lifts that limit (see below) and the strip grows to the
+// RIGHT, over the lanes, revealing the whole name. Growing to the left instead
+// would push the start of the name - the part that identifies it - off the
+// edge and behind the sidebar, which is where it used to go.
 .chips {
   flex: none;
   display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: 3px;
+  width: 100%;
+  min-width: 0;
   // Left padding keeps a long branch name clear of the HEAD accent drawn in
-  // this column's gutter; chips are right-aligned, so they grow into it.
+  // this column's gutter.
   padding: 0 5px 0 8px;
-  overflow: hidden;
 }
 
 .chip {
@@ -102,7 +114,8 @@
   border-radius: var(--radius);
   font-size: 11px;
   white-space: nowrap;
-  max-width: 120px;
+  // Bounded by the column: .chipName carries the ellipsis.
+  max-width: 100%;
   overflow: hidden;
   background: var(--bg-4);
   color: var(--fg);
@@ -139,6 +152,22 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+// Hovering the row reveals the full name, and only then does the strip reach
+// over the graph. 340px stays a ceiling so an absurd branch name cannot cover
+// the lanes end to end. The lift in z-index keeps the expanded chip above the
+// neighbouring rows it now overlaps.
+.chipsCell:hover {
+  z-index: 5;
+
+  .chips {
+    width: max-content;
+  }
+
+  .chip {
+    max-width: 340px;
+  }
+}
 .chipIco {
   opacity: 0.85;
   flex: none;
@@ -167,12 +196,22 @@
 }
 
 // The list of every ref on this commit, opened by hovering the cell.
+//
+// Anchored to the LEFT of the column so it opens over the graph. Anchored
+// right, it grew leftward instead and slid under the sidebar, where the ref
+// names were unreadable - the same mistake the chips themselves used to make.
 .refPop {
   position: absolute;
   top: 100%;
-  right: 5px;
+  left: 8px;
   z-index: 30;
   min-width: 132px;
+  // Wide enough for a real branch name, bounded so it cannot span the window.
+  max-width: 420px;
+  // A commit at the tip of forty branches would otherwise open a list that
+  // runs off the bottom of the window with no way to reach the end of it.
+  max-height: 320px;
+  overflow-y: auto;
   padding: 3px;
   border-radius: var(--radius);
   background: var(--chip-head);

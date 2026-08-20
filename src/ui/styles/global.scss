@@ -55,6 +55,34 @@
   --purple: #a371f7;
   --cyan: #39c5cf;
 
+  // Syntax highlighting. Themable like everything else: a light palette with
+  // a dark code scheme would be unreadable, which is exactly the case a theme
+  // has to be able to fix.
+  --syn-keyword: #569cd6;
+  --syn-type: #4ec9b0;
+  --syn-number: #b5cea8;
+  --syn-string: #ce9178;
+  --syn-regexp: #d16969;
+  --syn-title: #dcdcaa;
+  --syn-variable: #9cdcfe;
+  --syn-comment: #6a9955;
+  --syn-doctag: #608b4e;
+  --syn-meta: #c586c0;
+  --syn-tag: #808080;
+  --syn-punct: #d7ba7d;
+
+  // Graph lanes, assigned to branches in order. Defined here so the app has a
+  // full palette before any theme is applied; the theme overwrites them.
+  --lane-0: #4f8cff;
+  --lane-1: #3fb950;
+  --lane-2: #d29922;
+  --lane-3: #a371f7;
+  --lane-4: #39c5cf;
+  --lane-5: #f85149;
+  --lane-6: #db61a2;
+  --lane-7: #7ee787;
+  --lane-8: #ff9d5c;
+
   // The checked-out branch, which has to stand out from every other chip.
   --chip-head: #16324f;
   --chip-head-fg: #cfe3ff;
@@ -70,6 +98,11 @@
   --panel-w: 400px;
 
   --mono: "Cascadia Mono", Consolas, "JetBrains Mono", "Courier New", monospace;
+
+  // How wide a tab renders, in characters. The browser default is 8, which is
+  // why tabbed files looked so deeply indented; 4 is what most code is written
+  // against. Set from the UI and remembered - see useTabSize.ts.
+  --tab-size: 4;
 }
 
 * {
@@ -152,36 +185,36 @@ input {
 .hljs-name,
 .hljs-link,
 .hljs-selector-tag {
-  color: #569cd6;
+  color: var(--syn-keyword);
 }
 
 .hljs-built_in,
 .hljs-type,
 .hljs-class .hljs-title {
-  color: #4ec9b0;
+  color: var(--syn-type);
 }
 
 .hljs-number,
 .hljs-meta .hljs-number {
-  color: #b5cea8;
+  color: var(--syn-number);
 }
 
 .hljs-string,
 .hljs-meta .hljs-string,
 .hljs-char.escape_ {
-  color: #ce9178;
+  color: var(--syn-string);
 }
 
 .hljs-regexp,
 .hljs-template-tag {
-  color: #d16969;
+  color: var(--syn-regexp);
 }
 
 .hljs-title,
 .hljs-title.function_,
 .hljs-section,
 .hljs-function .hljs-title {
-  color: #dcdcaa;
+  color: var(--syn-title);
 }
 
 .hljs-variable,
@@ -193,32 +226,32 @@ input {
 .hljs-selector-attr,
 .hljs-selector-class,
 .hljs-selector-id {
-  color: #9cdcfe;
+  color: var(--syn-variable);
 }
 
 .hljs-comment,
 .hljs-quote {
-  color: #6a9955;
+  color: var(--syn-comment);
   font-style: italic;
 }
 
 .hljs-doctag {
-  color: #608b4e;
+  color: var(--syn-doctag);
 }
 
 .hljs-meta,
 .hljs-meta .hljs-keyword {
-  color: #c586c0;
+  color: var(--syn-meta);
 }
 
 .hljs-tag {
-  color: #808080;
+  color: var(--syn-tag);
 }
 
 .hljs-bullet,
 .hljs-operator,
 .hljs-punctuation {
-  color: #d7ba7d;
+  color: var(--syn-punct);
 }
 
 .hljs-emphasis {

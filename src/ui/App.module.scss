@@ -17,6 +17,25 @@
   min-height: 0;
 }
 
+// The drag handle between a side panel and the middle.
+//
+// 5px wide but visually 1px: a 1px target is miserable to hit, so the strip is
+// wider than the line it draws. It only lights up on hover, because a resizer
+// you are not using should not be drawing a second border next to the real one.
+.vResizer {
+  flex: none;
+  width: 5px;
+  margin: 0 -2px;
+  cursor: col-resize;
+  z-index: 6;
+  background: transparent;
+
+  &:hover,
+  &:active {
+    background: var(--accent);
+  }
+}
+
 .status {
   height: 21px;
   flex: none;
@@ -72,4 +91,20 @@
   height: 100%;
   color: var(--fg-muted);
   font-size: 13px;
+}
+
+// Offered, not announced: a quiet chip beside the version rather than a
+// dialog that interrupts what someone was doing.
+.update {
+  flex: none;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--accent-line);
+  background: var(--accent-bg);
+  color: var(--accent-fg);
+  font-size: 11px;
+
+  &:not(:disabled):hover {
+    background: var(--accent-line);
+  }
 }

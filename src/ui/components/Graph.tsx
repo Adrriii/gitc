@@ -393,13 +393,16 @@ function RefCell({
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
-      <div className={s.chips} style={{ width }}>
+      <div className={s.chips}>
         <GroupChip group={first} onContext={onContext} onCheckout={onCheckout} />
         {rest.length > 0 && <span className={s.overflowCount}>+{rest.length}</span>}
       </div>
 
       {showList && (
         <div className={s.refPop}>
+          {/* The tick gutter is reserved only when one of these rows actually
+              is the checked-out branch. Reserving it unconditionally indented
+              every name in every list for a mark that was usually not there. */}
           {groups.map((g) => (
             <div
               key={g.kind + g.name}
@@ -413,9 +416,11 @@ function RefCell({
                 onContext(g.actionKind, g.actionName, e.clientX, e.clientY);
               }}
             >
-              <span className={s.popTick}>
-                {g.isHead && <Icon name="check" size={11} />}
-              </span>
+              {groups.some((x) => x.isHead) && (
+                <span className={s.popTick}>
+                  {g.isHead && <Icon name="check" size={11} />}
+                </span>
+              )}
               <span className={s.popName}>{g.name}</span>
               <Where group={g} />
             </div>

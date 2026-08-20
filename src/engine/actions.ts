@@ -111,7 +111,17 @@ export async function commit(
   const path = messageFile(summary, description);
   try {
     const args = ["commit", "-F", path];
-    if (amend) args.push("--amend");
+    if (amend) {
+      args.push("--amend");
+      // A commit carries two timestamps, and `--amend` moves only one of them:
+      // the committer date becomes now, while the author date is preserved
+      // from the original commit. That is right for applying someone else's
+      // patch and wrong for revising your own work a day later, which is what
+      // amending here always is - the graph would keep showing yesterday.
+      //
+      // --date sets the author date; the committer date follows automatically.
+      args.push("--date=now");
+    }
     await git(repo, args);
     const hash = (await git(repo, ["rev-parse", "HEAD"])).trim();
     return { hash, summary: summary.trim() };

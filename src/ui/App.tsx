@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { ConflictState, GraphPayload, OpArgs, Ref, Session } from "./types";
+import type { ConflictState, GraphPayload, OpArgs, Ref, Session, Submodule, UpdateInfo } from "./types";
 import { api } from "./api";
 import { VERSION } from "../generated/version";
 import { TabBar } from "./components/TabBar";
@@ -10,6 +10,7 @@ import { DiffView } from "./components/DiffView";
 import type { DiffTarget } from "./components/DiffView";
 import { Panel } from "./components/Panel";
 import { Welcome } from "./components/Welcome";
+import { Preferences } from "./components/Preferences";
 import { ContextMenu } from "./components/ContextMenu";
 import type { MenuItem } from "./components/ContextMenu";
 import { PendingBanner } from "./components/PendingBanner";
@@ -22,6 +23,8 @@ import { Form } from "./components/Form";
 import type { Field } from "./components/Form";
 import { useHeartbeat } from "./useHeartbeat";
 import { useRepoWatch } from "./useRepoWatch";
+import { useDragWidth } from "./useDragWidth";
+import { useTheme } from "./theme";
 import { rangeSelect, toggleSelect } from "./selection";
 import s from "./App.module.scss";
 
@@ -117,6 +120,14 @@ export function App() {
   const [choose, setChoose] = useState<ChooseState | null>(null);
   const [form, setForm] = useState<FormState | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [prefsOpen, setPrefsOpen] = useState(false);
+  const [update, setUpdate] = useState<UpdateInfo | null>(null);
+  const [updating, setUpdating] = useState(false);
+  const { colors: themeColors } = useTheme();
+  // Both side panels are dragged rather than fixed. The handles are on the
+  // inner edge of each, so the sidebar grows rightward and the panel leftward.
+  const [sidebarW, dragSidebar] = useDragWidth("gitc.sidebarWidth", 208, 150, 480);
+  const [panelW, dragPanel] = useDragWidth("gitc.panelWidth", 400, 260, 900, "left");
   const [notice, setNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -127,9 +138,59 @@ export function App() {
 
   const refresh = useCallback(() => setReloadToken((n) => n + 1), []);
 
+  // Lane colours come from the engine, but the theme is what decides them -
+  // substituted here so the graph itself stays unaware that themes exist.
+  const graphData = useMemo(() => {
+    if (data === null) return null;
+    const lanes: string[] = [];
+    for (let i = 0; i < 9; i++) lanes.push(themeColors["lane-" + String(i)]);
+    return { ...data, colors: lanes };
+  }, [data, themeColors]);
+
   useEffect(() => {
     api.session().then(setSession).catch((e: Error) => setError(e.message));
   }, []);
+
+  // Asked once at startup. Quietly: a failed check - offline, no releases yet -
+  // is not something to interrupt anyone about, so it simply shows nothing.
+  useEffect(() => {
+    api
+      .checkUpdate()
+      .then((info) => info.available && setUpdate(info))
+      .catch(() => undefined);
+  }, []);
+
+  /** Installs the update and lets gitc restart itself. */
+  const runUpdate = useCallback(() => {
+    if (update === null) return;
+    setConfirm({
+      title: `Update to gitc ${update.latest}?`,
+      body: (
+        <p>
+          gitc will download {update.latest}, replace itself and restart. This window closes and a
+          new one opens - nothing else is affected, and your repositories are untouched.
+        </p>
+      ),
+      confirmLabel: `Update to ${update.latest}`,
+      onConfirm: () => {
+        setConfirm(null);
+        setUpdating(true);
+        api
+          .applyUpdate()
+          .then((r) => {
+            if (r.ok) setNotice(r.message);
+            else {
+              setError(r.message);
+              setUpdating(false);
+            }
+          })
+          .catch((e: Error) => {
+            setError(e.message);
+            setUpdating(false);
+          });
+      },
+    });
+  }, [update]);
 
   const activeId = session?.activeId ?? null;
   const activeTab = session?.tabs.find((t) => t.id === activeId) ?? null;
@@ -349,6 +410,43 @@ export function App() {
                 },
               }),
           },
+          ...(many
+            ? [
+                {
+                  label: `Squash ${chosen.length} commits into one`,
+                  hint: "keeps the oldest commit's place in history",
+                  action: () => {
+                    // Prefilled with every message in the run, oldest first,
+                    // so nothing is silently thrown away - editing it down is
+                    // easier than remembering what was in the others.
+                    const runs = data?.commits.filter((c) => chosen.includes(c.hash)) ?? [];
+                    const initial = [...runs]
+                      .reverse()
+                      .map((c) => c.subject)
+                      .join("\n");
+                    setForm({
+                      title: `Squash ${chosen.length} commits`,
+                      body:
+                        "They are replaced by a single commit in the oldest one's place. " +
+                        "This rewrites history, so avoid it on commits you have pushed.",
+                      fields: [
+                        {
+                          key: "message",
+                          label: "Message for the squashed commit",
+                          initial,
+                        },
+                      ],
+                      confirmLabel: "Squash",
+                      onConfirm: (v) => {
+                        setForm(null);
+                        void runOp({ op: "squash", shas: chosen, message: v.message });
+                      },
+                    });
+                  },
+                },
+                { separator: true },
+              ]
+            : []),
           {
             label: many ? `Cherry pick ${chosen.length} commits` : "Cherry pick commit",
             action: () => void runOp({ op: "cherryPick", shas: chosen }),
@@ -629,6 +727,80 @@ export function App() {
     [branch, data?.hidden, runOp, setHidden],
   );
 
+  /**
+   * Opens a submodule as its own tab.
+   *
+   * A tab rather than replacing the current repository: a submodule is a
+   * separate repository with its own history, and the reason to open one is
+   * almost always to compare it with the superproject you came from.
+   */
+  const openSubmodule = useCallback(
+    async (sub: Submodule) => {
+      if (sub.state === "uninitialized") {
+        setError(sub.path + " is not checked out yet - update it first");
+        return;
+      }
+      await open(sub.absolute);
+    },
+    [open],
+  );
+
+  const submoduleMenu = useCallback(
+    (sub: Submodule, x: number, y: number) => {
+      const items: MenuItem[] = [];
+
+      if (sub.state === "uninitialized") {
+        items.push({
+          label: `Clone and check out ${sub.path}`,
+          hint: "runs submodule update --init",
+          action: () => void runOp({ op: "submoduleUpdate", path: sub.path }),
+        });
+      } else {
+        items.push({
+          label: `Open ${sub.path}`,
+          action: () => void openSubmodule(sub),
+        });
+        items.push({ separator: true });
+        items.push({
+          label: "Update to the recorded commit",
+          hint:
+            sub.state === "moved"
+              ? "this submodule has moved away from it"
+              : "already there",
+          action: () => void runOp({ op: "submoduleUpdate", path: sub.path }),
+        });
+        items.push({
+          label: "Update to the latest remote commit",
+          hint: "leaves a pointer change to commit here",
+          action: () => void runOp({ op: "submoduleUpdateRemote", path: sub.path }),
+        });
+      }
+
+      items.push({ separator: true });
+      items.push({
+        label: "Copy path",
+        action: () => {
+          void navigator.clipboard.writeText(sub.absolute);
+          setNotice("copied " + sub.absolute);
+          setMenu(null);
+        },
+      });
+      if (sub.url.length > 0) {
+        items.push({
+          label: "Copy URL",
+          action: () => {
+            void navigator.clipboard.writeText(sub.url);
+            setNotice("copied " + sub.url);
+            setMenu(null);
+          },
+        });
+      }
+
+      setMenu({ x, y, items });
+    },
+    [openSubmodule, runOp],
+  );
+
   const addRemote = useCallback(() => {
     setForm({
       title: "Add remote",
@@ -837,9 +1009,22 @@ export function App() {
         onActivate={(id) => api.activate(id).then(setSession)}
         onClose={(id) => api.close(id).then(setSession)}
         onNew={() => setSession({ ...session, activeId: null })}
+        onPreferences={() => setPrefsOpen(true)}
+        onReorder={(order) => {
+          // Optimistic: the strip follows the pointer, and the engine only
+          // confirms the order it already shows.
+          setSession((cur) =>
+            cur === null
+              ? cur
+              : { ...cur, tabs: order.map((id) => cur.tabs.find((t) => t.id === id)!).filter(Boolean) },
+          );
+          api.reorder(order).catch((e: Error) => setError(e.message));
+        }}
       />
 
-      {!activeTab || !data ? (
+      {prefsOpen ? (
+        <Preferences onClose={() => setPrefsOpen(false)} />
+      ) : !activeTab || !data ? (
         <Welcome session={session} onOpen={open} error={error} />
       ) : (
         <div className={s.app}>
@@ -864,7 +1049,17 @@ export function App() {
             onAbort={() => void runOp({ op: "abort", ref: data.pending.kind })}
           />
 
-          <div className={s.body}>
+          <div
+            className={s.body}
+            // The widths reach the stylesheets as the tokens they already use,
+            // so nothing downstream has to know they became draggable.
+            style={
+              {
+                "--sidebar-w": `${sidebarW}px`,
+                "--panel-w": `${panelW}px`,
+              } as React.CSSProperties
+            }
+          >
             <Sidebar
               data={data}
               onContext={refMenu}
@@ -872,6 +1067,8 @@ export function App() {
               onRemoteContext={remoteMenu}
               onFolderContext={folderMenu}
               onSetHidden={(refs, hide) => void setHidden(refs, hide)}
+              onOpenSubmodule={(sub) => void openSubmodule(sub)}
+              onSubmoduleContext={submoduleMenu}
               onAddRemote={addRemote}
               onNewBranch={() =>
                 setPrompt({
@@ -886,6 +1083,11 @@ export function App() {
                   },
                 })
               }
+            />
+            <div
+              className={s.vResizer}
+              onMouseDown={dragSidebar}
+              title="Drag to resize the sidebar"
             />
             {mergeFile !== null && conflicts !== null ? (
               <MergeEditor
@@ -909,7 +1111,7 @@ export function App() {
               />
             ) : openFile === null ? (
               <Graph
-                data={data}
+                data={graphData ?? data}
                 selected={selected}
                 onSelect={onSelect}
                 onContext={commitMenu}
@@ -936,6 +1138,11 @@ export function App() {
                 onClose={() => setOpenFile(null)}
               />
             )}
+            <div
+              className={s.vResizer}
+              onMouseDown={dragPanel}
+              title="Drag to resize the panel"
+            />
             {conflicts !== null && conflicts.operation.length > 0 ? (
               <ConflictPanel
                 tabId={activeTab.id}
@@ -969,6 +1176,16 @@ export function App() {
             {error !== null && <span className={s.error}>{error}</span>}
             <span className={s.spacer} />
             <span className={s.path}>{activeTab.path}</span>
+            {update !== null && (
+              <button
+                className={s.update}
+                onClick={runUpdate}
+                disabled={updating}
+                title={`gitc ${update.latest} is available - you have ${update.current}`}
+              >
+                {updating ? "Updating…" : `Update to ${update.latest}`}
+              </button>
+            )}
             <span className={s.version} title={`gitc ${VERSION}`}>
               v{VERSION}
             </span>

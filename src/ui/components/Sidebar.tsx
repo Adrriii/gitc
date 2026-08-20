@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
-import type { GraphPayload, Ref } from "../types";
-import { buildTree, collectRefs, countRefs, type TreeNode } from "../branchTree";
+import type { GraphPayload, Ref, Submodule } from "../types";
+import { buildTree, collectItems, countItems, type TreeNode } from "../pathTree";
 import { Icon } from "./Icon";
 import s from "./Sidebar.module.scss";
 
@@ -18,9 +18,20 @@ interface SectionProps {
   children?: React.ReactNode;
 }
 
+/**
+ * One band of the sidebar.
+ *
+ * The sections are an accordion: exactly one body is open, and every header
+ * stays on screen whatever the repository holds. Before this, a repo with
+ * forty local branches pushed REMOTE and TAGS off the bottom, so the only way
+ * to reach a tag was to scroll past every branch first.
+ *
+ * The open body takes the leftover height and scrolls inside itself, which is
+ * what keeps the headers put.
+ */
 function Section({ name, count, open, onToggle, onAdd, addTitle, children }: SectionProps) {
   return (
-    <>
+    <div className={`${s.section} ${open ? s.sectionOpen : ""}`}>
       <div className={s.head} onClick={onToggle}>
         <Icon name={open ? "chevronDown" : "chevronRight"} size={12} className={s.arrow} />
         <span className={s.name}>{name}</span>
@@ -42,8 +53,8 @@ function Section({ name, count, open, onToggle, onAdd, addTitle, children }: Sec
           )}
         </span>
       </div>
-      {open && children}
-    </>
+      {open && <div className={s.body}>{children}</div>}
+    </div>
   );
 }
 
@@ -93,7 +104,7 @@ function Eye({ hidden, onClick }: { hidden: boolean; onClick: () => void }) {
 }
 
 interface TreeProps {
-  nodes: TreeNode[];
+  nodes: TreeNode<Ref>[];
   depth: number;
   /**
    * Namespaces the collapse state.
@@ -128,7 +139,7 @@ function Tree(p: TreeProps) {
         const folder = node.children.length > 0;
         const key = p.scope + "|" + node.path;
         const open = folder && p.isOpen(key);
-        const under = collectRefs(node.children);
+        const under = collectItems(node.children);
         // A folder reads as hidden only when everything inside it is, so the
         // eye tells you what clicking will do rather than what some child is.
         const allHidden = under.length > 0 && under.every((r) => p.hidden.has(r.short));
@@ -162,7 +173,7 @@ function Tree(p: TreeProps) {
                 />
                 <Icon name="folder" size={12} className={s.refIco} />
                 <span className={s.refName}>{node.name}</span>
-                <span className={s.folderCount}>{countRefs(node.children)}</span>
+                <span className={s.folderCount}>{countItems(node.children)}</span>
                 <RowControls
                   hidden={allHidden}
                   onMenu={(x, y) =>
@@ -177,15 +188,15 @@ function Tree(p: TreeProps) {
               </div>
             )}
 
-            {node.ref !== null && (
+            {node.item !== null && (
               <RefRow
-                r={node.ref}
+                r={node.item}
                 label={node.name}
                 // A name that is also a folder sits at its folder's own depth,
                 // so its row indents one more step to read as being inside it.
                 depth={folder ? p.depth + 1 : p.depth}
                 headBranch={p.headBranch}
-                hidden={p.hidden.has(node.ref.short)}
+                hidden={p.hidden.has(node.item.short)}
                 onCheckout={p.onCheckout}
                 onContext={p.onContext}
                 onSetHidden={p.onSetHidden}
@@ -245,6 +256,28 @@ function RefRow({
   );
 }
 
+/** The badge text: short enough for a 208px sidebar. */
+function shortState(sub: Submodule): string {
+  if (sub.state === "uninitialized") return "not cloned";
+  if (sub.state === "moved") return "moved";
+  if (sub.state === "conflicted") return "conflicts";
+  return "";
+}
+
+function stateClass(sub: Submodule, styles: Record<string, string>): string {
+  if (sub.state === "conflicted") return styles.subBad;
+  if (sub.state === "moved") return styles.subWarn;
+  return styles.subDim;
+}
+
+/** The longer form, for the tooltip. */
+function describeSubmodule(sub: Submodule): string {
+  if (sub.state === "uninitialized") return "declared but not checked out";
+  if (sub.state === "moved") return "at a different commit than this repository records";
+  if (sub.state === "conflicted") return "has merge conflicts";
+  return "at the recorded commit" + (sub.label.length > 0 ? " (" + sub.label + ")" : "");
+}
+
 export function Sidebar({
   data,
   onContext,
@@ -254,6 +287,8 @@ export function Sidebar({
   onAddRemote,
   onNewBranch,
   onSetHidden,
+  onOpenSubmodule,
+  onSubmoduleContext,
 }: {
   data: GraphPayload;
   onContext: (ref: Ref, x: number, y: number) => void;
@@ -264,18 +299,19 @@ export function Sidebar({
   onAddRemote: () => void;
   onNewBranch: () => void;
   onSetHidden: (refs: string[], hide: boolean) => void;
+  /** Opens a submodule as its own repository tab. */
+  onOpenSubmodule: (sub: Submodule) => void;
+  onSubmoduleContext: (sub: Submodule, x: number, y: number) => void;
 }) {
   const [filter, setFilter] = useState("");
-  const [open, setOpen] = useState<Record<string, boolean>>({
-    LOCAL: true,
-    REMOTE: true,
-    TAGS: false,
-  });
+  // Which single section is expanded. Clicking the open one closes it, which
+  // leaves three headers and nothing else - occasionally what you want.
+  const [expanded, setExpanded] = useState("LOCAL");
   // Folders start expanded, so nesting reorganises the list without hiding
   // anything. Only the keys actually collapsed are remembered.
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
 
-  const toggle = (k: string) => setOpen((o) => ({ ...o, [k]: !o[k] }));
+  const toggle = (k: string) => setExpanded((cur) => (cur === k ? "" : k));
   const toggleFolder = (key: string) =>
     setCollapsed((c) => {
       const next = new Set(c);
@@ -290,6 +326,7 @@ export function Sidebar({
   const isOpen = (key: string) => filtering || !collapsed.has(key);
 
   const hidden = useMemo(() => new Set(data.hidden ?? []), [data.hidden]);
+  const submodules = data.submodules ?? [];
 
   const { localTree, localCount, remoteTrees, remoteCount, tags } = useMemo(() => {
     const f = filter.trim().toLowerCase();
@@ -314,7 +351,7 @@ export function Sidebar({
       else byRemote.set(key, [r]);
     }
 
-    const remoteTrees = new Map<string, TreeNode[]>();
+    const remoteTrees = new Map<string, TreeNode<Ref>[]>();
     for (const [remote, refs] of byRemote) {
       remoteTrees.set(
         remote,
@@ -359,7 +396,7 @@ export function Sidebar({
         <Section
           name="LOCAL"
           count={localCount}
-          open={open.LOCAL}
+          open={expanded === "LOCAL"}
           onToggle={() => toggle("LOCAL")}
           onAdd={onNewBranch}
           addTitle="Create a branch"
@@ -370,7 +407,7 @@ export function Sidebar({
         <Section
           name="REMOTE"
           count={remoteCount}
-          open={open.REMOTE}
+          open={expanded === "REMOTE"}
           onToggle={() => toggle("REMOTE")}
           onAdd={onAddRemote}
           addTitle="Add a remote"
@@ -379,7 +416,7 @@ export function Sidebar({
             const nodes = remoteTrees.get(remote) ?? [];
             const key = "remote|" + remote;
             const shown = isOpen(key);
-            const under = collectRefs(nodes);
+            const under = collectItems(nodes);
             const allHidden = under.length > 0 && under.every((r) => hidden.has(r.short));
             const shorts = under.map((r) => r.short);
             return (
@@ -410,7 +447,7 @@ export function Sidebar({
           })}
         </Section>
 
-        <Section name="TAGS" count={tags.length} open={open.TAGS} onToggle={() => toggle("TAGS")}>
+        <Section name="TAGS" count={tags.length} open={expanded === "TAGS"} onToggle={() => toggle("TAGS")}>
           {tags.map((r) => (
             <div
               key={r.name}
@@ -432,6 +469,40 @@ export function Sidebar({
             </div>
           ))}
         </Section>
+
+        {/* Only when the repository has any: an always-present empty section
+            would be noise in the overwhelming majority of repositories. */}
+        {submodules.length > 0 && (
+          <Section
+            name="SUBMODULES"
+            count={submodules.length}
+            open={expanded === "SUBMODULES"}
+            onToggle={() => toggle("SUBMODULES")}
+          >
+            {submodules.map((sub) => (
+              <div
+                key={sub.path}
+                className={`${s.ref} ${sub.state === "uninitialized" ? s.dim : ""}`}
+                style={{ paddingLeft: 4 }}
+                title={`${sub.path} — ${describeSubmodule(sub)}
+double-click to open it as a tab, right-click for more`}
+                onDoubleClick={() => onOpenSubmodule(sub)}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  onSubmoduleContext(sub, e.clientX, e.clientY);
+                }}
+              >
+                <Icon name="repo" size={12} className={s.refIco} />
+                <span className={s.refName}>{sub.path}</span>
+                {sub.state !== "current" && (
+                  <span className={`${s.subState} ${stateClass(sub, s)}`}>
+                    {shortState(sub)}
+                  </span>
+                )}
+              </div>
+            ))}
+          </Section>
+        )}
       </div>
     </div>
   );

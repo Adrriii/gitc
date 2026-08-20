@@ -1,7 +1,10 @@
 import { useEffect, useState } from "react";
 
 const INTERVAL_MS = 2000;
-const FAILURES_BEFORE_DEAD = 2;
+// Two misses is four seconds, which a restarting engine or a moment of load
+// can cover - and the penalty for being wrong is closing the user's window
+// out from under them. Ten seconds of silence is a real absence.
+const FAILURES_BEFORE_DEAD = 5;
 
 /**
  * Keeps the window and the engine bound together as one application.

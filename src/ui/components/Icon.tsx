@@ -16,6 +16,7 @@ export type IconName =
   | "fetch"
   | "pull"
   | "push"
+  | "gear"
   | "kebab"
   | "eye"
   | "eyeOff"
@@ -70,6 +71,12 @@ const PATHS: Record<IconName, React.ReactNode> = {
     </>
   ),
   // Two nodes and a line: the graph's own shape, at icon scale.
+  gear: (
+    <>
+      <circle cx="12" cy="12" r="3.2" />
+      <path d="M12 2.6v2.6M12 18.8v2.6M21.4 12h-2.6M5.2 12H2.6M18.6 5.4l-1.8 1.8M7.2 16.8l-1.8 1.8M18.6 18.6l-1.8-1.8M7.2 7.2L5.4 5.4" />
+    </>
+  ),
   kebab: (
     <>
       <circle cx="12" cy="5" r="1.4" />

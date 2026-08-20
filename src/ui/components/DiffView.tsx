@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { DiffLine, FileDiff, Hunk } from "../types";
 import { api } from "../api";
 import { languageFor, highlightLines, MAX_HIGHLIGHT_CHARS } from "../highlight";
+import { useDiffWrap, useTabSize } from "../settings";
 import { Icon } from "./Icon";
 import s from "./DiffView.module.scss";
 
@@ -11,8 +12,6 @@ export type DiffTarget =
   | { kind: "wip"; staged: boolean; untracked: boolean };
 
 type Mode = "unified" | "inline" | "split";
-
-const WRAP_KEY = "gitc.diffWrap";
 
 /**
  * Pairs a hunk's lines into two columns for Split view.
@@ -50,13 +49,57 @@ function splitRows(lines: DiffLine[]): { left: DiffLine | null; right: DiffLine 
   return rows;
 }
 
-/** Renders tabs and trailing spaces visibly, for the ¶ toggle. */
-function showWhitespace(text: string): string {
-  return text.replace(/\t/g, "→   ").replace(/ +$/g, (m) => "·".repeat(m.length));
+/**
+ * Renders tabs and trailing spaces visibly, for the ¶ toggle.
+ *
+ * The arrow is padded out to the configured tab width, so text still lands
+ * where the tab stop would have put it. Fixed at four, turning whitespace on
+ * shifted every tabbed line sideways.
+ */
+function showWhitespace(text: string, tabSize: number): string {
+  const tab = "→" + " ".repeat(Math.max(0, tabSize - 1));
+  return text.replace(/\t/g, tab).replace(/ +$/g, (m) => "·".repeat(m.length));
 }
 
 function Gutter({ n }: { n: number | null }) {
   return <span className={s.num}>{n ?? ""}</span>;
+}
+
+/**
+ * How many diff lines are rendered before the view stops and asks.
+ *
+ * Nothing here is virtualised: every line becomes DOM nodes, and the whole-file
+ * modes ask the engine for the entire file. A 40,000-line file therefore laid
+ * out 40,000 rows - two panes' worth in Split - which froze the window for long
+ * enough that the engine concluded it had died and shut the app down.
+ *
+ * 4,000 rows is far more than anyone reads at once and lays out in well under
+ * a second, and the rest is one click away.
+ */
+const MAX_ROWS = 4000;
+
+/** Cuts a hunk list down to a line budget, reporting what it left out. */
+function withinBudget(hunks: Hunk[], budget: number): { hunks: Hunk[]; shown: number; total: number } {
+  let total = 0;
+  for (const h of hunks) total += h.lines.length;
+  if (total <= budget) return { hunks, shown: total, total };
+
+  const kept: Hunk[] = [];
+  let shown = 0;
+  for (const h of hunks) {
+    if (shown >= budget) break;
+    const room = budget - shown;
+    if (h.lines.length <= room) {
+      kept.push(h);
+      shown += h.lines.length;
+    } else {
+      // Keep the head of the hunk rather than dropping it whole: the first
+      // lines of a huge file are the ones worth seeing.
+      kept.push({ ...h, lines: h.lines.slice(0, room) });
+      shown += room;
+    }
+  }
+  return { hunks: kept, shown, total };
 }
 
 export function DiffView({
@@ -74,15 +117,36 @@ export function DiffView({
   onClose: () => void;
 }) {
   const [mode, setMode] = useState<Mode>("unified");
+  const [showAll, setShowAll] = useState(false);
+  // Set in Preferences; used here to pad the whitespace view to match.
+  const { size: tabSize } = useTabSize();
+  // Reported inline rather than through the app's status bar: the reason a
+  // file will not open - it is not in the working tree - is about the file on
+  // screen, so it belongs next to the button that tried.
+  const [editError, setEditError] = useState<string | null>(null);
+
+  /**
+   * Opens the working-tree copy of this file in the user's editor.
+   *
+   * The working-tree copy, not the revision on screen: editing a file you are
+   * looking at in a commit means editing it now, and gitc has nowhere to put
+   * an edited historical blob anyway.
+   */
+  const openInEditor = async () => {
+    setEditError(null);
+    try {
+      const r = await api.op(tabId, { op: "editFile", path });
+      if (!r.ok) setEditError(r.note);
+    } catch (e) {
+      setEditError((e as Error).message);
+    }
+  };
   const [fileView, setFileView] = useState(false);
   const [ws, setWs] = useState(false);
   // Long lines are a setting, not a per-view guess: wrap (the default) or
   // scroll horizontally. It persists, because it is a reading preference
   // rather than something to re-choose for every file.
-  const [wrap, setWrap] = useState<boolean>(() => {
-    const saved = localStorage.getItem(WRAP_KEY);
-    return saved === null ? true : saved === "1";
-  });
+  const { wrap, set: setWrap } = useDiffWrap();
   const [diff, setDiff] = useState<FileDiff | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -96,6 +160,9 @@ export function DiffView({
     let live = true;
     setLoading(true);
     setError(null);
+    // A new file starts within the budget again: "show all" was a decision
+    // about the file you were looking at, not a preference.
+    setShowAll(false);
     api
       .diff(tabId, target, path, whole)
       .then((d) => {
@@ -171,7 +238,7 @@ export function DiffView({
     return map;
   }, [diff, language, ws]);
 
-  const text = (line: DiffLine) => (ws ? showWhitespace(line.text) : line.text);
+  const text = (line: DiffLine) => (ws ? showWhitespace(line.text, tabSize) : line.text);
 
   /** A line's content: highlighted when we have it, plain text otherwise. */
   const Content = ({ line }: { line: DiffLine }) => {
@@ -180,6 +247,12 @@ export function DiffView({
     if (html === undefined) return <span className={cls}>{text(line)}</span>;
     return <span className={cls} dangerouslySetInnerHTML={{ __html: html }} />;
   };
+
+  // Recomputed per diff, so opening a new file starts bounded again.
+  const budget = useMemo(
+    () => withinBudget(diff?.hunks ?? [], showAll ? Number.MAX_SAFE_INTEGER : MAX_ROWS),
+    [diff, showAll],
+  );
 
   const renderLinear = (hunks: Hunk[], showHeaders: boolean) => (
     <>
@@ -294,9 +367,14 @@ export function DiffView({
       </div>
 
       <div className={s.toolbar}>
-        <button className={s.btn} disabled title="Not wired yet">
+        <button
+          className={s.btn}
+          onClick={() => void openInEditor()}
+          title="Open this file in your editor"
+        >
           &#9998; Edit This File
         </button>
+        {editError !== null && <span className={s.editError}>{editError}</span>}
         <span className={s.spacer} />
 
         <div className={s.group}>
@@ -356,11 +434,7 @@ export function DiffView({
           </button>
           <button
             className={wrap ? s.on : ""}
-            onClick={() => {
-              const next = !wrap;
-              setWrap(next);
-              localStorage.setItem(WRAP_KEY, next ? "1" : "0");
-            }}
+            onClick={() => setWrap(!wrap)}
             title={wrap ? "Wrapping long lines — click to scroll instead" : "Scrolling long lines — click to wrap"}
           >
             <Icon name="wrap" size={14} />
@@ -371,6 +445,16 @@ export function DiffView({
       <div className={s.body} ref={body}>
         {loading && <div className={s.note}>Loading diff…</div>}
         {error !== null && <div className={s.note}>{error}</div>}
+        {!loading && error === null && diff !== null && budget.shown < budget.total && (
+          <div className={s.capped}>
+            Showing the first {budget.shown.toLocaleString()} of{" "}
+            {budget.total.toLocaleString()} lines.
+            <button className={s.cappedBtn} onClick={() => setShowAll(true)}>
+              Show the whole file
+            </button>
+            <span className={s.cappedWhy}>large files can take a moment to lay out</span>
+          </div>
+        )}
         {!loading && error === null && diff !== null && (
           <>
             {diff.tooLarge ? (
@@ -380,9 +464,9 @@ export function DiffView({
             ) : diff.hunks.length === 0 ? (
               <div className={s.note}>No changes to this file in the selection.</div>
             ) : mode === "split" && !fileView ? (
-              renderSplit(diff.hunks)
+              renderSplit(budget.hunks)
             ) : (
-              renderLinear(diff.hunks, mode === "unified" && !fileView)
+              renderLinear(budget.hunks, mode === "unified" && !fileView)
             )}
           </>
         )}

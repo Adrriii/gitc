@@ -1,0 +1,251 @@
+import { useState } from "react";
+import { api } from "../api";
+import type { UpdateInfo } from "../types";
+import { TAB_SIZES, useDiffWrap, useTabSize } from "../settings";
+import { PRESETS, TOKEN_GROUPS, useTheme } from "../theme";
+import { VERSION } from "../../generated/version";
+import { Icon } from "./Icon";
+import s from "./Preferences.module.scss";
+
+/**
+ * Preferences.
+ *
+ * A full-window screen rather than a modal, the way the reference does it:
+ * settings are a place you go, not a dialog you dismiss, and a modal over the
+ * graph would leave the repository visible but untouchable behind it.
+ *
+ * Everything here takes effect immediately - there is no Apply button and
+ * nothing to save. Settings that need a round trip to see are settings people
+ * assume are broken.
+ */
+
+type Section = "theme" | "editor" | "about";
+
+const SECTIONS: { id: Section; label: string; icon: "eye" | "edit" | "repo" }[] = [
+  { id: "theme", label: "Theme", icon: "eye" },
+  { id: "editor", label: "Editor", icon: "edit" },
+  { id: "about", label: "About", icon: "repo" },
+];
+
+/** One labelled control. The label column is right-aligned, as in the reference. */
+function Row({
+  label,
+  hint,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className={s.row}>
+      <div className={s.label}>{label}</div>
+      <div className={s.control}>
+        {children}
+        {hint && <div className={s.hint}>{hint}</div>}
+      </div>
+    </div>
+  );
+}
+
+export function Preferences({ onClose }: { onClose: () => void }) {
+  const [section, setSection] = useState<Section>("theme");
+  const { size: tabSize, set: setTabSize } = useTabSize();
+  const { wrap, set: setWrap } = useDiffWrap();
+  const theme = useTheme();
+  const [update, setUpdate] = useState<UpdateInfo | null>(null);
+  const [checking, setChecking] = useState(false);
+
+  return (
+    <div className={s.screen}>
+      <div className={s.nav}>
+        <button className={s.exit} onClick={onClose}>
+          <Icon name="chevronRight" size={12} className={s.exitIco} />
+          Exit Preferences
+        </button>
+
+        <div className={s.navGroup}>Preferences</div>
+        {SECTIONS.map((entry) => (
+          <button
+            key={entry.id}
+            className={`${s.navItem} ${section === entry.id ? s.navOn : ""}`}
+            onClick={() => setSection(entry.id)}
+          >
+            <Icon name={entry.icon} size={14} className={s.navIco} />
+            {entry.label}
+          </button>
+        ))}
+      </div>
+
+      <div className={s.pane}>
+        {section === "theme" && (
+          <>
+            <h1>Theme</h1>
+
+            <Row label="Preset" hint="A starting point. Any colour below can be changed on top of it.">
+              <div className={s.presets}>
+                {PRESETS.map((preset) => (
+                  <button
+                    key={preset.id}
+                    className={`${s.preset} ${preset.id === theme.presetId ? s.presetOn : ""}`}
+                    onClick={() => theme.choosePreset(preset.id)}
+                    title={preset.blurb}
+                  >
+                    {/* The swatch is the preset painting itself: floor, chrome,
+                        accent and three lanes, which is enough to recognise. */}
+                    <span
+                      className={s.swatch}
+                      style={{ background: preset.colors["bg-0"], borderColor: preset.colors.line }}
+                    >
+                      <span style={{ background: preset.colors["bg-2"] }} />
+                      <span style={{ background: preset.colors.accent }} />
+                      <span style={{ background: preset.colors["lane-1"] }} />
+                      <span style={{ background: preset.colors["lane-2"] }} />
+                      <span style={{ background: preset.colors["lane-3"] }} />
+                    </span>
+                    <span className={s.presetName}>{preset.name}</span>
+                  </button>
+                ))}
+              </div>
+            </Row>
+
+            {Object.keys(theme.overrides).length > 0 && (
+              <Row label="Customised" hint="Colours you changed on top of the preset.">
+                <button className={s.resetAll} onClick={() => theme.reset()}>
+                  Reset {Object.keys(theme.overrides).length} to {theme.preset.name}
+                </button>
+              </Row>
+            )}
+
+            {TOKEN_GROUPS.map((group) => (
+              <div key={group.title} className={s.group}>
+                <h2>{group.title}</h2>
+                <p className={s.groupBlurb}>{group.blurb}</p>
+                <div className={s.colors}>
+                  {group.tokens.map((token) => {
+                    const value = theme.colors[token.name];
+                    const changed = theme.overrides[token.name] !== undefined;
+                    return (
+                      <label key={token.name} className={s.color}>
+                        <input
+                          type="color"
+                          value={value}
+                          onChange={(e) => theme.setColor(token.name, e.target.value)}
+                        />
+                        <span className={s.colorText}>
+                          <span className={s.colorLabel}>{token.label}</span>
+                          <span className={s.colorValue}>{value}</span>
+                        </span>
+                        {changed && (
+                          <button
+                            className={s.revert}
+                            title={`Back to ${theme.preset.name}`}
+                            onClick={(e) => {
+                              e.preventDefault();
+                              theme.reset(token.name);
+                            }}
+                          >
+                            ↺
+                          </button>
+                        )}
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </>
+        )}
+
+        {section === "editor" && (
+          <>
+            <h1>Editor</h1>
+
+            <Row
+              label="Tab width"
+              hint="How far a tab indents, in characters. Applies to diffs, the file view and the conflict editor."
+            >
+              <div className={s.choices}>
+                {TAB_SIZES.map((n) => (
+                  <button
+                    key={n}
+                    className={n === tabSize ? s.on : ""}
+                    onClick={() => setTabSize(n)}
+                  >
+                    {n}
+                  </button>
+                ))}
+              </div>
+            </Row>
+
+            <Row label="Long lines" hint="Wrapping keeps everything on screen; scrolling keeps the shape of the code.">
+              <div className={s.choices}>
+                <button className={wrap ? s.on : ""} onClick={() => setWrap(true)}>
+                  Wrap
+                </button>
+                <button className={!wrap ? s.on : ""} onClick={() => setWrap(false)}>
+                  Scroll
+                </button>
+              </div>
+            </Row>
+          </>
+        )}
+
+        {section === "about" && (
+          <>
+            <h1>About</h1>
+            <Row
+              label="Version"
+              hint={
+                update === null
+                  ? undefined
+                  : update.available
+                    ? `${update.latest} is available - the status bar has the update button.`
+                    : update.error.length > 0
+                      ? update.error
+                      : "This is the newest version."
+              }
+            >
+              <div className={s.versionRow}>
+                <span className={s.value}>gitc {VERSION}</span>
+                <button
+                  className={s.resetAll}
+                  disabled={checking}
+                  onClick={() => {
+                    setChecking(true);
+                    api
+                      .checkUpdate()
+                      .then(setUpdate)
+                      .catch((e: Error) =>
+                        setUpdate({
+                          current: VERSION,
+                          latest: "",
+                          available: false,
+                          page: "",
+                          error: e.message,
+                        }),
+                      )
+                      .finally(() => setChecking(false));
+                  }}
+                >
+                  {checking ? "Checking…" : "Check for updates"}
+                </button>
+              </div>
+            </Row>
+            <Row label="Licence" hint="Free software. The source is the whole program.">
+              <span className={s.value}>GNU Affero General Public License v3.0</span>
+            </Row>
+            <Row
+              label="Settings"
+              hint="Open repositories and hidden branches live here; preferences on this screen are stored by the window itself."
+            >
+              <span className={s.value}>
+                {navigator.userAgent.includes("Windows") ? "%APPDATA%\\gitc" : "~/.config/gitc"}
+              </span>
+            </Row>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}

@@ -1,4 +1,4 @@
-import { buildTree, collectRefs, countRefs, folderPaths } from "../branchTree.ts";
+import { buildTree, collectItems, countItems, folderPaths } from "../pathTree.ts";
 import type { Ref } from "../types.ts";
 
 const ref = (short: string): Ref => ({
@@ -26,7 +26,7 @@ function eq(label: string, got: unknown, want: unknown) {
 /** The shape of a tree, as nested `name` / `name(branch)` strings. */
 function shape(nodes: ReturnType<typeof buildTree>): unknown[] {
   return nodes.map((n) => {
-    const label = n.ref === null ? n.name : n.name + "*";
+    const label = n.item === null ? n.name : n.name + "*";
     return n.children.length === 0 ? label : [label, shape(n.children)];
   });
 }
@@ -89,19 +89,19 @@ eq(
   ["a", "a/b"],
 );
 
-eq("countRefs counts branches, not nodes", countRefs(buildTree([ref("a/b/c"), ref("a/d"), ref("e")], name)), 3);
+eq("countItems counts branches, not nodes", countItems(buildTree([ref("a/b/c"), ref("a/d"), ref("e")], name)), 3);
 
 // Folder- and remote-level actions operate on whatever sits underneath, so
 // this is the list that gets hidden when a folder's eye is clicked.
 eq(
-  "collectRefs gathers every ref beneath, depth first",
-  collectRefs(buildTree([ref("a/b/c"), ref("a/d"), ref("e")], name)).map((r) => r.short),
+  "collectItems gathers every ref beneath, depth first",
+  collectItems(buildTree([ref("a/b/c"), ref("a/d"), ref("e")], name)).map((r) => r.short),
   ["a/b/c", "a/d", "e"],
 );
 
 eq(
-  "collectRefs on a flat list returns all of them",
-  collectRefs(buildTree([ref("x"), ref("y")], name)).map((r) => r.short),
+  "collectItems on a flat list returns all of them",
+  collectItems(buildTree([ref("x"), ref("y")], name)).map((r) => r.short),
   ["x", "y"],
 );
 

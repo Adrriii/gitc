@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Commit, FileChange, GraphPayload } from "../types";
+import { buildTree, countItems, type TreeNode } from "../pathTree";
+import { Icon } from "./Icon";
 import { api } from "../api";
 import { StagingPanel } from "./StagingPanel";
 import { Avatar } from "./Avatar";
@@ -16,19 +18,26 @@ function FileRow({
   path,
   onOpen,
   active,
+  depth = 0,
+  baseOnly = false,
 }: {
   status: string;
   path: string;
   onOpen?: (path: string) => void;
   active?: boolean;
+  /** Nesting level in tree mode; ignored in path mode. */
+  depth?: number;
+  /** Tree mode shows only the file name - the folders are already rows. */
+  baseOnly?: boolean;
 }) {
   const cut = path.lastIndexOf("/");
-  const dir = cut === -1 ? "" : path.substring(0, cut + 1);
+  const dir = cut === -1 || baseOnly ? "" : path.substring(0, cut + 1);
   const base = cut === -1 ? path : path.substring(cut + 1);
   const glyph = status === "A" ? "+" : status === "D" ? "−" : status === "R" ? "→" : "✎";
   return (
     <div
       className={`${s.file} ${active ? s.fileActive : ""}`}
+      style={depth > 0 ? { paddingLeft: 10 + depth * 12 } : undefined}
       title={path}
       onClick={() => onOpen?.(path)}
     >
@@ -36,6 +45,89 @@ function FileRow({
       {dir && <span className={s.dir}>{dir}</span>}
       <span className={s.base}>{base}</span>
     </div>
+  );
+}
+
+/**
+ * The file list as a directory tree.
+ *
+ * The Tree button existed before this did: it set a mode nothing read, so the
+ * list stayed flat whichever way it was toggled. Folders collapse, and a
+ * folder with a single child collapses INTO it - `src/ui/components` is one
+ * row rather than three, which is the difference between a tree that helps and
+ * one that is mostly indentation.
+ */
+function FileTree({
+  nodes,
+  depth,
+  collapsed,
+  toggle,
+  onOpen,
+  activePath,
+}: {
+  nodes: TreeNode<FileChange>[];
+  depth: number;
+  collapsed: Set<string>;
+  toggle: (path: string) => void;
+  onOpen?: (path: string) => void;
+  activePath?: string | null;
+}) {
+  return (
+    <>
+      {nodes.map((node) => {
+        if (node.children.length === 0 && node.item !== null) {
+          return (
+            <FileRow
+              key={node.path}
+              status={node.item.status}
+              path={node.item.path}
+              onOpen={onOpen}
+              active={activePath === node.item.path}
+              depth={depth}
+              baseOnly
+            />
+          );
+        }
+
+        // Fold a chain of single-child directories into one row.
+        let label = node.name;
+        let folder = node;
+        while (folder.children.length === 1 && folder.item === null && folder.children[0].children.length > 0) {
+          folder = folder.children[0];
+          label += "/" + folder.name;
+        }
+
+        const open = !collapsed.has(folder.path);
+        return (
+          <div key={node.path}>
+            <div
+              className={s.folder}
+              style={{ paddingLeft: 10 + depth * 12 }}
+              onClick={() => toggle(folder.path)}
+              title={folder.path}
+            >
+              <Icon
+                name={open ? "chevronDown" : "chevronRight"}
+                size={11}
+                className={s.folderArrow}
+              />
+              <span className={s.folderName}>{label}</span>
+              <span className={s.folderCount}>{countItems(folder.children)}</span>
+            </div>
+            {open && (
+              <FileTree
+                nodes={folder.children}
+                depth={depth + 1}
+                collapsed={collapsed}
+                toggle={toggle}
+                onOpen={onOpen}
+                activePath={activePath}
+              />
+            )}
+          </div>
+        );
+      })}
+    </>
   );
 }
 
@@ -49,6 +141,15 @@ function Files({
   activePath?: string | null;
 }) {
   const [mode, setMode] = useState<"path" | "tree">("path");
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const tree = useMemo(() => buildTree(files, (f) => f.path), [files]);
+  const toggleFolder = (path: string) =>
+    setCollapsed((c) => {
+      const next = new Set(c);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
   const modified = files.filter((f) => f.status === "M").length;
   const added = files.filter((f) => f.status === "A").length;
   const deleted = files.filter((f) => f.status === "D").length;
@@ -70,15 +171,26 @@ function Files({
           </button>
         </div>
       </div>
-      {files.map((f) => (
-        <FileRow
-          key={f.path}
-          status={f.status}
-          path={f.path}
+      {mode === "tree" ? (
+        <FileTree
+          nodes={tree}
+          depth={0}
+          collapsed={collapsed}
+          toggle={toggleFolder}
           onOpen={onOpen}
-          active={activePath === f.path}
+          activePath={activePath}
         />
-      ))}
+      ) : (
+        files.map((f) => (
+          <FileRow
+            key={f.path}
+            status={f.status}
+            path={f.path}
+            onOpen={onOpen}
+            active={activePath === f.path}
+          />
+        ))
+      )}
     </>
   );
 }
