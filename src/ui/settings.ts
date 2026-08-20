@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
+export { commandType } from "./gitCommand";
+
 /**
  * The settings that live in the preferences screen.
  *
@@ -133,5 +135,87 @@ function parseFetch(raw: string): number | null {
  */
 export function useFetchInterval() {
   const [minutes, set] = useStored<number>(FETCH_KEY, 5, parseFetch);
+  return { minutes, set };
+}
+
+// --- commands kept out of the log -------------------------------------------
+
+const HIDDEN_COMMANDS_KEY = "gitc.hiddenCommands";
+
+/** Hoisted: a fresh [] each render would re-subscribe the store on every one. */
+const NONE: string[] = [];
+
+const joinHidden = (list: string[]) => list.join(",");
+
+function parseHidden(raw: string): string[] {
+  const out: string[] = [];
+  for (const name of raw.split(",")) {
+    const trimmed = name.trim();
+    if (trimmed.length > 0 && !out.includes(trimmed)) out.push(trimmed);
+  }
+  return out;
+}
+
+/**
+ * Command types left out of the log, by name: "status", "log".
+ *
+ * A view filter, not a recording one - the engine keeps everything it ran, so
+ * showing a type again brings its history back rather than starting it from
+ * empty. Nothing is hidden by default: the log exists to show what gitc does,
+ * and deciding for someone which parts of that are beneath their notice would
+ * defeat it. Hiding the polls once you have seen them is a different thing,
+ * and that is theirs to choose.
+ */
+export function useHiddenCommands() {
+  const [hidden, set] = useStored<string[]>(HIDDEN_COMMANDS_KEY, NONE, parseHidden, joinHidden);
+
+  const hide = useCallback(
+    (name: string) => {
+      if (name.length === 0 || hidden.includes(name)) return;
+      set([...hidden, name].sort());
+    },
+    [hidden, set],
+  );
+
+  const show = useCallback(
+    (name: string) => set(hidden.filter((n) => n !== name)),
+    [hidden, set],
+  );
+
+  const showAll = useCallback(() => set([]), [set]);
+
+  return { hidden, hide, show, showAll };
+}
+
+// --- checking for a new version ----------------------------------------------
+
+/**
+ * How often gitc asks whether a newer version exists.
+ *
+ * -1 never, 0 at launch only, anything else is minutes between checks (which
+ * also checks at launch). The default is launch only: it is one request when
+ * the application starts, and someone who wants to hear about a release
+ * sooner can say so.
+ */
+export const UPDATE_CHECKS = [
+  { minutes: -1, label: "Never" },
+  { minutes: 0, label: "On launch" },
+  { minutes: 5, label: "Every 5 min" },
+  { minutes: 60, label: "Every hour" },
+  { minutes: 1440, label: "Every day" },
+];
+
+const UPDATE_KEY = "gitc.updateCheckMinutes";
+
+function parseUpdateCheck(raw: string): number | null {
+  const n = Number(raw);
+  for (const choice of UPDATE_CHECKS) {
+    if (choice.minutes === n) return n;
+  }
+  return null;
+}
+
+export function useUpdateCheck() {
+  const [minutes, set] = useStored<number>(UPDATE_KEY, 0, parseUpdateCheck);
   return { minutes, set };
 }

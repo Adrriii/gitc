@@ -1,7 +1,16 @@
 import { useState } from "react";
 import { api } from "../api";
 import type { UpdateInfo } from "../types";
-import { FETCH_INTERVALS, TAB_SIZES, useDiffWrap, useFetchInterval, useTabSize } from "../settings";
+import {
+  FETCH_INTERVALS,
+  TAB_SIZES,
+  UPDATE_CHECKS,
+  useDiffWrap,
+  useFetchInterval,
+  useHiddenCommands,
+  useTabSize,
+  useUpdateCheck,
+} from "../settings";
 import { PRESETS, TOKEN_GROUPS, useTheme } from "../theme";
 import { VERSION } from "../../generated/version";
 import { Icon } from "./Icon";
@@ -19,12 +28,17 @@ import s from "./Preferences.module.scss";
  * assume are broken.
  */
 
-type Section = "theme" | "editor" | "repository" | "about";
+type Section = "theme" | "editor" | "repository" | "commands" | "about";
 
-const SECTIONS: { id: Section; label: string; icon: "eye" | "edit" | "repo" | "fetch" }[] = [
+const SECTIONS: {
+  id: Section;
+  label: string;
+  icon: "eye" | "edit" | "repo" | "fetch" | "branch";
+}[] = [
   { id: "theme", label: "Theme", icon: "eye" },
   { id: "editor", label: "Editor", icon: "edit" },
   { id: "repository", label: "Repository", icon: "fetch" },
+  { id: "commands", label: "Command log", icon: "branch" },
   { id: "about", label: "About", icon: "repo" },
 ];
 
@@ -77,6 +91,12 @@ export function Preferences({
   const { wrap, set: setWrap } = useDiffWrap();
   const theme = useTheme();
   const { minutes: fetchMinutes, set: setFetchMinutes } = useFetchInterval();
+  const {
+    hidden: hiddenCommands,
+    show: showCommand,
+    showAll: showAllCommands,
+  } = useHiddenCommands();
+  const { minutes: updateMinutes, set: setUpdateMinutes } = useUpdateCheck();
 
   return (
     <div className={s.screen}>
@@ -235,6 +255,41 @@ export function Preferences({
           </>
         )}
 
+        {section === "commands" && (
+          <>
+            <h1>Command log</h1>
+            <Row
+              label="Hidden commands"
+              hint={
+                hiddenCommands.length === 0
+                  ? "Nothing is hidden. The eye on a row in the command log hides every command of that kind - the polls gitc runs constantly are the usual reason."
+                  : "These no longer appear in the command log or the ticker. They are still run, and still recorded: showing one again brings its history back."
+              }
+            >
+              {hiddenCommands.length === 0 ? (
+                <span className={s.value}>None</span>
+              ) : (
+                <div className={s.chips}>
+                  {hiddenCommands.map((name) => (
+                    <button
+                      key={name}
+                      className={s.chip}
+                      onClick={() => showCommand(name)}
+                      title={`Show "git ${name}" in the log again`}
+                    >
+                      <span className={s.chipName}>git {name}</span>
+                      <Icon name="close" size={10} />
+                    </button>
+                  ))}
+                  <button className={s.resetAll} onClick={showAllCommands}>
+                    Show all
+                  </button>
+                </div>
+              )}
+            </Row>
+          </>
+        )}
+
         {section === "about" && (
           <>
             <h1>About</h1>
@@ -268,6 +323,23 @@ export function Preferences({
                 )}
               </div>
             </Row>
+            <Row
+              label="Check for updates"
+              hint="An interval checks at launch as well. The check is one request to the releases page and reports nothing unless there is something newer."
+            >
+              <div className={s.choices}>
+                {UPDATE_CHECKS.map((choice) => (
+                  <button
+                    key={choice.minutes}
+                    className={choice.minutes === updateMinutes ? s.on : ""}
+                    onClick={() => setUpdateMinutes(choice.minutes)}
+                  >
+                    {choice.label}
+                  </button>
+                ))}
+              </div>
+            </Row>
+
             <Row label="Licence" hint="Free software. The source is the whole program.">
               <span className={s.value}>GNU Affero General Public License v3.0</span>
             </Row>

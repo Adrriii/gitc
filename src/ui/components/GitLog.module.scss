@@ -38,6 +38,16 @@
   flex: 1;
 }
 
+// How many rows the filter is holding back, so the log is never quietly
+// incomplete.
+.hiddenNote {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--bg-3);
+  color: var(--fg-muted);
+  font-size: 10px;
+}
+
 .action {
   padding: 2px 9px;
   border: 1px solid var(--line-strong);
@@ -133,6 +143,25 @@
   background: var(--bg-4);
   color: var(--fg-muted);
   font-size: 10px;
+}
+
+// Only on the row under the pointer: a column of eyes down the log would
+// make it about hiding things rather than about what git did.
+.hide {
+  flex: none;
+  display: flex;
+  align-items: center;
+  padding: 0 2px;
+  color: var(--fg-muted);
+  opacity: 0;
+
+  &:hover {
+    color: var(--fg);
+  }
+
+  .row:hover & {
+    opacity: 1;
+  }
 }
 
 .ms {

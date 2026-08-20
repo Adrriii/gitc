@@ -38,7 +38,7 @@ import { useRepoWatch } from "./useRepoWatch";
 import { useDragWidth } from "./useDragWidth";
 import { useTheme } from "./theme";
 import { useGitLog } from "./useGitLog";
-import { useFetchInterval } from "./settings";
+import { commandType, useFetchInterval, useHiddenCommands, useUpdateCheck } from "./settings";
 import { rangeSelect, toggleSelect } from "./selection";
 import s from "./App.module.scss";
 
@@ -141,8 +141,10 @@ export function App() {
   const [updateProgress, setUpdateProgress] = useState<UpdateProgress | null>(null);
   const { colors: themeColors } = useTheme();
   const { calls: gitCalls, clear: clearGitLog } = useGitLog();
+  const { hidden: hiddenCommands, hide: hideCommand } = useHiddenCommands();
   const [logOpen, setLogOpen] = useState(false);
   const { minutes: fetchMinutes } = useFetchInterval();
+  const { minutes: updateMinutes } = useUpdateCheck();
   // Both side panels are dragged rather than fixed. The handles are on the
   // inner edge of each, so the sidebar grows rightward and the panel leftward.
   const [sidebarW, dragSidebar] = useDragWidth("gitc.sidebarWidth", 208, 150, 480);
@@ -170,8 +172,6 @@ export function App() {
     api.session().then(setSession).catch((e: Error) => setError(e.message));
   }, []);
 
-  const lastUpdateCheck = useRef(0);
-
   /**
    * Asks whether a newer gitc exists.
    *
@@ -181,7 +181,6 @@ export function App() {
    * failure, because they are waiting for an answer.
    */
   const checkUpdate = useCallback((manual: boolean) => {
-    lastUpdateCheck.current = Date.now();
     if (manual) setCheckingUpdate(true);
     api
       .checkUpdate()
@@ -226,27 +225,21 @@ export function App() {
   }, [updating]);
 
   /**
-   * At startup, every six hours, and on regaining focus after a long while.
+   * As often as the preference says: never, at launch, or on an interval.
    *
-   * Checking only at startup meant an instance left open for a week never
-   * noticed a release - and gitc is the kind of window that stays open for a
-   * week. The focus check is what makes it appear promptly in practice.
+   * Launch-only by default. An instance left open for a week will not notice
+   * a release on its own under that setting, which is a fair trade for asking
+   * once per run - and anyone who would rather hear sooner can pick an
+   * interval, which checks at launch as well.
    */
   useEffect(() => {
-    const SIX_HOURS = 6 * 60 * 60 * 1000;
-    const HALF_HOUR = 30 * 60 * 1000;
-
+    if (updateMinutes < 0) return;
     checkUpdate(false);
-    const id = window.setInterval(() => checkUpdate(false), SIX_HOURS);
-    const onFocus = () => {
-      if (Date.now() - lastUpdateCheck.current > HALF_HOUR) checkUpdate(false);
-    };
-    window.addEventListener("focus", onFocus);
-    return () => {
-      window.clearInterval(id);
-      window.removeEventListener("focus", onFocus);
-    };
-  }, [checkUpdate]);
+    if (updateMinutes === 0) return;
+
+    const id = window.setInterval(() => checkUpdate(false), updateMinutes * 60 * 1000);
+    return () => window.clearInterval(id);
+  }, [checkUpdate, updateMinutes]);
 
   /** Installs the update and lets gitc restart itself. */
   const runUpdate = useCallback(() => {
@@ -343,6 +336,17 @@ export function App() {
       live = false;
     };
   }, [activeId, pendingKind, reloadToken]);
+
+  // The log with the hidden command types taken out. The ticker reads from
+  // this too - hiding `status` is only worth doing if the poll stops being
+  // the thing the status bar is always showing.
+  const visibleGitCalls = useMemo(
+    () =>
+      hiddenCommands.length === 0
+        ? gitCalls
+        : gitCalls.filter((c) => !hiddenCommands.includes(commandType(c.args))),
+    [gitCalls, hiddenCommands],
+  );
 
   // Pick up changes made outside gitc - an editor, a terminal, a build. It
   // also reports how current each half of the view is, for the status bar.
@@ -1310,7 +1314,13 @@ export function App() {
           </div>
 
           {logOpen && (
-            <GitLog calls={gitCalls} onClose={() => setLogOpen(false)} onClear={clearGitLog} />
+            <GitLog
+              calls={visibleGitCalls}
+              hiddenCount={gitCalls.length - visibleGitCalls.length}
+              onHide={hideCommand}
+              onClose={() => setLogOpen(false)}
+              onClear={clearGitLog}
+            />
           )}
 
           <div className={s.status}>
@@ -1323,7 +1333,9 @@ export function App() {
             >
               <span className={s.tickerGit}>git</span>{" "}
               <span className={s.tickerArgs}>
-                {gitCalls.length === 0 ? "…" : gitCalls[gitCalls.length - 1].args}
+                {visibleGitCalls.length === 0
+                  ? "…"
+                  : visibleGitCalls[visibleGitCalls.length - 1].args}
               </span>
             </button>
             {notice !== null && <span className={s.notice}>{notice}</span>}

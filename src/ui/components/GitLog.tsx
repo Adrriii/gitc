@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { GitCall } from "../types";
+import { commandType } from "../settings";
 import { Icon } from "./Icon";
 import s from "./GitLog.module.scss";
 
@@ -19,10 +20,15 @@ function clock(at: number): string {
  */
 export function GitLog({
   calls,
+  hiddenCount,
+  onHide,
   onClose,
   onClear,
 }: {
+  /** Already filtered: what this shows is what is not hidden. */
   calls: GitCall[];
+  hiddenCount: number;
+  onHide: (type: string) => void;
   onClose: () => void;
   onClear: () => void;
 }) {
@@ -60,7 +66,21 @@ export function GitLog({
         <span className={s.count}>
           {calls.length} {calls.length === 1 ? "command" : "commands"}
         </span>
-        <span className={s.blurb}>everything gitc has run, oldest first</span>
+        <span className={s.blurb}>
+          {hiddenCount > 0
+            ? "oldest first - hidden types are listed in Preferences"
+            : "everything gitc has run, oldest first"}
+        </span>
+        {/*
+          Said plainly rather than left to be noticed. A log quietly missing
+          things is worse than no log, and this is the only clue that the
+          hiding happened at all once the row is gone.
+        */}
+        {hiddenCount > 0 && (
+          <span className={s.hiddenNote}>
+            {hiddenCount} hidden
+          </span>
+        )}
         <span className={s.spacer} />
         <button
           className={s.action}
@@ -90,7 +110,11 @@ export function GitLog({
         }}
       >
         {calls.length === 0 ? (
-          <div className={s.empty}>Nothing yet. Any action here runs git, and shows up below.</div>
+          <div className={s.empty}>
+            {hiddenCount > 0
+              ? `Everything run so far is of a kind you have hidden (${hiddenCount} command${hiddenCount === 1 ? "" : "s"}). Preferences › Command log brings them back.`
+              : "Nothing yet. Any action here runs git, and shows up below."}
+          </div>
         ) : (
           calls.map((call) => {
             const key = keyOf(call.repo, call.args);
@@ -107,6 +131,20 @@ export function GitLog({
                   <span className={s.git}>git</span> {call.args}
                   {call.count > 1 && <span className={s.repeat}>×{call.count}</span>}
                 </span>
+                {/*
+                  The same gesture as hiding a branch, in the same shape: an
+                  eye that appears on the row you are pointing at.
+                */}
+                <button
+                  className={s.hide}
+                  title={`Hide every "git ${commandType(call.args)}" from this log`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onHide(commandType(call.args));
+                  }}
+                >
+                  <Icon name="eyeOff" size={12} />
+                </button>
                 <span className={`${s.ms} ${call.running ? s.pending : ""}`}>
                   {call.running ? "running" : `${call.ms}ms`}
                 </span>
