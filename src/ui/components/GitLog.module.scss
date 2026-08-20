@@ -72,16 +72,27 @@
   font-size: 11.5px;
 }
 
+// One line per command, so a screenful of the log is a screenful of history
+// rather than one `git log` with three hundred refs on it. Clicking a row
+// opens it out; nothing is lost, it is just not all shown at once.
 .row {
   display: flex;
   align-items: baseline;
   gap: 10px;
   padding: 2px 10px;
-  white-space: pre-wrap;
-  word-break: break-word;
+  cursor: pointer;
 
   &:hover {
     background: var(--bg-2);
+  }
+}
+
+.expanded {
+  background: var(--bg-2);
+
+  .cmd {
+    white-space: pre-wrap;
+    word-break: break-word;
   }
 }
 
@@ -102,7 +113,11 @@
 
 .cmd {
   flex: 1;
+  min-width: 0;
   color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 // The word itself, so the eye can find where each command starts.

@@ -183,18 +183,24 @@ async function graphPayload(tab: Tab, limit: number): Promise<string> {
   // Hidden refs still LIST in the sidebar - you need somewhere to click to
   // bring them back - they just do not contribute commits to the walk.
   const hidden = loadHidden(tab.path);
-  const revs: string[] = [];
+
+  // Named by family, because that is how git excludes them. A hidden name
+  // with no ref behind it any more is simply dropped: there is nothing left
+  // to keep out of the walk, and an exclusion matching nothing would only
+  // make the command longer.
+  const hide = { branches: [] as string[], remotes: [] as string[], tags: [] as string[] };
   if (hidden.length > 0) {
     for (const ref of refs) {
-      if (!hidden.includes(ref.short)) revs.push(ref.name);
+      if (!hidden.includes(ref.short)) continue;
+      if (ref.kind === "local") hide.branches.push(ref.short);
+      else if (ref.kind === "remote") hide.remotes.push(ref.short);
+      else hide.tags.push(ref.short);
     }
-    // Everything hidden means an empty list, which readCommits would read as
-    // "no filter at all". A ref that resolves to nothing keeps the walk empty
-    // and leaves HEAD as the only thing on screen, which is the honest answer.
-    if (revs.length === 0) revs.push("HEAD");
   }
 
-  const commits = await readCommits(tab.path, limit, revs);
+  // Hiding everything leaves every family empty and HEAD the only thing
+  // walked, which is the honest answer and needs no special case.
+  const commits = await readCommits(tab.path, limit, hide);
   const rows = buildGraph(commits);
 
   // Chips for the graph rows. Hidden refs are left out: dropping the commits

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { GitCall } from "../types";
 import { Icon } from "./Icon";
 import s from "./GitLog.module.scss";
@@ -28,6 +28,15 @@ export function GitLog({
 }) {
   const body = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
+
+  // Rows are one line each, and a click opens one out in full. Keyed by the
+  // command rather than by id: a repeat collapses into the row above it and
+  // arrives with a fresh id, which would otherwise close a row someone had
+  // just opened, over and over, while a poll ran.
+  const [open, setOpen] = useState<string[]>([]);
+  const keyOf = (repo: string, args: string) => repo + String.fromCharCode(0) + args;
+  const toggle = (key: string) =>
+    setOpen((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]));
 
   // Follows the tail while you are at the bottom, and stays put when you have
   // scrolled up to read something.
@@ -83,16 +92,25 @@ export function GitLog({
         {calls.length === 0 ? (
           <div className={s.empty}>Nothing yet. Any action here runs git, and shows up below.</div>
         ) : (
-          calls.map((call) => (
-            <div key={call.id} className={`${s.row} ${call.ok ? "" : s.failed}`}>
-              <span className={s.time}>{clock(call.at)}</span>
-              <span className={s.cmd}>
-                <span className={s.git}>git</span> {call.args}
-                {call.count > 1 && <span className={s.repeat}>×{call.count}</span>}
-              </span>
-              <span className={s.ms}>{call.ms}ms</span>
-            </div>
-          ))
+          calls.map((call) => {
+            const key = keyOf(call.repo, call.args);
+            const expanded = open.includes(key);
+            return (
+              <div
+                key={call.id}
+                className={`${s.row} ${call.ok ? "" : s.failed} ${expanded ? s.expanded : ""}`}
+                onClick={() => toggle(key)}
+                title={expanded ? "Click to collapse" : "Click to see the whole command"}
+              >
+                <span className={s.time}>{clock(call.at)}</span>
+                <span className={s.cmd}>
+                  <span className={s.git}>git</span> {call.args}
+                  {call.count > 1 && <span className={s.repeat}>×{call.count}</span>}
+                </span>
+                <span className={s.ms}>{call.ms}ms</span>
+              </div>
+            );
+          })
         )}
       </div>
     </div>

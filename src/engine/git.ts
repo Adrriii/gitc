@@ -285,6 +285,17 @@ export async function gitOrNull(
 }
 
 /**
+ * Refs kept out of the graph walk, named as they are within their family:
+ * "topic", "origin/topic", "v1.0" - which is exactly how the hidden list
+ * already stores them.
+ */
+export interface RefFilter {
+  branches: string[];
+  remotes: string[];
+  tags: string[];
+}
+
+/**
  * Reads the commit list.
  *
  * `--topo-order` matters: it keeps a branch's commits contiguous instead of
@@ -295,14 +306,17 @@ export async function readCommits(
   repo: string,
   limit: number,
   /**
-   * Explicit refs to walk, replacing the default families.
+   * Refs to leave out of the walk, by family.
    *
-   * Empty means "everything", which is the normal case. A non-empty list is
-   * how hiding works: the caller passes only the refs still visible, and the
-   * commits reachable solely from a hidden branch never enter the walk - so
-   * they neither draw a lane nor consume the commit limit.
+   * Hiding used to work the other way round - the caller listed every ref
+   * still visible, and those replaced the families. It gave the same graph
+   * and was a bad way to ask for it: hiding one branch in a repository with
+   * three hundred of them produced a command line with three hundred refs on
+   * it, which is unreadable in the command log and, on Windows, within sight
+   * of the 8191-character limit on a command line. Naming what to leave out
+   * is shorter, because there is always less of it.
    */
-  revs: string[] = [],
+  hide: RefFilter = { branches: [], remotes: [], tags: [] },
 ): Promise<RawCommit[]> {
   const fmt =
     "%x01%H%x00%P%x00%an%x00%ae%x00%at%x00%s%x00%b";
@@ -311,14 +325,19 @@ export async function readCommits(
   // then appear in the graph as ordinary history. Naming the ref families we
   // actually want excludes those, and any other machinery living under refs/.
   // HEAD is listed so a detached checkout still shows where it is.
+  //
+  // --exclude accumulates until the family option it applies to, and is then
+  // forgotten - so each family's exclusions have to sit immediately in front
+  // of it. The patterns are matched against the name WITHIN that family:
+  // "topic" excludes refs/heads/topic from --branches, while the full path
+  // would match nothing at all, silently.
   const walk = ["log"];
-  if (revs.length === 0) {
-    walk.push("--branches");
-    walk.push("--tags");
-    walk.push("--remotes");
-  } else {
-    for (const rev of revs) walk.push(rev);
-  }
+  for (const name of hide.branches) walk.push("--exclude=" + name);
+  walk.push("--branches");
+  for (const name of hide.tags) walk.push("--exclude=" + name);
+  walk.push("--tags");
+  for (const name of hide.remotes) walk.push("--exclude=" + name);
+  walk.push("--remotes");
   // HEAD is always walked, listed or not: you must be able to see where you
   // are, and hiding the branch you are standing on should not blank the graph.
   walk.push("HEAD");
