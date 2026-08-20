@@ -66,7 +66,14 @@ const node = findNode();
 
 const env = { ...process.env };
 
-if (windows) {
+// An explicit choice wins. Release builds set SCRIPTC_CC=zigcc with
+// SCRIPTC_TARGET=x86_64-linux-musl to produce a static binary that does not
+// depend on the build machine's glibc - a binary built against glibc 2.39
+// refuses to start on anything older, which is most systems.
+const chosen = process.env.SCRIPTC_CC ?? "";
+const target = process.env.SCRIPTC_TARGET ?? "";
+
+if (chosen === "zigcc" || (windows && chosen === "")) {
   const zig = spawnSync("zig", ["version"], { encoding: "utf8", shell: true });
   if (zig.status !== 0) {
     console.error(
@@ -79,6 +86,7 @@ if (windows) {
     process.exit(1);
   }
   env.SCRIPTC_CC = "zigcc";
+  if (target.length > 0) console.log(`building for ${target}`);
 } else {
   // Everywhere else scriptc drives clang directly. Checking here turns a
   // confusing failure deep inside the compiler into one line up front.

@@ -41,14 +41,28 @@ jobs:
         with:
           node-version: 24
 
-      # Windows needs zig: scriptc's runtime assumes mingw's CRT and a stock
-      # clang targets MSVC's. Linux uses clang directly, which the runner has.
+      # Both platforms build through zig, for different reasons.
+      #
+      # Windows: scriptc's runtime assumes mingw's CRT and a stock clang targets
+      # MSVC's. Linux: targeting musl produces a STATIC binary. Built natively
+      # against the runner's glibc, the 0.1.0 release refused to start on any
+      # older system - "libm.so.6: version GLIBC_2.38 not found" - because glibc
+      # symbols are versioned and only work forwards. A static musl binary asks
+      # the system for nothing.
       #
       # Fetched straight from ziglang.org rather than through setup-zig, whose
       # version index did not know about 0.16 and looked for it among the dev
       # builds, where it is not. And it has to be 0.16: scriptc's runtime calls
       # clock_gettime and nanosleep, which zig 0.13's mingw headers do not
       # declare - four undeclared-function errors before it links.
+      - name: Install zig
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          v=0.16.0
+          curl -fsSL "https://ziglang.org/download/$v/zig-x86_64-linux-$v.tar.xz" | tar -xJ
+          echo "$PWD/zig-x86_64-linux-$v" >> "$GITHUB_PATH"
+
       # In PowerShell, because the `tar` on the runner's bash is GNU tar and
       # cannot read a zip.
       - name: Install zig
@@ -61,13 +75,33 @@ jobs:
           "$PWD\zig-x86_64-windows-$v" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Check zig
-        if: runner.os == 'Windows'
         shell: bash
         run: zig version
 
       - run: npm ci
 
       - run: npm run build
+        env:
+          # Windows picks zigcc for itself; Linux has to be told, because its
+          # default is a native clang build against the runner's glibc.
+          SCRIPTC_CC: ${{ runner.os == 'Linux' && 'zigcc' || '' }}
+          SCRIPTC_TARGET: ${{ runner.os == 'Linux' && 'x86_64-linux-musl' || '' }}
+
+      # Debug info is over half the file and nothing reads it from a release:
+      # 6.0 MB down to 2.4 MB, which is what the dynamic build used to cost.
+      - name: Strip the binary
+        if: runner.os == 'Linux'
+        run: strip ${{ matrix.built }}
+
+      - name: Check it is tied to no system libc
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          file ${{ matrix.built }}
+          file ${{ matrix.built }} | grep -q "statically linked"
+          # A GLIBC_ reference here means the static target did not take, which
+          # is the whole failure this arrangement exists to prevent.
+          ! readelf -V ${{ matrix.built }} | grep -q GLIBC_
 
       - name: Check the binary reports its version
         shell: bash
