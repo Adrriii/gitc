@@ -49,14 +49,34 @@ function Row({
   );
 }
 
-export function Preferences({ onClose }: { onClose: () => void }) {
+/**
+ * The update state belongs to the application, not to this screen.
+ *
+ * It used to be kept here, which meant checking from this screen told the
+ * status bar nothing - and this screen then pointed at a status bar it had
+ * itself replaced, for a button that had never been told there was an update.
+ * One source, shown in both places.
+ */
+export function Preferences({
+  onClose,
+  update,
+  checking,
+  updating,
+  onCheck,
+  onUpdate,
+}: {
+  onClose: () => void;
+  update: UpdateInfo | null;
+  checking: boolean;
+  updating: boolean;
+  onCheck: () => void;
+  onUpdate: () => void;
+}) {
   const [section, setSection] = useState<Section>("theme");
   const { size: tabSize, set: setTabSize } = useTabSize();
   const { wrap, set: setWrap } = useDiffWrap();
   const theme = useTheme();
   const { minutes: fetchMinutes, set: setFetchMinutes } = useFetchInterval();
-  const [update, setUpdate] = useState<UpdateInfo | null>(null);
-  const [checking, setChecking] = useState(false);
 
   return (
     <div className={s.screen}>
@@ -224,7 +244,7 @@ export function Preferences({ onClose }: { onClose: () => void }) {
                 update === null
                   ? undefined
                   : update.available
-                    ? `${update.latest} is available - the status bar has the update button.`
+                    ? `gitc ${update.latest} is available. Updating replaces this copy and restarts.`
                     : update.error.length > 0
                       ? update.error
                       : "This is the newest version."
@@ -232,28 +252,20 @@ export function Preferences({ onClose }: { onClose: () => void }) {
             >
               <div className={s.versionRow}>
                 <span className={s.value}>gitc {VERSION}</span>
-                <button
-                  className={s.resetAll}
-                  disabled={checking}
-                  onClick={() => {
-                    setChecking(true);
-                    api
-                      .checkUpdate()
-                      .then(setUpdate)
-                      .catch((e: Error) =>
-                        setUpdate({
-                          current: VERSION,
-                          latest: "",
-                          available: false,
-                          page: "",
-                          error: e.message,
-                        }),
-                      )
-                      .finally(() => setChecking(false));
-                  }}
-                >
-                  {checking ? "Checking…" : "Check for updates"}
-                </button>
+                {/*
+                  The button that does the thing, next to the answer that said
+                  it was possible. Sending someone to look for it elsewhere is
+                  how it went unfound.
+                */}
+                {update !== null && update.available ? (
+                  <button className={s.update} disabled={updating} onClick={onUpdate}>
+                    {updating ? "Updating…" : `Update to ${update.latest}`}
+                  </button>
+                ) : (
+                  <button className={s.resetAll} disabled={checking} onClick={onCheck}>
+                    {checking ? "Checking…" : "Check for updates"}
+                  </button>
+                )}
               </div>
             </Row>
             <Row label="Licence" hint="Free software. The source is the whole program.">

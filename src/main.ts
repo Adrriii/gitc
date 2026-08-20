@@ -53,7 +53,12 @@ import { readSubmodules } from "./engine/submodules.ts";
 import { install, uninstall, installedBinary, runningFromInstall } from "./engine/install.ts";
 import { rewriteTodo, writeMessage } from "./engine/rebaseHelper.ts";
 import { running, handOff, focusWindow } from "./engine/instance.ts";
-import { check as checkUpdate, apply as applyUpdate, cleanupPrevious } from "./engine/update.ts";
+import {
+  check as checkUpdate,
+  apply as applyUpdate,
+  cleanupPrevious,
+  updateProgress,
+} from "./engine/update.ts";
 import { NAME, VERSION } from "./generated/version.ts";
 import { loadSession, saveSession, touchRecent } from "./state.ts";
 import { at } from "./engine/safe.ts";
@@ -475,6 +480,14 @@ async function handleApi(
     }
     saveSession(session);
     sendJson(res, JSON.stringify(session));
+    return true;
+  }
+
+  // Polled by the window while an update runs. It has to be answerable during
+  // the download, which is why that download is the one curl here that does
+  // not block the loop.
+  if (path === "/api/update/progress") {
+    sendJson(res, JSON.stringify(updateProgress()));
     return true;
   }
 
@@ -1119,6 +1132,21 @@ async function main(): Promise<void> {
       process.exit(1);
     }
     wanted = resolved;
+  }
+
+  // Started by an update that is on its way out.
+  //
+  // The instance that spawned this one is still answering on the port while
+  // it finishes its last request, so asking "is gitc running?" right now gets
+  // the wrong answer - this process would hand over to a process about to
+  // exit and quit, leaving no gitc at all. Wait for the port to go quiet
+  // first. If it never does, the old instance is healthy and staying, and
+  // handing over to it is then the right thing after all.
+  if (process.argv.includes("--after-update")) {
+    for (let i = 0; i < 60; i++) {
+      if (!(await running(port))) break;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
   }
 
   // If gitc is already running, this invocation is a request to that window,

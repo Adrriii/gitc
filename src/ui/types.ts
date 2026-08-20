@@ -65,6 +65,14 @@ export interface GitCall {
   count: number;
 }
 
+export interface UpdateProgress {
+  phase: "idle" | "checking" | "downloading" | "verifying" | "installing" | "restarting" | "failed";
+  /** Bytes fetched so far, and the total when the server declared one. */
+  received: number;
+  total: number;
+  message: string;
+}
+
 export interface UpdateInfo {
   current: string;
   latest: string;

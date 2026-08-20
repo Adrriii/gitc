@@ -1,5 +1,14 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import type { ConflictState, GraphPayload, OpArgs, Ref, Session, Submodule, UpdateInfo } from "./types";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type {
+  ConflictState,
+  GraphPayload,
+  OpArgs,
+  Ref,
+  Session,
+  Submodule,
+  UpdateInfo,
+  UpdateProgress,
+} from "./types";
 import { api } from "./api";
 import { VERSION } from "../generated/version";
 import { TabBar } from "./components/TabBar";
@@ -13,6 +22,7 @@ import { Welcome } from "./components/Welcome";
 import { Preferences } from "./components/Preferences";
 import { GitLog } from "./components/GitLog";
 import { Freshness } from "./components/Freshness";
+import { Updating } from "./components/Updating";
 import { ContextMenu } from "./components/ContextMenu";
 import type { MenuItem } from "./components/ContextMenu";
 import { PendingBanner } from "./components/PendingBanner";
@@ -127,6 +137,8 @@ export function App() {
   const [prefsOpen, setPrefsOpen] = useState(false);
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
   const [updating, setUpdating] = useState(false);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [updateProgress, setUpdateProgress] = useState<UpdateProgress | null>(null);
   const { colors: themeColors } = useTheme();
   const { calls: gitCalls, clear: clearGitLog } = useGitLog();
   const [logOpen, setLogOpen] = useState(false);
@@ -158,18 +170,87 @@ export function App() {
     api.session().then(setSession).catch((e: Error) => setError(e.message));
   }, []);
 
-  // Asked once at startup. Quietly: a failed check - offline, no releases yet -
-  // is not something to interrupt anyone about, so it simply shows nothing.
-  useEffect(() => {
+  const lastUpdateCheck = useRef(0);
+
+  /**
+   * Asks whether a newer gitc exists.
+   *
+   * An automatic check is quiet: offline, or no releases yet, is not something
+   * to interrupt anyone about, and it leaves whatever was known before in
+   * place. A check someone asked for reports what happened, including the
+   * failure, because they are waiting for an answer.
+   */
+  const checkUpdate = useCallback((manual: boolean) => {
+    lastUpdateCheck.current = Date.now();
+    if (manual) setCheckingUpdate(true);
     api
       .checkUpdate()
-      .then((info) => info.available && setUpdate(info))
-      .catch(() => undefined);
+      .then(setUpdate)
+      .catch((e: Error) => {
+        if (manual) {
+          setUpdate({ current: VERSION, latest: "", available: false, page: "", error: e.message });
+        }
+      })
+      .finally(() => {
+        if (manual) setCheckingUpdate(false);
+      });
   }, []);
+
+  /**
+   * Follows the update while it runs.
+   *
+   * The engine keeps answering during the download - that is the whole reason
+   * it is fetched asynchronously there - so this is a plain poll. It stops on
+   * its own when the update finishes, one way or the other.
+   */
+  useEffect(() => {
+    if (!updating) return;
+    let stopped = false;
+
+    const id = window.setInterval(() => {
+      api
+        .updateProgress()
+        .then((p) => {
+          if (!stopped) setUpdateProgress(p);
+        })
+        .catch(() => {
+          // The engine going away mid-update is the restart happening, and
+          // the window is about to close with it.
+        });
+    }, 300);
+
+    return () => {
+      stopped = true;
+      window.clearInterval(id);
+    };
+  }, [updating]);
+
+  /**
+   * At startup, every six hours, and on regaining focus after a long while.
+   *
+   * Checking only at startup meant an instance left open for a week never
+   * noticed a release - and gitc is the kind of window that stays open for a
+   * week. The focus check is what makes it appear promptly in practice.
+   */
+  useEffect(() => {
+    const SIX_HOURS = 6 * 60 * 60 * 1000;
+    const HALF_HOUR = 30 * 60 * 1000;
+
+    checkUpdate(false);
+    const id = window.setInterval(() => checkUpdate(false), SIX_HOURS);
+    const onFocus = () => {
+      if (Date.now() - lastUpdateCheck.current > HALF_HOUR) checkUpdate(false);
+    };
+    window.addEventListener("focus", onFocus);
+    return () => {
+      window.clearInterval(id);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [checkUpdate]);
 
   /** Installs the update and lets gitc restart itself. */
   const runUpdate = useCallback(() => {
-    if (update === null) return;
+    if (update === null || !update.available) return;
     setConfirm({
       title: `Update to gitc ${update.latest}?`,
       body: (
@@ -182,17 +263,31 @@ export function App() {
       onConfirm: () => {
         setConfirm(null);
         setUpdating(true);
+        setUpdateProgress({
+          phase: "checking",
+          received: 0,
+          total: 0,
+          message: "Starting the update",
+        });
         api
           .applyUpdate()
           .then((r) => {
             if (r.ok) setNotice(r.message);
             else {
-              setError(r.message);
+              // The overlay reports the failure itself and stays until it is
+              // dismissed, so the update is not another message that vanishes
+              // after four seconds.
+              setUpdateProgress({
+                phase: "failed",
+                received: 0,
+                total: 0,
+                message: r.message,
+              });
               setUpdating(false);
             }
           })
           .catch((e: Error) => {
-            setError(e.message);
+            setUpdateProgress({ phase: "failed", received: 0, total: 0, message: e.message });
             setUpdating(false);
           });
       },
@@ -1060,7 +1155,14 @@ export function App() {
       />
 
       {prefsOpen ? (
-        <Preferences onClose={() => setPrefsOpen(false)} />
+        <Preferences
+          onClose={() => setPrefsOpen(false)}
+          update={update}
+          checking={checkingUpdate}
+          updating={updating}
+          onCheck={() => checkUpdate(true)}
+          onUpdate={runUpdate}
+        />
       ) : !activeTab || !data ? (
         <Welcome session={session} onOpen={open} error={error} />
       ) : (
@@ -1241,7 +1343,7 @@ export function App() {
               onFetch={() => void runOp({ op: "fetch" })}
             />
             <span className={s.path}>{activeTab.path}</span>
-            {update !== null && (
+            {update !== null && update.available && (
               <button
                 className={s.update}
                 onClick={runUpdate}
@@ -1301,6 +1403,11 @@ export function App() {
           onConfirm={confirm.onConfirm}
           onCancel={() => setConfirm(null)}
         />
+      )}
+
+      {/* Last, and over everything: the window is about to be replaced. */}
+      {(updating || updateProgress?.phase === "failed") && (
+        <Updating progress={updateProgress} onDismiss={() => setUpdateProgress(null)} />
       )}
     </div>
   );

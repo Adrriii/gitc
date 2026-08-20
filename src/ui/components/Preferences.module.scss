@@ -205,6 +205,26 @@
   text-align: left;
 }
 
+// The same offer as the one in the status bar, in the place people go looking
+// for it. Accented, because here it is the action of the row rather than a
+// chip beside a version number.
+.update {
+  padding: 5px 12px;
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius);
+  background: var(--accent-bg);
+  color: var(--accent-fg);
+  font-size: 12px;
+
+  &:not(:disabled):hover {
+    background: var(--accent-line);
+  }
+
+  &:disabled {
+    opacity: 0.7;
+  }
+}
+
 .resetAll {
   padding: 5px 12px;
   border: 1px solid var(--line-strong);

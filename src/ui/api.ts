@@ -2,6 +2,7 @@ import type {
   GitCall,
   Listing,
   UpdateInfo,
+  UpdateProgress,
   UpdateResult,
   GraphPayload,
   Session,
@@ -103,6 +104,9 @@ export const api = {
 
   /** Asks whether a newer gitc has been released. */
   checkUpdate: () => json<UpdateInfo>("/api/update"),
+
+  /** How far along the running update is. */
+  updateProgress: () => json<UpdateProgress>("/api/update/progress"),
 
   /** Downloads and installs it. gitc restarts itself when this succeeds. */
   applyUpdate: () => post<UpdateResult>("/api/update", {}),

@@ -95,14 +95,22 @@
 
 // Offered, not announced: a quiet chip beside the version rather than a
 // dialog that interrupts what someone was doing.
+//
+// Sized to the bar rather than to its own text. The status bar is 21px, and a
+// button left to size itself - line-height, plus padding, plus a border - came
+// out taller than that and was clipped top and bottom.
 .update {
   flex: none;
-  padding: 1px 8px;
+  display: flex;
+  align-items: center;
+  height: 16px;
+  padding: 0 8px;
   border-radius: 999px;
   border: 1px solid var(--accent-line);
   background: var(--accent-bg);
   color: var(--accent-fg);
   font-size: 11px;
+  line-height: 1;
 
   &:not(:disabled):hover {
     background: var(--accent-line);

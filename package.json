@@ -1,6 +1,6 @@
 {
   "name": "gitc",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "A fast, minimal git client: commit graph, branching, rebase and conflict resolution in a single native binary.",
   "license": "AGPL-3.0-only",
   "author": "Adrien Boitelle",
