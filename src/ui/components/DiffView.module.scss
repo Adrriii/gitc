@@ -356,3 +356,42 @@ $hatch: var(--line-strong);
   font-variant-numeric: tabular-nums;
   font-size: 11px;
 }
+
+// Per-hunk actions, in the hunk's own header where the hunk is.
+.hunkActions {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+
+.hunkAct {
+  font-size: 11px;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  color: var(--fg-dim);
+
+  &:hover:not(:disabled) {
+    border-color: var(--line-strong);
+    background: var(--bg-3);
+    color: var(--fg);
+  }
+
+  &:disabled {
+    opacity: 0.5;
+  }
+}
+
+// Armed: the next click throws the work away.
+.hunkDanger {
+  border-color: var(--red-fg);
+  background: var(--red-bg);
+  color: var(--red-fg);
+
+  &:hover:not(:disabled) {
+    border-color: var(--red-fg);
+    background: var(--red-bg);
+    color: var(--red-fg);
+  }
+}

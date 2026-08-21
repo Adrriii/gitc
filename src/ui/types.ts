@@ -183,12 +183,31 @@ export interface OpArgs {
   checkout?: boolean;
   /** Repository-relative file path, for operations that act on one. */
   path?: string;
+  /** A unified diff, for operations that apply one. */
+  patch?: string;
+}
+
+/**
+ * Why a push was refused. `kind` is "none" when nothing was.
+ *
+ * "rewrite"  the remote holds older versions of our own commits (a rebase,
+ *            an amend, a squash) - forcing loses nothing.
+ * "diverged" the remote holds work that is not ours - forcing destroys it.
+ */
+export interface PushRefusal {
+  kind: string;
+  upstream: string;
+  ahead: number;
+  behind: number;
+  theirs: number;
+  theirCommits: string[];
 }
 
 export interface OpResult {
   ok: boolean;
   note: string;
   pending: string;
+  refusal: PushRefusal;
 }
 
 export interface GraphPayload {

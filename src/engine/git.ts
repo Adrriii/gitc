@@ -635,6 +635,48 @@ export async function readStatus(repo: string): Promise<WorkingFile[]> {
   return out;
 }
 
+/**
+ * The commit each annotated tag actually points at.
+ *
+ * An annotated tag is an object in its own right - it has a message and a
+ * tagger - and `refs/tags/v1.0` holds THAT object's hash, not the commit's.
+ * Reading the ref file therefore gives a hash which matches no commit in the
+ * graph, and the tag silently fails to appear on any row. Since annotated is
+ * what `git tag -a`, `git tag -s` and every forge's release button produce,
+ * that meant most real release tags were invisible.
+ *
+ * Peeling needs the object read, which means git: a loose tag object is zlib
+ * and there is no inflate here. One call, and only for repositories that have
+ * tags at all.
+ *
+ * Lightweight tags report an empty peeled field and are left alone - their
+ * ref already names the commit.
+ */
+export async function peeledTags(repo: string): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  // Separated by a space, not by %x00: for-each-ref does not interpret the
+  // hex escape that `git log --format` does - it emits the four characters
+  // literally, and the parse then finds one field where it wanted two. A
+  // space is unambiguous here because git forbids one in a ref name.
+  const raw = await gitOrNull(repo, [
+    "for-each-ref",
+    "--format=%(refname) %(*objectname)",
+    "refs/tags",
+  ]);
+  if (raw === null) return out;
+
+  for (const line of raw.split(String.fromCharCode(10))) {
+    const trimmed = line.trim();
+    if (trimmed.length === 0) continue;
+    const space = trimmed.indexOf(" ");
+    if (space === -1) continue;
+    const name = trimmed.substring(0, space);
+    const commit = trimmed.substring(space + 1).trim();
+    if (name.length > 0 && commit.length > 0) out.set(name, commit);
+  }
+  return out;
+}
+
 /** Ahead/behind counts against the current branch's upstream, if any. */
 export async function readAheadBehind(
   repo: string,

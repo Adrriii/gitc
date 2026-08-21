@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { DiffLine, FileDiff, Hunk } from "../types";
+import { canApplyHunks, hunkPatch } from "../patch";
 import { api } from "../api";
 import { languageFor, highlightLines, MAX_HIGHLIGHT_CHARS } from "../highlight";
 import { useDiffWrap, useTabSize } from "../settings";
@@ -108,6 +109,8 @@ export function DiffView({
   path,
   contextLabel,
   onClose,
+  onChanged,
+  version,
 }: {
   tabId: string;
   target: DiffTarget;
@@ -115,6 +118,15 @@ export function DiffView({
   /** What the file is being compared against - a commit, a run, or the tree. */
   contextLabel: string;
   onClose: () => void;
+  /** Called after a hunk is staged, unstaged or discarded. */
+  onChanged?: () => void;
+  /**
+   * Bumped by the application whenever the repository changes - an operation
+   * here, an edit in another program, a commit from a terminal. What is on
+   * screen is re-read when it moves, because a diff that silently describes
+   * the file as it was ten seconds ago is worse than no diff.
+   */
+  version?: number;
 }) {
   const [mode, setMode] = useState<Mode>("unified");
   const [showAll, setShowAll] = useState(false);
@@ -141,6 +153,35 @@ export function DiffView({
       setEditError((e as Error).message);
     }
   };
+  /**
+   * Stages, unstages or discards a single hunk.
+   *
+   * The patch is rebuilt from the hunk on screen, so what git applies is
+   * exactly what was being looked at - context lines included, which is what
+   * makes it land in the right place.
+   */
+  const [applying, setApplying] = useState(false);
+  const [confirmDiscard, setConfirmDiscard] = useState<number | null>(null);
+
+  const applyHunk = async (hunk: Hunk, mode: "stage" | "unstage" | "discard") => {
+    if (diff === null || applying) return;
+    setEditError(null);
+    setApplying(true);
+    try {
+      const r = await api.op(tabId, { op: "applyPatch", mode, patch: hunkPatch(diff, hunk) });
+      if (!r.ok) setEditError(r.note);
+      else {
+        setConfirmDiscard(null);
+        setReloadToken((n) => n + 1);
+        if (onChanged) onChanged();
+      }
+    } catch (e) {
+      setEditError((e as Error).message);
+    } finally {
+      setApplying(false);
+    }
+  };
+
   const [fileView, setFileView] = useState(false);
   const [ws, setWs] = useState(false);
   // Long lines are a setting, not a per-view guess: wrap (the default) or
@@ -148,6 +189,8 @@ export function DiffView({
   // rather than something to re-choose for every file.
   const { wrap, set: setWrap } = useDiffWrap();
   const [diff, setDiff] = useState<FileDiff | null>(null);
+  /** Bumped after a hunk is applied, to re-read what is left. */
+  const [reloadToken, setReloadToken] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const body = useRef<HTMLDivElement>(null);
@@ -156,13 +199,27 @@ export function DiffView({
   // whole file, so the fetch depends on the mode.
   const whole = mode !== "unified" || fileView;
 
+  /** What is being shown. A change here is a different thing to look at. */
+  const identity = tabId + "|" + path + "|" + (whole ? "1" : "0") + "|" + JSON.stringify(target);
+  const shown = useRef<string | null>(null);
+
   useEffect(() => {
     let live = true;
-    setLoading(true);
+
+    // Opening something different starts over: the spinner, the line budget,
+    // the top of the view. The SAME thing arriving again is a refresh, and a
+    // refresh must not announce itself - blanking the pane for "Loading diff…"
+    // would throw away the scroll position of whoever is reading it.
+    const opened = shown.current !== identity;
+    shown.current = identity;
+    if (opened) {
+      setLoading(true);
+      // "Show all" was a decision about the file you were looking at, not a
+      // preference to carry to the next one.
+      setShowAll(false);
+    }
     setError(null);
-    // A new file starts within the budget again: "show all" was a decision
-    // about the file you were looking at, not a preference.
-    setShowAll(false);
+
     api
       .diff(tabId, target, path, whole)
       .then((d) => {
@@ -180,7 +237,7 @@ export function DiffView({
     return () => {
       live = false;
     };
-  }, [tabId, path, whole, JSON.stringify(target)]);
+  }, [identity, version, reloadToken]);
 
   const cut = path.lastIndexOf("/");
   const dir = cut === -1 ? "" : path.substring(0, cut + 1);
@@ -264,9 +321,51 @@ export function DiffView({
                 @@ -{h.oldStart},{h.oldCount} +{h.newStart},{h.newCount} @@
               </span>
               {h.heading && <span className={s.hunkHeading}>{h.heading}</span>}
-              <button className={s.revert} disabled title="Not wired yet">
-                Revert Hunk
-              </button>
+
+              {/*
+                Only where a hunk is a real hunk and there is an index to move
+                it to or from: a commit's diff has nothing to stage, and a
+                whole-file view is one hunk covering everything, where "stage
+                this hunk" would quietly mean "stage the file".
+              */}
+              {canApplyHunks(diff) && target.kind === "wip" && (
+                <span className={s.hunkActions}>
+                  {target.staged ? (
+                    <button
+                      className={s.hunkAct}
+                      disabled={applying}
+                      onClick={() => void applyHunk(h, "unstage")}
+                      title="Take this hunk back out of the index"
+                    >
+                      Unstage hunk
+                    </button>
+                  ) : (
+                    <>
+                      <button
+                        className={s.hunkAct}
+                        disabled={applying}
+                        onClick={() => void applyHunk(h, "stage")}
+                        title="Stage only this hunk"
+                      >
+                        Stage hunk
+                      </button>
+                      {/* Two clicks, because this one cannot be undone. */}
+                      <button
+                        className={`${s.hunkAct} ${confirmDiscard === hi ? s.hunkDanger : ""}`}
+                        disabled={applying}
+                        onClick={() => {
+                          if (confirmDiscard === hi) void applyHunk(h, "discard");
+                          else setConfirmDiscard(hi);
+                        }}
+                        onBlur={() => setConfirmDiscard((c) => (c === hi ? null : c))}
+                        title="Throw this hunk away - there is no undo"
+                      >
+                        {confirmDiscard === hi ? "Discard for good?" : "Discard hunk"}
+                      </button>
+                    </>
+                  )}
+                </span>
+              )}
             </div>
           )}
           {h.lines

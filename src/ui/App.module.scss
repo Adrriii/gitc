@@ -71,19 +71,6 @@
   font-variant-numeric: tabular-nums;
 }
 
-// An operation's result, alongside the commit count rather than replacing it.
-.notice {
-  color: var(--green-fg);
-}
-
-.error {
-  color: var(--red-fg);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 60%;
-}
-
 .boot {
   display: flex;
   align-items: center;

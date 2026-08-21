@@ -1,0 +1,161 @@
+// Follows Confirm's shape, wider: this dialog has to explain a situation
+// before it offers a choice, and the choices carry their consequences.
+.veil {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.box {
+  width: 500px;
+  max-height: 82vh;
+  overflow-y: auto;
+  background: var(--bg-2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
+  padding: 18px 20px 14px;
+}
+
+.title {
+  font-size: 15px;
+  color: var(--fg-bright);
+  margin-bottom: 10px;
+}
+
+.body {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--fg-dim);
+
+  code {
+    font-family: var(--mono);
+    color: var(--fg);
+  }
+}
+
+.counts {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-1);
+  font-size: 11px;
+  color: var(--fg-muted);
+
+  strong {
+    color: var(--fg);
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+.sep {
+  color: var(--fg-faint);
+}
+
+// The commits a force push would delete, by author and subject.
+.theirs {
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  list-style: none;
+  border: 1px solid var(--red-line, var(--line));
+  border-radius: var(--radius);
+  background: var(--red-bg);
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--fg-dim);
+
+  li {
+    padding: 1px 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.more {
+  color: var(--fg-faint);
+}
+
+.actions {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-top: 14px;
+}
+
+// Each action states what it does underneath its own label, so the
+// consequence is read at the moment of choosing rather than looked up.
+.primary,
+.secondary,
+.danger {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--bg-3);
+  color: var(--fg);
+  font-size: 12.5px;
+  text-align: left;
+
+  &:hover {
+    background: var(--bg-4);
+  }
+}
+
+.primary {
+  border-color: var(--accent-line);
+  background: var(--accent-bg);
+  color: var(--accent-fg);
+
+  &:hover {
+    background: var(--accent-line);
+  }
+}
+
+.danger {
+  border-color: var(--red-line, var(--line-strong));
+  color: var(--red-fg);
+
+  &:hover {
+    background: var(--red-bg);
+  }
+}
+
+.hint {
+  font-size: 11px;
+  font-weight: normal;
+  line-height: 1.5;
+  color: var(--fg-muted);
+  white-space: normal;
+}
+
+.cancel {
+  align-self: flex-end;
+  margin-top: 2px;
+  padding: 5px 12px;
+  border-radius: var(--radius);
+  color: var(--fg-muted);
+  font-size: 12px;
+
+  &:hover {
+    color: var(--fg);
+  }
+}
+
+// The same list, when nothing is at risk: these are the commits about to
+// arrive, not ones about to be destroyed.
+.incoming {
+  composes: theirs;
+  border-color: var(--line);
+  background: var(--bg-1);
+}

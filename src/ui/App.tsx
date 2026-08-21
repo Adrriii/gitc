@@ -6,6 +6,7 @@ import type {
   Ref,
   Session,
   Submodule,
+  PushRefusal,
   UpdateInfo,
   UpdateProgress,
 } from "./types";
@@ -23,6 +24,8 @@ import { Preferences } from "./components/Preferences";
 import { GitLog } from "./components/GitLog";
 import { Freshness } from "./components/Freshness";
 import { Updating } from "./components/Updating";
+import { Toasts } from "./components/Toasts";
+import { PushRefused } from "./components/PushRefused";
 import { ContextMenu } from "./components/ContextMenu";
 import type { MenuItem } from "./components/ContextMenu";
 import { PendingBanner } from "./components/PendingBanner";
@@ -38,8 +41,10 @@ import { useRepoWatch } from "./useRepoWatch";
 import { useDragWidth } from "./useDragWidth";
 import { useTheme } from "./theme";
 import { useGitLog } from "./useGitLog";
+import { useToasts } from "./useToasts";
 import { commandType, useFetchInterval, useHiddenCommands, useUpdateCheck } from "./settings";
 import { rangeSelect, toggleSelect } from "./selection";
+import { nextAfter, stagedFiles, unstagedFiles } from "./staging";
 import s from "./App.module.scss";
 
 interface MenuState {
@@ -133,12 +138,14 @@ export function App() {
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
   const [choose, setChoose] = useState<ChooseState | null>(null);
   const [form, setForm] = useState<FormState | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setErrorState] = useState<string | null>(null);
   const [prefsOpen, setPrefsOpen] = useState(false);
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
   const [updating, setUpdating] = useState(false);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [updateProgress, setUpdateProgress] = useState<UpdateProgress | null>(null);
+  /** Set when a push came back refused, and the user has to decide what to do. */
+  const [pushRefusal, setPushRefusal] = useState<PushRefusal | null>(null);
   const { colors: themeColors } = useTheme();
   const { calls: gitCalls, clear: clearGitLog } = useGitLog();
   const { hidden: hiddenCommands, hide: hideCommand } = useHiddenCommands();
@@ -149,13 +156,35 @@ export function App() {
   // inner edge of each, so the sidebar grows rightward and the panel leftward.
   const [sidebarW, dragSidebar] = useDragWidth("gitc.sidebarWidth", 208, 150, 480);
   const [panelW, dragPanel] = useDragWidth("gitc.panelWidth", 400, 260, 900, "left");
-  const [notice, setNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
   const [conflicts, setConflicts] = useState<ConflictState | null>(null);
   /** The conflicted file open in the merge editor, if any. */
   const [mergeFile, setMergeFile] = useState<string | null>(null);
+
+  const { toasts, push: pushToast, dismiss: dismissToast, hold: holdToast } = useToasts();
+
+  /**
+   * Reporting what happened.
+   *
+   * Both of these used to write a line into the status bar, which was too
+   * quiet to notice and too narrow to read. They keep their names and their
+   * call sites; what changed is where the message ends up. `error` is still
+   * kept as state because the welcome screen shows it in place.
+   */
+  const setError = useCallback(
+    (message: string | null) => {
+      setErrorState(message);
+      if (message !== null && message.length > 0) pushToast("error", message);
+    },
+    [pushToast],
+  );
+
+  const setNotice = useCallback((message: string) => pushToast("ok", message), [pushToast]);
+
+  /** Something that stopped part-way and wants attention, but is not a failure. */
+  const setWarning = useCallback((message: string) => pushToast("warn", message), [pushToast]);
 
   const refresh = useCallback(() => setReloadToken((n) => n + 1), []);
 
@@ -381,13 +410,6 @@ export function App() {
     };
   }, [activeId, fetchMinutes, refresh]);
 
-  // A notice is transient; an error stays until the next action clears it.
-  useEffect(() => {
-    if (notice === null) return;
-    const id = window.setTimeout(() => setNotice(null), 4000);
-    return () => window.clearTimeout(id);
-  }, [notice]);
-
   /** Runs a repository operation and folds the outcome back into the UI. */
   const runOp = useCallback(
     async (args: OpArgs) => {
@@ -397,10 +419,19 @@ export function App() {
       setMenu(null);
       try {
         const r = await api.op(activeTab.id, args);
+        // A refused push is not an error either: it is a question, and the
+        // whole point is that git's own message does not answer it.
+        if (r.refusal.kind !== "none") {
+          setPushRefusal(r.refusal);
+          return;
+        }
         // A conflict comes back ok:false with a next step rather than as an
-        // error; the banner takes over from there.
-        if (!r.ok) setError(r.note);
-        else if (r.note.length > 0) setNotice(r.note);
+        // error; the banner takes over from there, and amber says "your turn"
+        // where red would say "something broke".
+        if (!r.ok) {
+          if (r.pending.length > 0) setWarning(r.note);
+          else setError(r.note);
+        } else if (r.note.length > 0) setNotice(r.note);
       } catch (e) {
         setError((e as Error).message);
       } finally {
@@ -444,6 +475,49 @@ export function App() {
     },
     [data, anchor],
   );
+
+  /**
+   * The list a file was opened from is the list the view follows.
+   *
+   * Staging a file - or its last remaining hunk - takes it out of Unstaged,
+   * and staying on it leaves a diff of nothing on screen while the next piece
+   * of work sits a click away. So when the file being viewed leaves its list,
+   * whatever now holds its place is opened instead, and when the list empties
+   * the view closes.
+   *
+   * Driven by the lists rather than by which button was pressed, so staging a
+   * whole file, staging its last hunk and unstaging all behave the same way.
+   */
+  const viewedList = useRef<string[]>([]);
+
+  useEffect(() => {
+    if (data === null || openFile === null || openFile.target.kind !== "wip") {
+      viewedList.current = [];
+      return;
+    }
+
+    const staged = openFile.target.staged;
+    const files = staged ? stagedFiles(data.status) : unstagedFiles(data.status);
+    const paths = files.map((f) => f.path);
+
+    if (paths.includes(openFile.path)) {
+      viewedList.current = paths;
+      return;
+    }
+
+    const next = nextAfter(viewedList.current, paths, openFile.path);
+    viewedList.current = paths;
+    if (next === null) {
+      setOpenFile(null);
+      return;
+    }
+    const file = files.find((f) => f.path === next);
+    setOpenFile({
+      path: next,
+      target: { kind: "wip", staged, untracked: file !== undefined && file.untracked },
+      label: staged ? "staged changes" : "the working tree",
+    });
+  }, [data, openFile]);
 
   const onOpenFile = useCallback(
     (path: string, staged: boolean, untracked: boolean) => {
@@ -1279,6 +1353,8 @@ export function App() {
                 path={openFile.path}
                 contextLabel={openFile.label}
                 onClose={() => setOpenFile(null)}
+                onChanged={refresh}
+                version={reloadToken}
               />
             )}
             <div
@@ -1309,6 +1385,7 @@ export function App() {
                 onOpenFile={onOpenFile}
                 openPath={openFile?.path ?? null}
                 onChanged={refresh}
+                onCommitted={() => setOpenFile(null)}
               />
             )}
           </div>
@@ -1338,8 +1415,6 @@ export function App() {
                   : visibleGitCalls[visibleGitCalls.length - 1].args}
               </span>
             </button>
-            {notice !== null && <span className={s.notice}>{notice}</span>}
-            {error !== null && <span className={s.error}>{error}</span>}
             <span className={s.spacer} />
             {/*
               How current the view is. The threshold for calling the remote
@@ -1416,6 +1491,24 @@ export function App() {
           onCancel={() => setConfirm(null)}
         />
       )}
+
+      {pushRefusal !== null && (
+        <PushRefused
+          refusal={pushRefusal}
+          onForce={() => {
+            setPushRefusal(null);
+            void runOp({ op: "push", force: true });
+          }}
+          onPull={(mode) => {
+            setPushRefusal(null);
+            // "ff" is the engine's default pull, which takes no mode.
+            void runOp({ op: "pull", mode: mode === "ff" ? "" : mode });
+          }}
+          onCancel={() => setPushRefusal(null)}
+        />
+      )}
+
+      <Toasts toasts={toasts} onDismiss={dismissToast} onHold={holdToast} />
 
       {/* Last, and over everything: the window is about to be replaced. */}
       {(updating || updateProgress?.phase === "failed") && (

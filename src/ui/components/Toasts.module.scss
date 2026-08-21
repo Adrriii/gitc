@@ -1,0 +1,133 @@
+// Bottom left, clear of the status bar.
+//
+// Newest at the BOTTOM: each arrival appears nearest the corner and lifts the
+// ones before it, so the reading order is the order things happened and the
+// newest is always in the same place - you learn where to look once.
+.stack {
+  position: fixed;
+  left: 12px;
+  bottom: 32px;
+  z-index: 90;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: min(520px, calc(100vw - 24px));
+  pointer-events: none;
+}
+
+.toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 9px 10px 9px 11px;
+  border: 1px solid var(--line-strong);
+  border-left-width: 3px;
+  border-radius: var(--radius);
+  background: var(--bg-2);
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.45);
+  pointer-events: auto;
+  animation: rise 190ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+// In from underneath, a whole toast-height's worth, so it reads as arriving
+// from below the corner rather than fading into place.
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(calc(100% + 8px));
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+// The colour carries the outcome; the icon repeats it, because a border
+// colour alone is no use to someone who cannot separate red from green.
+.ok {
+  border-left-color: var(--green-fg);
+
+  .ico {
+    color: var(--green-fg);
+  }
+}
+
+.warn {
+  border-left-color: var(--amber-fg);
+
+  .ico {
+    color: var(--amber-fg);
+  }
+}
+
+.error {
+  border-left-color: var(--red-fg);
+
+  .ico {
+    color: var(--red-fg);
+  }
+}
+
+.ico {
+  flex: none;
+  margin-top: 1px;
+}
+
+.text {
+  flex: 1;
+  min-width: 0;
+}
+
+.title {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  color: var(--fg);
+  font-size: 12.5px;
+  line-height: 1.45;
+  text-align: left;
+  cursor: default;
+}
+
+.expandable {
+  cursor: pointer;
+
+  &:hover {
+    color: var(--fg-bright);
+  }
+}
+
+.chevron {
+  display: flex;
+  flex: none;
+  color: var(--fg-muted);
+}
+
+// Everything git said, for when the first line is not the whole story.
+.detail {
+  margin: 7px 0 0;
+  max-height: 210px;
+  overflow: auto;
+  padding: 7px 8px;
+  border-radius: var(--radius);
+  background: var(--bg-0);
+  color: var(--fg-dim);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.close {
+  flex: none;
+  display: flex;
+  align-items: center;
+  padding: 2px;
+  color: var(--fg-faint);
+
+  &:hover {
+    color: var(--fg);
+  }
+}

@@ -23,6 +23,9 @@ import { join } from "node:path";
 import { git } from "./git.ts";
 import { gitDir } from "./refs.ts";
 
+/** git's -z output separator. */
+const NUL = String.fromCharCode(0);
+
 /** How long a fingerprint stands before it is recomputed. */
 const CACHE_MS = 900;
 
@@ -130,8 +133,9 @@ export async function fingerprint(repo: string): Promise<string> {
   // refreshes the index as a side effect, which changes .git/index's mtime -
   // so the fingerprint would differ every time purely because we measured it,
   // and the UI would reload itself every poll forever.
+  let status = "";
   try {
-    text += await git(repo, [
+    status = await git(repo, [
       "--no-optional-locks",
       "status",
       "--porcelain=v1",
@@ -139,7 +143,24 @@ export async function fingerprint(repo: string): Promise<string> {
       "-uall",
     ]);
   } catch {
-    text += "status-failed";
+    status = "status-failed";
+  }
+  text += status;
+
+  // The status says WHICH files differ, never what is in them - so a second
+  // edit to an already-modified file produces byte-identical output and moves
+  // nothing in .git either. The fingerprint then never changed, and anything
+  // on screen describing that file went on describing the version from before
+  // the edit until it was reopened. Their mtimes are what makes the edit
+  // visible.
+  //
+  // Only the files git already named, so this costs a stat each for the
+  // handful of files being worked on rather than a walk of the tree.
+  for (const entry of status.split(NUL)) {
+    if (entry.length < 4) continue;
+    const file = entry.substring(3);
+    if (file.length === 0) continue;
+    text += file + "@" + mtimeOf(join(repo, file)) + ";";
   }
 
   const value = hash(text);

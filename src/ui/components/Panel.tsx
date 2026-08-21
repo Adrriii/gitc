@@ -202,6 +202,7 @@ export function Panel({
   onOpenFile,
   openPath,
   onChanged,
+  onCommitted,
 }: {
   data: GraphPayload;
   tabId: string;
@@ -209,6 +210,8 @@ export function Panel({
   onOpenFile: (path: string, staged: boolean, untracked: boolean) => void;
   openPath: string | null;
   onChanged: () => void;
+  /** After a commit lands. */
+  onCommitted: () => void;
 }) {
   const [files, setFiles] = useState<FileChange[]>([]);
   const [filesError, setFilesError] = useState<string | null>(null);
@@ -262,6 +265,7 @@ export function Panel({
           branch={data.head.branch ?? "detached"}
           onOpenFile={onOpenFile}
           openPath={openPath}
+          onCommitted={onCommitted}
           onChanged={onChanged}
         />
       </div>

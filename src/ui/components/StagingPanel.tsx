@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { WorkingFile } from "../types";
 import { api } from "../api";
+import { stagedFiles, unstagedFiles } from "../staging";
 import { Confirm } from "./Confirm";
 import { Icon } from "./Icon";
 import s from "./StagingPanel.module.scss";
@@ -69,6 +70,7 @@ export function StagingPanel({
   onOpenFile,
   openPath,
   onChanged,
+  onCommitted,
 }: {
   tabId: string;
   status: WorkingFile[];
@@ -77,6 +79,8 @@ export function StagingPanel({
   openPath: string | null;
   /** Called after any mutation, so the graph and status can be refreshed. */
   onChanged: () => void;
+  /** After a commit lands, so the view can get out of the way of the graph. */
+  onCommitted: () => void;
 }) {
   const [summary, setSummary] = useState("");
   const [description, setDescription] = useState("");
@@ -85,8 +89,10 @@ export function StagingPanel({
   const [error, setError] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<{ tracked: string[]; untracked: string[] } | null>(null);
 
-  const unstaged = useMemo(() => status.filter((f) => !f.staged), [status]);
-  const staged = useMemo(() => status.filter((f) => f.staged), [status]);
+  // Shared with the application, which follows the same lists to decide what
+  // to show once a file leaves one of them.
+  const unstaged = useMemo(() => unstagedFiles(status), [status]);
+  const staged = useMemo(() => stagedFiles(status), [status]);
 
   // Amending starts from the existing message, which is what makes it an edit
   // rather than a retype. Only prefill when the box is empty, so a message
@@ -239,6 +245,7 @@ export function StagingPanel({
                   setSummary("");
                   setDescription("");
                   setAmend(false);
+                  onCommitted();
                 });
               }
             }}
@@ -267,6 +274,7 @@ export function StagingPanel({
               setSummary("");
               setDescription("");
               setAmend(false);
+              onCommitted();
             })
           }
         >

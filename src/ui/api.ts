@@ -162,6 +162,7 @@ export const api = {
       force: args.force ?? false,
       checkout: args.checkout ?? false,
       path: args.path ?? "",
+      patch: args.patch ?? "",
     }),
 
   // --- mutations. Each returns the fresh status so the panel updates from

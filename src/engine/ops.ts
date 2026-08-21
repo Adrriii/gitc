@@ -34,7 +34,47 @@ export interface OpRequest {
   checkout: boolean;
   /** Repository-relative file path, for the operations that act on one. */
   path: string;
+  /** A unified diff, for the operations that apply one. */
+  patch: string;
 }
+
+/**
+ * Why the remote refused a push, and what would actually fix it.
+ *
+ * git says "non-fast-forward" and suggests pulling, which is right half the
+ * time and destroys nothing either way - but after a rebase, pulling merges
+ * the old versions of your own commits back in, and the answer is to force.
+ * The two cases are indistinguishable from the error text, so they are told
+ * apart here rather than left to the person to guess at.
+ *
+ *   "none"     nothing was refused
+ *   "behind"   we have nothing of our own to publish and have simply fallen
+ *              behind. A fast-forward pull settles it.
+ *   "rewrite"  the remote only holds older versions of commits we already
+ *              have - a rebase, an amend, a squash. Forcing loses nothing.
+ *   "diverged" the remote holds work that is not ours. Forcing would destroy
+ *              it; pulling is the answer.
+ */
+export interface PushRefusal {
+  kind: string;
+  /** The tracking branch that refused, e.g. "origin/main". */
+  upstream: string;
+  ahead: number;
+  behind: number;
+  /** Remote commits that are NOT rewritten versions of our own. */
+  theirs: number;
+  /** A few of those, "author — subject", so the dialog can name them. */
+  theirCommits: string[];
+}
+
+const NO_REFUSAL: PushRefusal = {
+  kind: "none",
+  upstream: "",
+  ahead: 0,
+  behind: 0,
+  theirs: 0,
+  theirCommits: [],
+};
 
 export interface OpResult {
   ok: boolean;
@@ -42,9 +82,11 @@ export interface OpResult {
   note: string;
   /** Set when the operation stopped part-way and needs resolving. */
   pending: string;
+  /** Set when a push was refused; `kind` is "none" otherwise. */
+  refusal: PushRefusal;
 }
 
-const ok = (note: string): OpResult => ({ ok: true, note, pending: "" });
+const ok = (note: string): OpResult => ({ ok: true, note, pending: "", refusal: NO_REFUSAL });
 
 /**
  * Quotes a path for the editor commands git will run through a shell.
@@ -90,11 +132,10 @@ function openInEditor(file: string): void {
  * Runs an operation that can legitimately stop half-way.
  *
  * A conflicted merge or cherry-pick is not a failure to report as an error -
- * it is an expected outcome with a next step. It also cannot be described
- * from git's message here: scriptc's promisified execFile does not carry
- * stdout or stderr on rejection, and git writes conflict detail to stdout. So
- * rather than parroting "Command failed", check whether git left an operation
- * in progress and say that instead.
+ * it is an expected outcome with a next step. What git says about it is also
+ * the wrong thing to repeat: the detail goes to stdout while the exit code
+ * says only that something went wrong. So rather than parroting git, check
+ * whether it left an operation in progress and say that instead.
  */
 async function conflictProne(
   repo: string,
@@ -113,10 +154,96 @@ async function conflictProne(
         ok: false,
         note: label + " stopped with conflicts. Resolve them, then continue - or abort.",
         pending: pending.kind,
+        refusal: NO_REFUSAL,
       };
     }
     throw e;
   }
+}
+
+/** Counts commits in a range, 0 if the range cannot be resolved. */
+async function countCommits(repo: string, range: string): Promise<number> {
+  const out = await gitOrNull(repo, ["rev-list", "--count", range]);
+  if (out === null) return 0;
+  const n = parseInt(out.trim(), 10);
+  return isNaN(n) ? 0 : n;
+}
+
+/** True when git refused a push for being behind, rather than for a real error. */
+function isRefusal(message: string): boolean {
+  return (
+    message.includes("non-fast-forward") ||
+    message.includes("fetch first") ||
+    message.includes("Updates were rejected")
+  );
+}
+
+/**
+ * Works out whether a refused push wants a force or a pull.
+ *
+ * The distinction is whether the commits we are missing are our own, in an
+ * older form. `--cherry-pick` compares patches rather than hashes, so a
+ * commit that was rebased, amended or reworded matches the version of itself
+ * that is still on the remote and drops out of the count. What remains is
+ * work that only exists there - somebody else's, or our own from another
+ * machine - and forcing would destroy it.
+ *
+ * A fetch first, because the tracking ref is only as current as the last one
+ * and the whole question is what the remote holds now.
+ *
+ * When anything here cannot be determined the answer is "diverged", which
+ * recommends pulling. Being wrong in that direction costs a merge commit;
+ * being wrong the other way costs somebody their work.
+ */
+async function classifyRefusal(repo: string, upstream: string): Promise<PushRefusal> {
+  const slash = upstream.indexOf("/");
+  const remote = slash === -1 ? upstream : upstream.substring(0, slash);
+  if (remote.length > 0) await gitOrNull(repo, ["fetch", remote]);
+
+  const ahead = await countCommits(repo, upstream + "..HEAD");
+  const behind = await countCommits(repo, "HEAD.." + upstream);
+
+  // Their side of the divergence, with our own rewritten commits removed.
+  const theirsOut = await gitOrNull(repo, [
+    "rev-list",
+    "--count",
+    "--left-only",
+    "--cherry-pick",
+    upstream + "..." + "HEAD",
+  ]);
+  const theirs = theirsOut === null ? -1 : parseInt(theirsOut.trim(), 10);
+
+  const listed = await gitOrNull(repo, [
+    "log",
+    "--left-only",
+    "--cherry-pick",
+    "--max-count=5",
+    "--format=%an — %s",
+    upstream + "..." + "HEAD",
+  ]);
+  const theirCommits: string[] = [];
+  if (listed !== null) {
+    for (const line of listed.split(String.fromCharCode(10))) {
+      if (line.trim().length > 0) theirCommits.push(line.trim());
+    }
+  }
+
+  const unknown = theirs < 0 || isNaN(theirs);
+
+  // Nothing of our own to publish: the push was refused only because the
+  // branch has fallen behind. A plain fast-forward pull settles it, with no
+  // divergence to reconcile and nothing a force could usefully do - forcing
+  // here would delete the remote's commits and put nothing in their place.
+  const kind = ahead === 0 && behind > 0 ? "behind" : unknown || theirs > 0 ? "diverged" : "rewrite";
+
+  return {
+    kind,
+    upstream,
+    ahead,
+    behind,
+    theirs: unknown ? behind : theirs,
+    theirCommits,
+  };
 }
 
 /**
@@ -213,6 +340,7 @@ async function checkoutCarryingChanges(
         ", but restoring your changes hit conflicts. Resolve them below — your work is also still saved in the stash until you drop it.",
       // No marker file exists for this, so name the state ourselves.
       pending: pending.kind.length > 0 ? pending.kind : "unmerged",
+      refusal: NO_REFUSAL,
     };
   }
 
@@ -464,6 +592,46 @@ export async function runOp(repo: string, req: OpRequest): Promise<OpResult> {
       );
     }
 
+    /**
+     * Applies one hunk to the index or the working tree.
+     *
+     * Staging part of a file is `git apply --cached` with a patch holding
+     * only that part; unstaging is the same patch reversed; discarding is the
+     * reverse applied to the working tree instead of the index. git does the
+     * work - the patch simply says which lines are meant.
+     *
+     * Through a file because piped stdin is a compile fence here, the same
+     * reason commit messages go in with -F.
+     */
+    case "applyPatch": {
+      const patch = req.patch;
+      if (patch.trim().length === 0) throw new Error("no patch to apply");
+
+      const args = ["apply"];
+      if (req.mode === "stage" || req.mode === "unstage") args.push("--cached");
+      if (req.mode === "unstage" || req.mode === "discard") args.push("--reverse");
+      if (req.mode !== "stage" && req.mode !== "unstage" && req.mode !== "discard") {
+        throw new Error("unknown patch target: " + req.mode);
+      }
+      // No --recount. It was here as insurance and was the opposite: the
+      // header counts come straight from git's own parsed hunk and the body
+      // is reproduced verbatim, so they always agree - while --recount made
+      // every REVERSE apply fail to find its text ("patch does not apply"),
+      // which is unstaging and discarding both.
+
+      const file = join(tmpdir(), "gitc-hunk-" + String(Date.now()) + ".patch");
+      writeFileSync(file, patch, "utf8");
+      try {
+        await git(repo, args.concat([file]));
+      } finally {
+        if (existsSync(file)) unlinkSync(file);
+      }
+
+      if (req.mode === "stage") return ok("staged the hunk");
+      if (req.mode === "unstage") return ok("unstaged the hunk");
+      return ok("discarded the hunk");
+    }
+
     case "editFile": {
       const rel = req.path;
       if (rel.trim().length === 0) throw new Error("no file to open");
@@ -533,17 +701,78 @@ export async function runOp(repo: string, req: OpRequest): Promise<OpResult> {
     }
 
     case "pull": {
-      // --ff-only rather than a silent merge or rebase: if the branches have
-      // diverged the user should choose, not have a merge commit appear.
+      // --ff-only by default rather than a silent merge or rebase: if the
+      // branches have diverged the user should choose, not have a merge commit
+      // appear. `mode` is that choice, once they have been shown what the
+      // divergence actually is.
+      if (req.mode === "rebase") {
+        return conflictProne(
+          repo,
+          ["pull", "--rebase"],
+          "Pull",
+          "pulled - your commits are on top now, push again to publish",
+        );
+      }
+      if (req.mode === "merge") {
+        return conflictProne(
+          repo,
+          ["pull", "--no-rebase"],
+          "Pull",
+          "pulled and merged - push again to publish",
+        );
+      }
       await git(repo, ["pull", "--ff-only"]);
       return ok("pulled");
     }
 
     case "push": {
-      const upstream = await gitOrNull(repo, ["rev-parse", "--abbrev-ref", "@{upstream}"]);
-      if (upstream !== null) {
-        await git(repo, ["push"]);
-        return ok("pushed");
+      // Trimmed: git ends it with a newline, and this goes into rev-list
+      // ranges where "origin/main\n..HEAD" resolves to nothing at all.
+      const upstreamRaw = await gitOrNull(repo, ["rev-parse", "--abbrev-ref", "@{upstream}"]);
+      const upstream = upstreamRaw === null ? null : upstreamRaw.trim();
+      if (upstream !== null && upstream.length > 0) {
+        if (req.force) {
+          // --force-with-lease, never a bare --force: it refuses if the remote
+          // has moved since our last fetch, so a force decided on one view of
+          // the remote cannot land on a different one.
+          try {
+            await git(repo, ["push", "--force-with-lease"]);
+            return ok("force-pushed to " + upstream);
+          } catch (e) {
+            const message = (e as Error).message;
+            // The lease said no: somebody pushed between the decision and the
+            // act. Ask again with current numbers rather than reporting a
+            // failure - the answer may well be different now.
+            if (!isRefusal(message) && !message.includes("stale info")) throw e;
+            const refusal = await classifyRefusal(repo, upstream);
+            return {
+              ok: false,
+              note: "The remote moved while you were deciding.",
+              pending: "",
+              refusal,
+            };
+          }
+        }
+
+        try {
+          await git(repo, ["push"]);
+          return ok("pushed");
+        } catch (e) {
+          const message = (e as Error).message;
+          if (!isRefusal(message)) throw e;
+          const refusal = await classifyRefusal(repo, upstream);
+          return {
+            ok: false,
+            note:
+              refusal.kind === "rewrite"
+                ? "The remote still has the old version of these commits."
+                : refusal.kind === "behind"
+                  ? "This branch is behind the remote."
+                  : "The remote has commits you do not.",
+            pending: "",
+            refusal,
+          };
+        }
       }
 
       // No upstream yet, so one has to be chosen. Defaulting to "origin"

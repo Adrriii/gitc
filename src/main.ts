@@ -18,6 +18,7 @@ import {
   isRepo,
   repoRoot,
   gitHistory,
+  peeledTags,
 } from "./engine/git.ts";
 import { buildGraph, LANE_COLORS } from "./engine/graph.ts";
 import { runOp } from "./engine/ops.ts";
@@ -192,6 +193,20 @@ async function graphPayload(tab: Tab, limit: number): Promise<string> {
   const head = readHead(tab.path);
   const refs = readRefs(tab.path);
 
+  // Annotated tags name a tag OBJECT, and the graph matches chips to commits -
+  // so a release tagged the usual way (`git tag -a`, or a forge's release
+  // button) drew no chip at all. Packed refs carry the peeled commit beside
+  // them and are already handled; a loose tag object has to be read, which
+  // means asking git. One call, and only where there are tags.
+  if (refs.some((r) => r.kind === "tag")) {
+    const peeled = await peeledTags(tab.path);
+    for (const ref of refs) {
+      if (ref.kind !== "tag") continue;
+      const commit = peeled.get(ref.name);
+      if (commit !== undefined && commit.length > 0) ref.hash = commit;
+    }
+  }
+
   // Hidden refs still LIST in the sidebar - you need somewhere to click to
   // bring them back - they just do not contribute commits to the walk.
   const hidden = loadHidden(tab.path);
@@ -349,6 +364,8 @@ interface GitOpRequest {
   checkout: boolean;
   /** Repository-relative file path, for operations that act on one. */
   path: string;
+  /** A unified diff, for the operations that apply one. */
+  patch: string;
 }
 interface CommitRequest {
   id: string;
@@ -777,6 +794,7 @@ async function handleApi(
       force: body.force,
       checkout: body.checkout,
       path: body.path,
+      patch: body.patch,
     };
     try {
       const result = await runOp(tab.path, opReq);

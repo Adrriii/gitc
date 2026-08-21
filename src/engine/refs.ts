@@ -108,11 +108,20 @@ function readPackedRefs(repo: string): Ref[] {
   if (!existsSync(path)) return [];
   const out: Ref[] = [];
   for (const line of readFileSync(path, "utf8").split("\n")) {
-    // Comments start with #; a leading ^ line is a tag's peeled target,
-    // which we deliberately skip - we want the tag object, not its commit.
     if (line.length === 0) continue;
     const c = line.charAt(0);
-    if (c === "#" || c === "^") continue;
+    if (c === "#") continue;
+
+    // A "^" line carries the commit the tag above it points at, and that is
+    // the hash worth keeping: an annotated tag's own object matches no
+    // commit, so a graph looking for it finds nothing and draws no chip.
+    if (c === "^") {
+      const previous = out.length > 0 ? out[out.length - 1] : undefined;
+      if (previous !== undefined && previous.kind === "tag") {
+        previous.hash = line.substring(1).trim();
+      }
+      continue;
+    }
     const space = line.indexOf(" ");
     if (space === -1) continue;
     const hash = line.substring(0, space);
