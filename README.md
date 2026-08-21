@@ -8,6 +8,8 @@
 
 **A fast, minimal git client.**
 
+<img src="https://i.rhythmgamers.net/u/cf433fb0-ba1a-4ebb-90fd-70f462a791a1.png" alt="gitc showing a repository: the commit graph with branches, tags and authors, the branch tree, and the staging panel">
+
 </div>
 
 ## What it is
