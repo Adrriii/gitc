@@ -2,6 +2,13 @@
   position: fixed;
   z-index: 60;
   min-width: 232px;
+  // Bounded, and its labels wrap rather than run on: an item like
+  // "Rebase main onto feature/a-very-long-name" is otherwise as wide as the
+  // name, which on a busy repository is wider than the window.
+  max-width: min(380px, calc(100vw - 16px));
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
+  overflow-wrap: anywhere;
   background: var(--bg-2);
   border: 1px solid var(--line-strong);
   border-radius: var(--radius);

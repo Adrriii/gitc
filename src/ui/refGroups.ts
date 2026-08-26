@@ -14,7 +14,7 @@
 export interface RefGroup {
   /** Display name with any remote prefix stripped: "main", not "origin/main". */
   name: string;
-  kind: "branch" | "tag" | "stash";
+  kind: "branch" | "tag";
   /** A local branch of this name exists. */
   local: boolean;
   /** Remotes carrying this name, in the order encountered. */
@@ -27,7 +27,7 @@ export interface RefGroup {
    * always what is meant, and it is the safe default - checking out a remote
    * ref detaches HEAD.
    */
-  actionKind: "local" | "remote" | "tag" | "stash";
+  actionKind: "local" | "remote" | "tag";
   actionName: string;
 }
 
@@ -38,12 +38,7 @@ export interface RefGroup {
  * always survives the collapse, then local branches, then remote-only ones,
  * then tags.
  */
-export function groupRefs(
-  labels: string[],
-  headBranch: string | null,
-  /** Stash selector to display name; see the stash branch below. */
-  stashNames?: Map<string, string>,
-): RefGroup[] {
+export function groupRefs(labels: string[], headBranch: string | null): RefGroup[] {
   const byKey = new Map<string, RefGroup>();
 
   for (const label of labels) {
@@ -52,23 +47,13 @@ export function groupRefs(
     const kind = label.substring(0, sep);
     const short = label.substring(sep + 1);
 
-    // A stash is not a ref anyone can group with anything: nothing else can
-    // point at a stash commit. The label carries its selector, which is the
-    // only string git accepts, so that stays as the thing to act on - but
-    // what gets DISPLAYED is the message, since "stash@{0}" says nothing
-    // about what is in it and stops being true the moment one is dropped.
-    if (kind === "stash") {
-      byKey.set("stash:" + short, {
-        name: stashNames?.get(short) ?? short,
-        kind: "stash",
-        local: false,
-        remotes: [],
-        isHead: false,
-        actionKind: "stash",
-        actionName: short,
-      });
-      continue;
-    }
+    // A stash is deliberately NOT a chip. It is drawn as its own node - a
+    // dotted square, unlike any commit - and the row already carries its
+    // message in the subject column, so a chip repeating the same thing in a
+    // 128px column would cost the branch names width to say nothing new.
+    // The label still reaches the row, which is how the row knows to draw the
+    // square and which stash to act on.
+    if (kind === "stash") continue;
 
     if (kind === "tag") {
       byKey.set("tag:" + short, {
@@ -122,10 +107,7 @@ export function groupRefs(
   const groups = [...byKey.values()];
   groups.sort((a, b) => {
     if (a.isHead !== b.isHead) return a.isHead ? -1 : 1;
-    // Branches, then tags, then stashes - a stash is the least likely thing
-    // you are looking for on a row that has anything else on it.
-    const rank = (k: string) => (k === "branch" ? 0 : k === "tag" ? 1 : 2);
-    if (a.kind !== b.kind) return rank(a.kind) - rank(b.kind);
+    if (a.kind !== b.kind) return a.kind === "branch" ? -1 : 1;
     if (a.local !== b.local) return a.local ? -1 : 1;
     return a.name.localeCompare(b.name);
   });

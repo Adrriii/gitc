@@ -3,7 +3,6 @@ import type { Commit, GraphPayload, GraphRow, Person } from "../types";
 import { Avatar } from "./Avatar";
 import { Icon } from "./Icon";
 import { groupRefs } from "../refGroups";
-import { stashName } from "../stashes";
 import type { RefGroup } from "../refGroups";
 import s from "./Graph.module.scss";
 
@@ -283,9 +282,7 @@ function CommitNode({
 
 /** Where a branch of this name exists: on disk, and on which remotes. */
 function Where({ group }: { group: RefGroup }) {
-  // A stash exists in exactly one place and cannot exist anywhere else, so
-  // there is nothing for these badges to say about one.
-  if (group.kind === "tag" || group.kind === "stash") return null;
+  if (group.kind === "tag") return null;
   return (
     <>
       {group.local && (
@@ -321,40 +318,36 @@ function GroupChip({
   onContext: (kind: string, name: string, x: number, y: number) => void;
   onCheckout: (kind: string, name: string) => void;
 }) {
-  const stash = group.kind === "stash";
-  const cls = stash
-    ? s.chipStash
-    : group.kind === "tag"
-      ? s.chipTag
-      : group.local
-        ? s.chipLocal
-        : s.chipRemote;
-  const where = stash
-    ? "stash"
-    : group.kind === "tag"
+  const cls =
+    group.kind === "tag" ? s.chipTag : group.local ? s.chipLocal : s.chipRemote;
+  const where =
+    group.kind === "tag"
       ? "tag"
       : [group.local ? "local" : null, ...group.remotes].filter(Boolean).join(", ");
   return (
     <span
       className={`${s.chip} ${cls} ${group.isHead ? s.chipHead : ""}`}
       style={{
-        background: laneColor + (group.isHead ? CHIP_ALPHA_HEAD : CHIP_ALPHA),
+        // Two layers, and the opaque one is the point. The tint is 25% of the
+        // lane colour, which is right over the branch column's own background
+        // and wrong the moment the chip expands over the graph: at 25% the
+        // lanes, the commit node and the message text all show straight
+        // through the name you hovered it to read. The gradient is the tint;
+        // the colour underneath it is the same background the chip sits on at
+        // rest, so nothing changes there and everything behind is hidden here.
+        backgroundColor: "var(--bg-0)",
+        backgroundImage: (() => {
+          const tint = laneColor + (group.isHead ? CHIP_ALPHA_HEAD : CHIP_ALPHA);
+          return `linear-gradient(${tint}, ${tint})`;
+        })(),
         // The checked-out chip is outlined in its own lane colour rather than
         // the interface accent, which would be a second unrelated hue sitting
         // on top of the one the chip is now made of.
         boxShadow: group.isHead ? `0 0 0 1px ${laneColor}` : undefined,
       }}
-      // No double-click line for a stash: checking one out would detach HEAD
-      // onto git's own bookkeeping commit, which is never what was meant.
-      title={
-        stash
-          ? `${group.name} — stash\nright-click to apply, pop or delete`
-          : `${group.name} — ${where}${group.isHead ? " — checked out" : ""}
-double-click to check out, right-click for actions`
-      }
-      onDoubleClick={() => {
-        if (!stash) onCheckout(group.actionKind, group.actionName);
-      }}
+      title={`${group.name} — ${where}${group.isHead ? " — checked out" : ""}
+double-click to check out, right-click for actions`}
+      onDoubleClick={() => onCheckout(group.actionKind, group.actionName)}
       onContextMenu={(e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -362,12 +355,31 @@ double-click to check out, right-click for actions`
       }}
     >
       {group.isHead && <Icon name="check" size={11} className={s.chipIco} />}
-      {stash && <Icon name="stash" size={11} className={s.chipIco} />}
       {!group.isHead && group.kind === "tag" && (
         <Icon name="tag" size={11} className={s.chipIco} />
       )}
       <span className={s.chipName}>{group.name}</span>
       <Where group={group} />
+      {/*
+        There is a menu on every one of these, and nothing said so - the only
+        clue was a tooltip, which arrives about a second after the moment you
+        needed it. The kebab is the same mark the sidebar rows use for the
+        same menu, revealed the same way, and it opens it on a plain click
+        too: a right-click is not discoverable, and having found the menu once
+        nobody should have to remember which button it was behind.
+      */}
+      <span
+        className={s.chipMenu}
+        title="Actions"
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const r = e.currentTarget.getBoundingClientRect();
+          onContext(group.actionKind, group.actionName, Math.round(r.right), Math.round(r.bottom));
+        }}
+      >
+        <Icon name="kebab" size={11} />
+      </span>
     </span>
   );
 }
@@ -428,7 +440,6 @@ function RefCell({
   width,
   labels,
   laneColor,
-  stashNames,
   headBranch,
   menuOpen,
   onContext,
@@ -439,17 +450,13 @@ function RefCell({
   /** The lane colour of the commit these chips name. */
   laneColor: string;
   /** Stash selector to display name. */
-  stashNames: Map<string, string>;
   headBranch: string | null;
   /** True while a context menu is showing anywhere in the app. */
   menuOpen: boolean;
   onContext: (kind: string, name: string, x: number, y: number) => void;
   onCheckout: (kind: string, name: string) => void;
 }) {
-  const groups = useMemo(
-    () => groupRefs(labels, headBranch, stashNames),
-    [labels, headBranch, stashNames],
-  );
+  const groups = useMemo(() => groupRefs(labels, headBranch), [labels, headBranch]);
   const [hovered, setHovered] = useState(false);
   // Right-clicking an entry opens a menu, which moves the pointer off the
   // list. On plain :hover the list would vanish underneath the menu it just
@@ -560,14 +567,6 @@ export function Graph({
   const [height, setHeight] = useState(800);
 
   const now = Math.floor(Date.now() / 1000);
-
-  // Selector to what the chip should say. The chips carry selectors because
-  // that is what an action needs; nobody reading the graph wants to see one.
-  const stashNames = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const st of data.stashes ?? []) m.set(st.selector, stashName(st.subject));
-    return m;
-  }, [data.stashes]);
 
   // The WIP row arrives from the engine as an ordinary commit, dated now with
   // HEAD as its parent, so it has a lane and a colour like everything else and
@@ -762,6 +761,9 @@ export function Graph({
     const stashSelector = stashRow
       ? (c.refs.find((r) => r.startsWith("stash:")) ?? "").substring("stash:".length)
       : "";
+    // What RefCell will actually draw. Every ref becomes a chip except a
+    // stash, which is drawn as its node instead.
+    const hasChip = c.refs.some((r) => !r.startsWith("stash:"));
 
     rows.push(
       <div
@@ -785,8 +787,11 @@ export function Graph({
           else onContext(c.hash, e.clientX, e.clientY);
         }}
       >
-        {/* First in the row, so the lane lines it runs under paint over it. */}
-        {c.refs.length > 0 && (
+        {/* First in the row, so the lane lines it runs under paint over it.
+            Gated on there being a CHIP, not on there being a ref: a stash has
+            a ref and no chip, so counting refs drew it a line reaching back to
+            a label that is not there. */}
+        {hasChip && (
           <div
             className={s.refLine}
             style={{
@@ -800,7 +805,6 @@ export function Graph({
           width={chipsWidth}
           labels={c.refs}
           laneColor={data.colors[row.color % data.colors.length]}
-          stashNames={stashNames}
           headBranch={data.head.branch}
           menuOpen={menuOpen}
           onContext={onRefContext}

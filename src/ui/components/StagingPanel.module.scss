@@ -178,32 +178,63 @@
 
 // Row actions stay hidden until the row is hovered, so a long file list
 // doesn't read as a wall of buttons.
+// Present at rest rather than revealed on hover. Hiding them saved a little
+// width and cost the two things that matter more: you cannot click what you
+// have not found, and you cannot learn a row has actions by looking at it.
+// They stay quiet until the row is hovered, which is a different thing from
+// being absent.
 .rowActions {
   flex: none;
   display: flex;
-  gap: 2px;
-  visibility: hidden;
+  gap: 3px;
+  opacity: 0.5;
 }
 
 .file:hover .rowActions {
-  visibility: visible;
+  opacity: 1;
 }
 
+// A button, not a glyph. These were a bare icon on the panel background -
+// no edge, no fill, dim - so nothing said they could be pressed, and the
+// three that matter most here are the destructive ones.
 .iconBtn {
-  width: 21px;
-  height: 19px;
+  width: 24px;
+  height: 22px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  border: 1px solid var(--line);
   border-radius: var(--radius);
+  background: var(--bg-3);
   color: var(--fg-dim);
   font-size: 12px;
   line-height: 1;
+  cursor: pointer;
+
+  &:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
 
   &:not(:disabled):hover {
-    background: var(--line-strong);
-    color: var(--fg);
+    background: var(--bg-4);
+    border-color: var(--line-strong);
+    color: var(--fg-bright);
   }
+}
+
+// Coloured by what they do, on hover: discarding is not undoable and should
+// not look the same as staging half a second before you click it.
+.btnDanger:not(:disabled):hover {
+  background: var(--red-bg);
+  border-color: var(--red-line);
+  color: var(--red-fg);
+}
+
+.btnGood:not(:disabled):hover {
+  background: var(--green-bg);
+  border-color: var(--green-line);
+  color: var(--green-fg);
 }
 
 // ------------------------------------------------------------- commit box

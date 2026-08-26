@@ -11,7 +11,8 @@
 }
 
 .box {
-  width: 500px;
+  width: min(500px, calc(100vw - 32px));
+  overflow-wrap: anywhere;
   max-height: 82vh;
   overflow-y: auto;
   background: var(--bg-2);

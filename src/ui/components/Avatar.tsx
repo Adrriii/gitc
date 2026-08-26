@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useAvatarCandidates, initialsOf } from "../avatar";
+import { useAvatarCandidates, initialsOf, avatarTint } from "../avatar";
 import s from "./Avatar.module.scss";
 
 /**
@@ -57,7 +57,15 @@ export function Avatar({
           onError={() => setIndex((i) => i + 1)}
         />
       ) : (
-        <span className={s.initials} style={{ fontSize: Math.max(8, Math.round(size * 0.4)) }}>
+        // Their own colour, so a graph of people with no pictures is still a
+        // graph of distinguishable people.
+        <span
+          className={s.initials}
+          style={{
+            fontSize: Math.max(8, Math.round(size * 0.4)),
+            background: avatarTint(email, name),
+          }}
+        >
           {initialsOf(name)}
         </span>
       )}

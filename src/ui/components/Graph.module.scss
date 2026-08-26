@@ -129,6 +129,9 @@
   overflow: hidden;
   color: var(--fg);
   opacity: 0.5;
+  // The cursor the platform uses for "this thing has a context menu". Free,
+  // and it says so before the pointer has even stopped moving.
+  cursor: context-menu;
 }
 
 .chipLocal {
@@ -151,12 +154,6 @@
   color: var(--fg);
 }
 
-// A shelf, not a line of work. Italic and dimmed text so a row of stashes on
-// the commit you are sitting on cannot be mistaken for a row of branches.
-.chipStash {
-  color: var(--fg-dim);
-  font-style: italic;
-}
 .chipWip {
   background: var(--bg-4);
   color: var(--fg-dim);
@@ -202,6 +199,7 @@
     max-width: 340px;
   }
 }
+
 // The line joining a chip to the commit it names.
 //
 // A chip floating in the gap is a label for nothing in particular: on a busy
@@ -241,6 +239,27 @@
 .headRow .refLine {
   height: 2px;
   opacity: 1;
+}
+
+// The "there is a menu here" mark. Hidden until the row is hovered, like the
+// sidebar's, and taking no width until then - the branch column is 128px and
+// the name has first claim on it.
+.chipMenu {
+  display: none;
+  flex: none;
+  align-items: center;
+  margin-right: -2px;
+  border-radius: var(--radius);
+  color: var(--fg-dim);
+  cursor: pointer;
+
+  &:hover {
+    color: var(--fg-bright);
+  }
+}
+
+.row:hover .chipMenu {
+  display: flex;
 }
 
 .chipIco {

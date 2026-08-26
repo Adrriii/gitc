@@ -44,12 +44,12 @@ function FileRow({
       </span>
       <span className={s.rowActions}>
         {onDiscard && (
-          <button className={s.iconBtn} onClick={onDiscard} title="Discard changes">
+          <button className={`${s.iconBtn} ${s.btnDanger}`} onClick={onDiscard} title="Discard changes">
             <Icon name="trash" size={13} />
           </button>
         )}
         {onStage && (
-          <button className={s.iconBtn} onClick={onStage} title="Stage this file">
+          <button className={`${s.iconBtn} ${s.btnGood}`} onClick={onStage} title="Stage this file">
             <Icon name="added" size={13} />
           </button>
         )}
@@ -147,7 +147,7 @@ export function StagingPanel({
     <div className={s.panel}>
       <div className={s.head}>
         <button
-          className={s.iconBtn}
+          className={`${s.iconBtn} ${s.btnDanger}`}
           title="Discard all changes"
           disabled={busy || status.length === 0}
           onClick={() => askDiscard(status)}

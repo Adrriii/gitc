@@ -20,6 +20,7 @@ import { DiffView } from "./components/DiffView";
 import type { DiffTarget } from "./components/DiffView";
 import { Panel } from "./components/Panel";
 import { Welcome } from "./components/Welcome";
+import { Loading } from "./components/Loading";
 import { Preferences } from "./components/Preferences";
 import { GitLog } from "./components/GitLog";
 import { Freshness } from "./components/Freshness";
@@ -322,6 +323,19 @@ export function App() {
 
   const activeId = session?.activeId ?? null;
   const activeTab = session?.tabs.find((t) => t.id === activeId) ?? null;
+
+  /**
+   * Drops the previous repository the moment the tab changes.
+   *
+   * Its own effect, keyed on `activeId` alone, because the load below also
+   * re-runs on `reloadToken` - after every operation and every change the
+   * watch notices - and clearing there would flash the whole window back to
+   * a loading state several times a minute. This runs only when the tab
+   * actually changes, which is the only time the old graph is a lie.
+   */
+  useEffect(() => {
+    setData(null);
+  }, [activeId]);
 
   useEffect(() => {
     if (!activeId) {
@@ -1353,8 +1367,17 @@ export function App() {
           onCheck={() => checkUpdate(true)}
           onUpdate={runUpdate}
         />
-      ) : !activeTab || !data ? (
+      ) : !activeTab ? (
         <Welcome session={session} onOpen={open} error={error} />
+      ) : !data ? (
+        /*
+          A tab that is open but not read yet is a third state, and it used to
+          fall through to the new-tab screen - so a slow load looked like the
+          repository had been closed, and the picker it offered instead was
+          answered by an engine that was busy loading the repository you
+          already had. Waiting is not the same as having nothing open.
+        */
+        <Loading name={activeTab.name} error={error} />
       ) : (
         <div className={s.app}>
           <Toolbar

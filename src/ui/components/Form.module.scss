@@ -9,7 +9,14 @@
 }
 
 .dialog {
-  width: 440px;
+  // Bounded by the window as well as by taste. A fixed width overflows a
+  // narrow one, and `anywhere` is what stops a long branch name running
+  // out through the side: normal wrapping breaks on spaces, and a ref like
+  // feature/a-very-long-name offers none.
+  width: min(440px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+  overflow-wrap: anywhere;
   background: var(--bg-2);
   border: 1px solid var(--line-strong);
   border-radius: var(--radius);

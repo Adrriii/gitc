@@ -636,7 +636,7 @@ async function handleApi(
       }
       return true;
     }
-    sendJson(res, JSON.stringify(checkUpdate()));
+    sendJson(res, JSON.stringify(await checkUpdate()));
     return true;
   }
 

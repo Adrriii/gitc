@@ -9,7 +9,7 @@
 // browser instead would put a CORS policy between gitc and its own release.
 // curl ships with Windows 10 and every Linux worth the name.
 
-import { execFile, spawn, spawnSync } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   existsSync,
@@ -82,18 +82,82 @@ function compare(a: string, b: string): number {
   return 0;
 }
 
-/** Runs curl, returning stdout or null. */
-function curl(args: string[]): string | null {
-  // No maxBuffer here: spawnSync does not take one. Nothing read through this
-  // is large - the binary itself is downloaded to a file with -o, not piped.
-  const r = spawnSync("curl", args, { encoding: "utf8" });
-  if (r.status !== 0) return null;
-  return r.stdout;
+/**
+ * How long curl may spend before giving up.
+ *
+ * `--connect-timeout` is the one that matters. With no network at all, a
+ * connect attempt sits in DNS resolution and TCP retries for as long as the
+ * platform's defaults allow - tens of seconds on Windows - and every second
+ * of that used to be a second the engine answered nothing. Five is generous
+ * for reaching a host that is actually there.
+ *
+ * The overall cap is per-call: a metadata request that takes half a minute
+ * has failed, while a download legitimately takes as long as the file takes.
+ */
+const CONNECT_TIMEOUT = ["--connect-timeout", "5"];
+const META_TIMEOUT = [...CONNECT_TIMEOUT, "--max-time", "30"];
+
+/**
+ * Runs curl, returning stdout or null.
+ *
+ * `spawn`, not `spawnSync`, and that is the whole point of this function's
+ * shape. Every call here talks to the network, which is the one thing that
+ * can take arbitrarily long, and a synchronous call blocks the engine's
+ * single thread for its whole duration - answering no request at all, not
+ * even a ping. The update check runs at launch by default, so on a machine
+ * with no network gitc froze on startup for as long as curl took to give up,
+ * and the window sat on the new-tab screen unable to open anything.
+ *
+ * This is the same bargain `run()` in git.ts makes for git, for the same
+ * reason and with the same explicit stdio: scriptc has no `close` event, so
+ * "exited AND drained" has to be assembled from the parts.
+ */
+function curl(args: string[]): Promise<string | null> {
+  return new Promise((resolve) => {
+    const child = spawn("curl", args, { stdio: ["ignore", "pipe", "pipe"] });
+
+    const out: Uint8Array[] = [];
+    let code = 0;
+    let exited = false;
+    let open = 2;
+
+    const settle = () => {
+      if (!exited || open > 0) return;
+      resolve(code === 0 ? Buffer.concat(out).toString("utf8") : null);
+    };
+
+    const stdout = child.stdout;
+    const stderr = child.stderr;
+    if (stdout === null || stderr === null) {
+      resolve(null);
+      return;
+    }
+
+    stdout.on("data", (chunk: Buffer) => out.push(chunk));
+    stdout.on("end", () => {
+      open -= 1;
+      settle();
+    });
+    // Read and discarded: an unread pipe fills and stalls the child, and
+    // curl's progress chatter is of no use to anyone here.
+    stderr.on("data", () => {});
+    stderr.on("end", () => {
+      open -= 1;
+      settle();
+    });
+
+    child.on("exit", (status: number | null) => {
+      code = status === null ? 1 : status;
+      exited = true;
+      settle();
+    });
+    // curl missing entirely lands here rather than as a non-zero exit.
+    child.on("error", () => resolve(null));
+  });
 }
 
-function curlAvailable(): boolean {
-  const r = spawnSync("curl", ["--version"], { encoding: "utf8" });
-  return r.status === 0;
+async function curlAvailable(): Promise<boolean> {
+  return (await curl(["--version"])) !== null;
 }
 
 /**
@@ -113,7 +177,7 @@ function field(json: string, key: string): string {
   return json.substring(start, end);
 }
 
-export function check(): UpdateInfo {
+export async function check(): Promise<UpdateInfo> {
   const info: UpdateInfo = {
     current: VERSION,
     latest: "",
@@ -126,12 +190,13 @@ export function check(): UpdateInfo {
     info.error = "this build does not know which repository to check";
     return info;
   }
-  if (!curlAvailable()) {
+  if (!(await curlAvailable())) {
     info.error = "curl is not available, so gitc cannot check for updates";
     return info;
   }
 
-  const body = curl([
+  const body = await curl([
+    ...META_TIMEOUT,
     "-fsSL",
     "-H",
     "accept: application/vnd.github+json",
@@ -199,7 +264,7 @@ async function download(url: string, temp: string, total: number): Promise<boole
   // No declared length means no chunking worth doing: one request, and the
   // window shows an indeterminate bar rather than a wrong one.
   if (total <= 0) {
-    return curl(["-fsSL", "-A", agent, "-o", temp, url]) !== null;
+    return (await curl([...CONNECT_TIMEOUT, "-fsSL", "-A", agent, "-o", temp, url])) !== null;
   }
 
   const part = temp + ".part";
@@ -214,7 +279,7 @@ async function download(url: string, temp: string, total: number): Promise<boole
     const end = Math.min(at + CHUNK_BYTES, total) - 1;
     rmSync(part, { force: true });
 
-    if (curl(["-fsSL", "-A", agent, "-r", at + "-" + end, "-o", part, url]) === null) {
+    if ((await curl([...CONNECT_TIMEOUT, "-fsSL", "-A", agent, "-r", at + "-" + end, "-o", part, url])) === null) {
       rmSync(part, { force: true });
       return false;
     }
@@ -316,7 +381,7 @@ async function contentLength(url: string): Promise<number> {
 export async function apply(): Promise<UpdateResult> {
   progress = { phase: "checking", received: 0, total: 0, message: "Checking for the latest release" };
 
-  const info = check();
+  const info = await check();
   if (info.error.length > 0) {
     setPhase("failed", info.error);
     return { ok: false, message: info.error, restarting: false };
@@ -348,7 +413,7 @@ export async function apply(): Promise<UpdateResult> {
   // without them still installs - the file came from the same place either
   // way - but a mismatch is a hard stop.
   setPhase("verifying", "Checking the download against its published checksum");
-  const sums = curl(["-fsSL", base + "SHA256SUMS"]);
+  const sums = await curl([...META_TIMEOUT, "-fsSL", base + "SHA256SUMS"]);
   if (sums !== null) {
     const actual = createHash("sha256").update(readFileSync(temp)).digest("hex");
     let expected = "";
