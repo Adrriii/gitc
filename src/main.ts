@@ -19,8 +19,9 @@ import {
   repoRoot,
   gitHistory,
   peeledTags,
+  readStashes,
 } from "./engine/git.ts";
-import { buildGraph, LANE_COLORS } from "./engine/graph.ts";
+import { buildGraph, spliceStashes, LANE_COLORS, STASH_LANE } from "./engine/graph.ts";
 import { runOp } from "./engine/ops.ts";
 import { fingerprint, lastFetch } from "./engine/watch.ts";
 import {
@@ -32,6 +33,7 @@ import {
   unresolve,
 } from "./engine/conflicts.ts";
 import type { OpRequest } from "./engine/ops.ts";
+import type { RawCommit, Person } from "./engine/git.ts";
 import {
   stagePaths,
   stageAll,
@@ -47,7 +49,8 @@ import {
   diffWorkingFile,
   FULL_CONTEXT,
 } from "./engine/diff.ts";
-import { readHead, readRefs, readPending, readRemotes } from "./engine/refs.ts";
+import { readHead, readRefs, readPending, readRemotes, gitDir } from "./engine/refs.ts";
+import type { Ref } from "./engine/refs.ts";
 import { loadHidden, saveHidden } from "./engine/visibility.ts";
 import { listDir } from "./engine/browse.ts";
 import { readSubmodules } from "./engine/submodules.ts";
@@ -68,6 +71,15 @@ import { bakedAsset } from "./generated/assets.ts";
 
 const DEFAULT_PORT = 7893;
 const DEFAULT_LIMIT = 2000;
+
+/**
+ * The hash the uncommitted-work row carries.
+ *
+ * Not a hash, and cannot collide with one: every real hash is hex, so no
+ * commit can ever be called this. It is the same string the UI has always
+ * used to mean "the WIP row" in a selection, which is why it is that string.
+ */
+const WIP_HASH = "WIP";
 
 let session: Session = loadSession();
 
@@ -189,6 +201,34 @@ function findTab(id: string): Tab | null {
   return null;
 }
 
+/**
+ * The commit the trunk points at, for the lane colour reserved to it.
+ *
+ * Local first, because a local master is the one being worked on and its tip
+ * is where the reserved colour is most useful; the remote is the fallback for
+ * a repository where the trunk is only ever tracked, which is normal enough
+ * when everything is done on topic branches. "" when there is neither, and
+ * the graph then hands the colour back to the rotation.
+ *
+ * Deliberately just the two names. Guessing at a trunk from the remote's HEAD
+ * would be a request to a server for something cosmetic, and guessing from
+ * "whatever branch has the most commits" would move the colour around as the
+ * repository changes - which is the whole thing this is trying to stop.
+ */
+function trunkTip(refs: Ref[]): string {
+  const wanted = ["master", "main"];
+  for (const kind of ["local", "remote"]) {
+    for (const name of wanted) {
+      for (const ref of refs) {
+        if (ref.kind !== kind) continue;
+        const short = ref.kind === "local" ? ref.short : ref.short.split("/").slice(1).join("/");
+        if (short === name) return ref.hash;
+      }
+    }
+  }
+  return "";
+}
+
 async function graphPayload(tab: Tab, limit: number): Promise<string> {
   const head = readHead(tab.path);
   const refs = readRefs(tab.path);
@@ -225,10 +265,64 @@ async function graphPayload(tab: Tab, limit: number): Promise<string> {
     }
   }
 
+  // Read before the walk: whether there is uncommitted work decides whether
+  // the walk gets a WIP commit at the front of it.
+  const status = await readStatus(tab.path);
+
   // Hiding everything leaves every family empty and HEAD the only thing
   // walked, which is the honest answer and needs no special case.
-  const commits = await readCommits(tab.path, limit, hide);
-  const rows = buildGraph(commits);
+  const history = await readCommits(tab.path, limit, hide);
+
+  /**
+   * Uncommitted work, as the commit it is about to become.
+   *
+   * It goes into the walk rather than being drawn on top of it afterwards,
+   * and that is the whole difference. As a decoration pinned to row 0 it had
+   * to be positioned by hand, and the hand was wrong the moment the checked-
+   * out branch was not the newest thing on screen: a node in one branch's
+   * lane, at a row belonging to another's, with a line down to a parent
+   * several rows away that nothing joined it to.
+   *
+   * As a commit dated now whose parent is HEAD, every one of those falls out
+   * of the ordinary machinery. It sorts to the top because nothing is newer -
+   * not because it was put there. It opens the first lane, which its parent
+   * then inherits, so the branch you are on is the leftmost one. And the rows
+   * between it and HEAD carry its lane like any other, so the line arrives
+   * where it says it does.
+   */
+  const walked: RawCommit[] = [];
+  if (status.length > 0 && head.hash !== null) {
+    // `noAuthors` rather than a bare `[]`: scriptc types an empty literal as
+    // number[] and refuses to widen it (SC2002, docs/toolchain.md).
+    const noAuthors: Person[] = [];
+    walked.push({
+      hash: WIP_HASH,
+      parents: [head.hash],
+      subject: "",
+      body: "",
+      author: "",
+      email: "",
+      date: Math.floor(Date.now() / 1000),
+      coAuthors: noAuthors,
+    });
+  }
+  for (const c of history) walked.push(c);
+
+  const walkedRows = buildGraph(walked, trunkTip(refs));
+
+  // Stashes, hung off the commits they were taken from. One extra git call,
+  // and only where there is a stash ref to list - the same shape as the
+  // peeled-tag call above.
+  const stashes = existsSync(join(gitDir(tab.path), "logs", "refs", "stash"))
+    ? await readStashes(tab.path)
+    : [];
+  const spliced = spliceStashes(
+    walked,
+    walkedRows,
+    stashes.map((s) => s.commit),
+  );
+  const commits = spliced.commits;
+  const rows = spliced.rows;
 
   // Chips for the graph rows. Hidden refs are left out: dropping the commits
   // only they reach is not enough, because a hidden branch pointing at a
@@ -241,6 +335,10 @@ async function graphPayload(tab: Tab, limit: number): Promise<string> {
     if (list === undefined) byHash.set(ref.hash, [ref.kind + ":" + ref.short]);
     else list.push(ref.kind + ":" + ref.short);
   }
+  // A stash's chip is its selector, which is also the only way to name it in
+  // a command. Nothing else can point at a stash commit, so this never has to
+  // merge with an existing list.
+  for (const stash of stashes) byHash.set(stash.commit.hash, ["stash:" + stash.selector]);
 
   const out: ApiCommit[] = [];
   for (let i = 0; i < commits.length; i++) {
@@ -262,8 +360,6 @@ async function graphPayload(tab: Tab, limit: number): Promise<string> {
       coAuthors: c.coAuthors,
     });
   }
-
-  const status = await readStatus(tab.path);
 
   // Conflicted files mean the in-progress operation needs resolving before it
   // can continue; that is the difference between "continue" and "resolve".
@@ -298,7 +394,10 @@ async function graphPayload(tab: Tab, limit: number): Promise<string> {
     pending,
     hidden,
     submodules,
-    colors: LANE_COLORS,
+    // Selector and message only: the sidebar lists them, the graph already
+    // has the commits themselves.
+    stashes: stashes.map((st) => ({ selector: st.selector, subject: st.commit.subject })),
+    colors: [...LANE_COLORS, STASH_LANE],
   });
 }
 

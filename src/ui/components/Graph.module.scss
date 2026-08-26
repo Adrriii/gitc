@@ -105,6 +105,16 @@
   padding: 0 5px 0 8px;
 }
 
+// The fill is set inline, from the commit's lane colour - a chip is a label
+// for one commit, and a column of identically grey chips said nothing about
+// which lane each belonged to. Only the parts that do NOT vary per commit
+// live here.
+//
+// Dimmed until the row is selected or hovered. Two reasons: a graph where
+// every chip shouts equally is a graph with no emphasis at all, and 0.5 is
+// what the reference itself uses for a chip it wants out of the way (its
+// dimmed chip sampled at rgb(27,47,54), which is exactly its ordinary
+// rgb(26,63,74) at half strength over the background).
 .chip {
   display: flex;
   align-items: center;
@@ -117,35 +127,47 @@
   // Bounded by the column: .chipName carries the ellipsis.
   max-width: 100%;
   overflow: hidden;
-  background: var(--bg-4);
   color: var(--fg);
+  opacity: 0.5;
 }
 
 .chipLocal {
-  background: var(--bg-4);
   color: var(--fg);
 }
 
 // The branch actually checked out. Everything else is a pointer; this is
-// where you are, so it is the only chip that is filled and ticked.
+// where you are - so it is ticked, filled at twice the alpha of an ordinary
+// chip, and never dimmed. Hiding where you are behind a selection would be
+// the one case where the dimming actively costs you something.
 .chipHead {
-  background: var(--chip-head);
   color: var(--chip-head-fg);
   font-weight: 600;
-  box-shadow: 0 0 0 1px var(--accent-line);
+  opacity: 1;
 }
 .chipRemote {
-  background: var(--bg-4);
   color: var(--fg-dim);
 }
 .chipTag {
-  background: var(--bg-4);
   color: var(--fg);
+}
+
+// A shelf, not a line of work. Italic and dimmed text so a row of stashes on
+// the commit you are sitting on cannot be mistaken for a row of branches.
+.chipStash {
+  color: var(--fg-dim);
+  font-style: italic;
 }
 .chipWip {
   background: var(--bg-4);
   color: var(--fg-dim);
   font-style: italic;
+}
+
+// Selecting a commit, or running the pointer over its row, brings its chips
+// up to full strength - which lands them on the reference's ordinary chip.
+.row:hover .chip,
+.sel .chip {
+  opacity: 1;
 }
 
 .chipName {
@@ -161,6 +183,18 @@
   z-index: 5;
 
   .chips {
+    // `min-width` is what stops a chip from running away from the pointer.
+    // The strip is anchored to the column's LEFT edge while its contents are
+    // right-aligned, so `width: max-content` on its own shrank the box to fit
+    // whenever the name was shorter than the column - and the chip jumped
+    // left by the difference the instant it was hovered. Anything short
+    // enough was then genuinely hard to right-click, because the first thing
+    // hovering it did was move it out from under the cursor.
+    //
+    // Never narrower than the column: a chip that already fits does not move
+    // at all, and a truncated one still grows rightward over the lanes,
+    // which is the only direction that keeps the start of the name visible.
+    min-width: 100%;
     width: max-content;
   }
 
@@ -168,6 +202,47 @@
     max-width: 340px;
   }
 }
+// The line joining a chip to the commit it names.
+//
+// A chip floating in the gap is a label for nothing in particular: on a busy
+// row you had to count rows across to see which commit it belonged to. The
+// reference draws a line across the gap in that commit's own lane colour,
+// which also makes the chip's colour and the lane's agree.
+//
+// Sampled off the reference rather than guessed: 1px at 25% for an ordinary
+// ref, 2px at full opacity for the branch you are on - `rgb(26,62,74)` and
+// `rgb(21,160,191)` respectively against a `rgb(28,30,35)` background, which
+// is exactly that lane's cyan at those two alphas.
+//
+// `calc(50% - 1px)` rather than a translate, so both heights land on whole
+// pixels: the 2px one covers the same two rows as the lane stroke it meets
+// (which is drawn 2px wide centred on the row), and the 1px one is not
+// smeared across two rows at half strength.
+//
+// Painted before .graphCell in DOM order and left unpositioned in z, so the
+// lane lines it crosses stay unbroken on top of it.
+// The line tracks its chip: half strength while the chip is dimmed, full 25%
+// once the row is selected or hovered. Letting it stay at 25% under a chip
+// filled at 12.5% would put the tail brighter than the label it belongs to.
+.refLine {
+  position: absolute;
+  top: calc(50% - 1px);
+  height: 1px;
+  opacity: 0.125;
+  pointer-events: none;
+}
+
+.row:hover .refLine,
+.sel .refLine {
+  opacity: 0.25;
+}
+
+// Last, so it wins over the two above on a row that is also selected.
+.headRow .refLine {
+  height: 2px;
+  opacity: 1;
+}
+
 .chipIco {
   opacity: 0.85;
   flex: none;

@@ -208,6 +208,15 @@ export interface OpResult {
   note: string;
   pending: string;
   refusal: PushRefusal;
+  /** It worked, but not the way it was probably meant to - amber, not green. */
+  warn: boolean;
+}
+
+/** A stash entry, as the sidebar lists it. */
+export interface StashRef {
+  /** "stash@{0}" - positional, and shifts whenever any stash is added or dropped. */
+  selector: string;
+  subject: string;
 }
 
 export interface GraphPayload {
@@ -226,6 +235,8 @@ export interface GraphPayload {
   /** Ref display names hidden from the graph. */
   hidden: string[];
   submodules: Submodule[];
+  /** Newest first, the order `git stash list` gives them. */
+  stashes: StashRef[];
   colors: string[];
 }
 

@@ -138,6 +138,36 @@ export function useFetchInterval() {
   return { minutes, set };
 }
 
+// --- how the sidebar arranges branches ---------------------------------------
+
+const FOLDERS_KEY = "gitc.branchFolders";
+
+function parseFolders(raw: string): boolean | null {
+  if (raw === "1") return true;
+  if (raw === "0") return false;
+  return null;
+}
+
+/**
+ * Whether branch names are nested into folders in the sidebar.
+ *
+ * On by default, because `adri/feature/login` restating its prefix eleven
+ * times is what the nesting exists to stop. Off is for the other question the
+ * sidebar gets asked - "what was I working on?" - which folders actively
+ * obstruct: the four branches you touched today are scattered across four
+ * collapsed folders, in date order within each and no order at all between
+ * them. Flattened, the list is simply the most recent first.
+ *
+ * Its control is in the sidebar rather than in Preferences: it is a way of
+ * looking at the list you switch while looking at the list.
+ */
+export function useBranchFolders() {
+  const [folders, set] = useStored<boolean>(FOLDERS_KEY, true, parseFolders, (v) =>
+    v ? "1" : "0",
+  );
+  return { folders, set };
+}
+
 // --- commands kept out of the log -------------------------------------------
 
 const HIDDEN_COMMANDS_KEY = "gitc.hiddenCommands";

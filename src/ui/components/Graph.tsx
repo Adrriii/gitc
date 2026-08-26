@@ -3,6 +3,7 @@ import type { Commit, GraphPayload, GraphRow, Person } from "../types";
 import { Avatar } from "./Avatar";
 import { Icon } from "./Icon";
 import { groupRefs } from "../refGroups";
+import { stashName } from "../stashes";
 import type { RefGroup } from "../refGroups";
 import s from "./Graph.module.scss";
 
@@ -16,11 +17,21 @@ const MERGE_R = 6;
 const PAD_X = 14;
 const OVERSCAN = 12;
 const CORNER = 7;
+/**
+ * Right padding inside the branch column, and so where a chip's edge sits.
+ *
+ * Chips are right-aligned in that column, which makes this the one number the
+ * connector line has to agree with - it starts where the chip stops. Kept in
+ * step with `.chips`'s padding in Graph.module.scss.
+ */
+const CHIPS_PAD_R = 5;
 /** Default width of the branch/tag column; draggable like the graph column. */
 const CHIPS_W_DEFAULT = 128;
 const CHIPS_W_MIN = 40;
 const CHIPS_W_MAX = 420;
 const CHIPS_W_KEY = "gitc.chipsWidth";
+/** Side of the dotted square a stash is drawn as, in place of a face. */
+const STASH_NODE = 18;
 /** Node diameter, and how much of each stacked face shows collapsed/expanded. */
 const NODE_SIZE = 22;
 const PILE_COLLAPSED = 7;
@@ -81,11 +92,14 @@ function RowGraph({
   colors,
   wip,
   merge,
+  stash,
 }: {
   row: GraphRow;
   colors: string[];
   wip?: boolean;
   merge?: boolean;
+  /** A stash entry rather than a commit - drawn as a dotted square. */
+  stash?: boolean;
 }) {
   const width = (row.width + 1) * LANE_W + PAD_X * 2;
   const mid = ROW_H / 2;
@@ -136,9 +150,28 @@ function RowGraph({
         <path d={`M${x},${mid} V${ROW_H}`} stroke={colorOf(row.color)} strokeWidth={2} fill="none" />
       )}
 
-      {merge && !wip && (
+      {merge && !wip && !stash && (
         // Merge commits render as a small solid dot, matching the reference.
         <circle cx={x} cy={mid} r={MERGE_R} fill={colorOf(row.color)} />
+      )}
+      {stash && (
+        // A square with a dotted border, against the round nodes everywhere
+        // else. A stash is not history and is not on any branch, so it should
+        // not be able to be mistaken for a commit at a glance - the same
+        // argument the dashed WIP circle already makes, in a different shape
+        // so the two cannot be confused with each other either.
+        <rect
+          x={x - STASH_NODE / 2}
+          y={mid - STASH_NODE / 2}
+          width={STASH_NODE}
+          height={STASH_NODE}
+          rx={2}
+          fill="var(--bg-0)"
+          stroke={colorOf(row.color)}
+          strokeWidth={2}
+          strokeDasharray="2 3"
+          strokeLinecap="round"
+        />
       )}
       {wip && (
         <circle
@@ -250,7 +283,9 @@ function CommitNode({
 
 /** Where a branch of this name exists: on disk, and on which remotes. */
 function Where({ group }: { group: RefGroup }) {
-  if (group.kind === "tag") return null;
+  // A stash exists in exactly one place and cannot exist anywhere else, so
+  // there is nothing for these badges to say about one.
+  if (group.kind === "tag" || group.kind === "stash") return null;
   return (
     <>
       {group.local && (
@@ -263,29 +298,63 @@ function Where({ group }: { group: RefGroup }) {
   );
 }
 
+/**
+ * Chip fill, as an alpha suffix on the commit's lane colour.
+ *
+ * Sampled from the reference (docs/ui-spec.md): an ordinary chip is the lane
+ * colour at 25% over the graph background, the checked-out one at 50%. `40`
+ * and `80` are those two as hex alpha - the same trick `tintOf` uses for the
+ * lane band, so a chip and its band cannot drift out of agreement.
+ */
+const CHIP_ALPHA = "40";
+const CHIP_ALPHA_HEAD = "80";
+
 function GroupChip({
   group,
+  laneColor,
   onContext,
   onCheckout,
 }: {
   group: RefGroup;
+  /** The lane colour of the commit this chip names. */
+  laneColor: string;
   onContext: (kind: string, name: string, x: number, y: number) => void;
   onCheckout: (kind: string, name: string) => void;
 }) {
-  const cls =
-    group.kind === "tag" ? s.chipTag : group.local ? s.chipLocal : s.chipRemote;
-  const where =
-    group.kind === "tag"
+  const stash = group.kind === "stash";
+  const cls = stash
+    ? s.chipStash
+    : group.kind === "tag"
+      ? s.chipTag
+      : group.local
+        ? s.chipLocal
+        : s.chipRemote;
+  const where = stash
+    ? "stash"
+    : group.kind === "tag"
       ? "tag"
-      : [group.local ? "local" : null, ...group.remotes]
-          .filter(Boolean)
-          .join(", ");
+      : [group.local ? "local" : null, ...group.remotes].filter(Boolean).join(", ");
   return (
     <span
       className={`${s.chip} ${cls} ${group.isHead ? s.chipHead : ""}`}
-      title={`${group.name} — ${where}${group.isHead ? " — checked out" : ""}
-double-click to check out, right-click for actions`}
-      onDoubleClick={() => onCheckout(group.actionKind, group.actionName)}
+      style={{
+        background: laneColor + (group.isHead ? CHIP_ALPHA_HEAD : CHIP_ALPHA),
+        // The checked-out chip is outlined in its own lane colour rather than
+        // the interface accent, which would be a second unrelated hue sitting
+        // on top of the one the chip is now made of.
+        boxShadow: group.isHead ? `0 0 0 1px ${laneColor}` : undefined,
+      }}
+      // No double-click line for a stash: checking one out would detach HEAD
+      // onto git's own bookkeeping commit, which is never what was meant.
+      title={
+        stash
+          ? `${group.name} — stash\nright-click to apply, pop or delete`
+          : `${group.name} — ${where}${group.isHead ? " — checked out" : ""}
+double-click to check out, right-click for actions`
+      }
+      onDoubleClick={() => {
+        if (!stash) onCheckout(group.actionKind, group.actionName);
+      }}
       onContextMenu={(e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -293,6 +362,7 @@ double-click to check out, right-click for actions`}
       }}
     >
       {group.isHead && <Icon name="check" size={11} className={s.chipIco} />}
+      {stash && <Icon name="stash" size={11} className={s.chipIco} />}
       {!group.isHead && group.kind === "tag" && (
         <Icon name="tag" size={11} className={s.chipIco} />
       )}
@@ -357,6 +427,8 @@ function QuickCommit({
 function RefCell({
   width,
   labels,
+  laneColor,
+  stashNames,
   headBranch,
   menuOpen,
   onContext,
@@ -364,13 +436,20 @@ function RefCell({
 }: {
   width: number;
   labels: string[];
+  /** The lane colour of the commit these chips name. */
+  laneColor: string;
+  /** Stash selector to display name. */
+  stashNames: Map<string, string>;
   headBranch: string | null;
   /** True while a context menu is showing anywhere in the app. */
   menuOpen: boolean;
   onContext: (kind: string, name: string, x: number, y: number) => void;
   onCheckout: (kind: string, name: string) => void;
 }) {
-  const groups = useMemo(() => groupRefs(labels, headBranch), [labels, headBranch]);
+  const groups = useMemo(
+    () => groupRefs(labels, headBranch, stashNames),
+    [labels, headBranch, stashNames],
+  );
   const [hovered, setHovered] = useState(false);
   // Right-clicking an entry opens a menu, which moves the pointer off the
   // list. On plain :hover the list would vanish underneath the menu it just
@@ -394,7 +473,12 @@ function RefCell({
       onMouseLeave={() => setHovered(false)}
     >
       <div className={s.chips}>
-        <GroupChip group={first} onContext={onContext} onCheckout={onCheckout} />
+        <GroupChip
+          group={first}
+          laneColor={laneColor}
+          onContext={onContext}
+          onCheckout={onCheckout}
+        />
         {rest.length > 0 && <span className={s.overflowCount}>+{rest.length}</span>}
       </div>
 
@@ -475,22 +559,36 @@ export function Graph({
   const [scrollTop, setScrollTop] = useState(0);
   const [height, setHeight] = useState(800);
 
-  const hasWip = data.status.length > 0;
   const now = Math.floor(Date.now() / 1000);
 
-  // The WIP node is synthetic: it isn't a commit, but it occupies row 0 and
-  // sits on the checked-out branch's lane so the line reads continuously.
-  const total = data.commits.length + (hasWip ? 1 : 0);
+  // Selector to what the chip should say. The chips carry selectors because
+  // that is what an action needs; nobody reading the graph wants to see one.
+  const stashNames = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const st of data.stashes ?? []) m.set(st.selector, stashName(st.subject));
+    return m;
+  }, [data.stashes]);
+
+  // The WIP row arrives from the engine as an ordinary commit, dated now with
+  // HEAD as its parent, so it has a lane and a colour like everything else and
+  // needs no index arithmetic here. It ends up at the top because nothing is
+  // newer than it, which is the only reason it should be there.
+  const total = data.commits.length;
 
   const markers = useMemo(() => {
-    // Topological order is not chronological - a merged branch's commits can
-    // be much older than the rows around them. Emitting a marker on every
-    // bucket change would make the column flicker between "2 hours ago" and
-    // "yesterday" and back. Only mark when we cross into an older bucket than
-    // anything shown so far, so the column reads as a monotonic timeline.
+    // Even in date order the list is not strictly chronological: a child must
+    // still be listed above its parent, and a rebase or a skewed clock can
+    // leave a commit dated before one of its own descendants. Emitting a
+    // marker on every bucket change would make the column flicker between "2
+    // hours ago" and "yesterday" and back. Only mark when we cross into an
+    // older bucket than anything shown so far, so the column reads as a
+    // monotonic timeline.
     const out = new Map<number, string>();
     let deepest = -1;
     data.commits.forEach((c, i) => {
+      // The WIP row is dated now and would open the column with a "now"
+      // marker above work that has not happened yet.
+      if (c.hash === "WIP") return;
       const age = now - c.date;
       if (age > deepest) {
         const b = bucket(c.date, now);
@@ -532,12 +630,11 @@ export function Graph({
   const visibleWidth = useMemo(() => {
     let max = 0;
     for (let i = first; i < last; i++) {
-      const ci = hasWip ? i - 1 : i;
-      const r = data.rows[ci];
+      const r = data.rows[i];
       if (r !== undefined && r.width > max) max = r.width;
     }
     return Math.max(GRAPH_W_MIN, (max + 1) * LANE_W + PAD_X * 2);
-  }, [data.rows, first, last, hasWip]);
+  }, [data.rows, first, last]);
 
   // Width the whole history would need - only used for the tooltip.
   const naturalWidth = useMemo(() => {
@@ -620,12 +717,14 @@ export function Graph({
 
   const rows: React.ReactNode[] = [];
   for (let i = first; i < last; i++) {
-    const wipRow = hasWip && i === 0;
-    const ci = hasWip ? i - 1 : i;
+    const c: Commit = data.commits[i];
+    const row = data.rows[i];
+    if (!c || !row) continue;
 
-    if (wipRow) {
-      const headLane = data.rows.length > 0 ? data.rows[0].lane : 0;
-      const headColor = data.rows.length > 0 ? data.rows[0].color : 0;
+    // Its lane, colour and crossings all come from the walk now, so the row
+    // only has to look different - a dashed node and an input where a subject
+    // would go.
+    if (c.hash === "WIP") {
       const modified = data.status.filter((f) => !f.untracked).length;
       const added = data.status.filter((f) => f.untracked).length;
       const staged = data.status.filter((f) => f.staged).length;
@@ -633,26 +732,12 @@ export function Graph({
         <div
           key="wip"
           className={`${s.row} ${s.wip} ${selectedSet.has("WIP") ? s.sel : ""}`}
-          style={{ top: 0 }}
+          style={{ top: i * ROW_H }}
           onClick={() => onSelect("WIP", false, false)}
         >
           <div className={s.chips} style={{ width: chipsWidth }} />
           <div className={s.graphCell} style={{ width: graphWidth }}>
-            <RowGraph
-              row={{
-                hash: "WIP",
-                lane: headLane,
-                color: headColor,
-                through: [],
-                merges: [],
-                forks: [],
-                hasTop: false,
-                hasBottom: true,
-                width: headLane,
-              }}
-              colors={data.colors}
-              wip
-            />
+            <RowGraph row={row} colors={data.colors} wip />
           </div>
           <div className={s.strip} style={{ background: "transparent" }} />
           <div className={s.msg}>
@@ -670,12 +755,13 @@ export function Graph({
       continue;
     }
 
-    const c: Commit = data.commits[ci];
-    let row = data.rows[ci];
-    if (!c || !row) continue;
-    // The synthetic WIP node sits above row 0, so row 0 must draw a line up
-    // to meet it or the lane appears to break.
-    if (hasWip && ci === 0 && !row.hasTop) row = { ...row, hasTop: true };
+    // The stash label is the only thing that can carry this prefix, and it is
+    // already on the row - cheaper than a flag on every commit in the payload
+    // for the handful of rows that are stashes.
+    const stashRow = c.refs.some((r) => r.startsWith("stash:"));
+    const stashSelector = stashRow
+      ? (c.refs.find((r) => r.startsWith("stash:")) ?? "").substring("stash:".length)
+      : "";
 
     rows.push(
       <div
@@ -690,12 +776,31 @@ export function Graph({
         onClick={(e) => onSelect(c.hash, e.ctrlKey || e.metaKey, e.shiftKey)}
         onContextMenu={(e) => {
           e.preventDefault();
-          onContext(c.hash, e.clientX, e.clientY);
+          // The whole row, not just the chip. A stash IS a commit as far as
+          // the graph is concerned, so the commit menu was reachable on it -
+          // offering to check it out, branch from it and cherry-pick it, none
+          // of which mean anything for a stash and one of which detaches HEAD
+          // onto git's own bookkeeping.
+          if (stashRow) onRefContext("stash", stashSelector, e.clientX, e.clientY);
+          else onContext(c.hash, e.clientX, e.clientY);
         }}
       >
+        {/* First in the row, so the lane lines it runs under paint over it. */}
+        {c.refs.length > 0 && (
+          <div
+            className={s.refLine}
+            style={{
+              left: chipsWidth - CHIPS_PAD_R,
+              width: laneX(row.lane) + CHIPS_PAD_R,
+              background: data.colors[row.color % data.colors.length],
+            }}
+          />
+        )}
         <RefCell
           width={chipsWidth}
           labels={c.refs}
+          laneColor={data.colors[row.color % data.colors.length]}
+          stashNames={stashNames}
           headBranch={data.head.branch}
           menuOpen={menuOpen}
           onContext={onRefContext}
@@ -711,12 +816,18 @@ export function Graph({
               background: tintOf(row.color, selectedSet.has(c.hash)),
             }}
           />
-          <RowGraph row={row} colors={data.colors} merge={c.parents.length > 1} />
+          <RowGraph
+            row={row}
+            colors={data.colors}
+            merge={c.parents.length > 1}
+            stash={stashRow}
+          />
         </div>
         {/* Positioned on the row rather than inside the graph cell: the cell
             clips its overflow to keep lanes tidy, and the expanded stack needs
-            to reach across the coloured band. */}
-        {c.parents.length <= 1 && (
+            to reach across the coloured band. A stash gets no face: it is not
+            somebody's contribution, it is your own shelf. */}
+        {c.parents.length <= 1 && !stashRow && (
           <CommitNode
             x={laneX(row.lane)}
             color={data.colors[row.color % data.colors.length]}
@@ -735,7 +846,7 @@ export function Graph({
         <div className={s.msg}>
           <span className={s.subject}>{c.subject}</span>
           {c.body && <span className={s.body}>{c.body.split("\n")[0]}</span>}
-          {markers.has(ci) && <span className={s.when}>{markers.get(ci)}</span>}
+          {markers.has(i) && <span className={s.when}>{markers.get(i)}</span>}
         </div>
       </div>,
     );

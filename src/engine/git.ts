@@ -450,9 +450,20 @@ export interface RefFilter {
 /**
  * Reads the commit list.
  *
- * `--topo-order` matters: it keeps a branch's commits contiguous instead of
- * interleaving them by date, which is what makes the graph readable, and
- * what every graph viewer worth using does.
+ * `--date-order`, not `--topo-order`. Both guarantee the one thing the lane
+ * builder needs - a parent never appears above its child - and they differ in
+ * what they do with the freedom that leaves.
+ *
+ * `--topo-order` spends it keeping each branch's commits contiguous, which
+ * sounds like readability and is not: it means a branch nobody has touched
+ * since March gets its whole run printed in the middle of this week's work,
+ * purely because of where it attaches. The graph then says two things that
+ * are both false - that those commits happened then, and that the ones either
+ * side of them are related to them.
+ *
+ * `--date-order` spends it on the date, which is the thing the column is
+ * labelled with and the thing anybody scanning the list is actually reading.
+ * Branches interleave, which is what really happened.
  */
 export async function readCommits(
   repo: string,
@@ -493,7 +504,7 @@ export async function readCommits(
   // HEAD is always walked, listed or not: you must be able to see where you
   // are, and hiding the branch you are standing on should not blank the graph.
   walk.push("HEAD");
-  walk.push("--topo-order");
+  walk.push("--date-order");
   walk.push("--max-count=" + limit);
   walk.push("--format=" + fmt);
 
@@ -517,6 +528,66 @@ export async function readCommits(
     });
   }
   return commits;
+}
+
+/** A stash entry: the commit git made for it, and how to name it again. */
+export interface RawStash {
+  commit: RawCommit;
+  /**
+   * Reflog selector - "stash@{0}".
+   *
+   * Positional, and it MOVES: dropping stash@{1} renumbers everything below
+   * it, and pushing a new stash renumbers everything. So it is fine to show
+   * and fine to pass straight to a command run now, and no use at all as
+   * something to remember.
+   */
+  selector: string;
+}
+
+/**
+ * The stashes, newest first.
+ *
+ * A stash is a real commit, which is why it can be drawn in the graph at all -
+ * but it is a commit with up to three parents: what you were sitting on, a
+ * commit holding the index, and (with -u) one holding the untracked files.
+ * Only the first is history. The other two are git's own bookkeeping and have
+ * no business in a graph, so they are dropped here rather than filtered out
+ * later - that is the whole reason `readCommits` refuses `--all`.
+ */
+export async function readStashes(repo: string): Promise<RawStash[]> {
+  const fmt = "%x01%H%x00%P%x00%an%x00%ae%x00%at%x00%gd%x00%gs";
+  // Declared before the early return, not returned as a bare `[]`: scriptc
+  // types an empty array literal as number[] and then refuses to widen it
+  // (SC2002). See docs/toolchain.md.
+  const out: RawStash[] = [];
+
+  // Null rather than an error when there is no stash ref at all.
+  const raw = await gitOrNull(repo, ["stash", "list", "--format=" + fmt]);
+  if (raw === null) return out;
+
+  for (const record of raw.split(RECORD)) {
+    if (record.length === 0) continue;
+    const f = record.split(SEP);
+    if (f.length < 7) continue;
+    const parents = f[1].length > 0 ? f[1].split(" ") : [];
+    out.push({
+      selector: f[5],
+      commit: {
+        hash: f[0],
+        parents: parents.length > 0 ? [parents[0]] : [],
+        author: f[2],
+        email: f[3],
+        date: parseInt(f[4], 10),
+        // The reflog subject, which is what `git stash list` itself prints:
+        // "On main: fixing the parser", or "WIP on main: 1a2b3c subject"
+        // when the stash was taken without a message.
+        subject: f[6].trim(),
+        body: "",
+        coAuthors: [],
+      },
+    });
+  }
+  return out;
 }
 
 export interface FileChange {

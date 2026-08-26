@@ -1,6 +1,9 @@
 import { useMemo, useState } from "react";
 import type { GraphPayload, Ref, Submodule } from "../types";
-import { buildTree, collectItems, countItems, type TreeNode } from "../pathTree";
+import { buildTree, flatTree, collectItems, countItems, type TreeNode } from "../pathTree";
+import { useBranchFolders } from "../settings";
+import { stashName } from "../stashes";
+import { ago } from "../ago";
 import { Icon } from "./Icon";
 import s from "./Sidebar.module.scss";
 
@@ -122,6 +125,8 @@ interface TreeProps {
   onContext: (ref: Ref, x: number, y: number) => void;
   onFolderContext: (label: string, refs: string[], x: number, y: number) => void;
   onSetHidden: (refs: string[], hide: boolean) => void;
+  /** How long ago a ref last moved, formatted for the row. */
+  ageOf: (r: Ref) => string;
 }
 
 /**
@@ -192,6 +197,7 @@ function Tree(p: TreeProps) {
               <RefRow
                 r={node.item}
                 label={node.name}
+                age={p.ageOf(node.item)}
                 // A name that is also a folder sits at its folder's own depth,
                 // so its row indents one more step to read as being inside it.
                 depth={folder ? p.depth + 1 : p.depth}
@@ -220,6 +226,7 @@ function Tree(p: TreeProps) {
 function RefRow({
   r,
   label,
+  age,
   depth,
   headBranch,
   hidden,
@@ -229,6 +236,8 @@ function RefRow({
 }: {
   r: Ref;
   label: string;
+  /** How long ago this branch last moved, already formatted. "" if unknown. */
+  age: string;
   depth: number;
   headBranch: string | null;
   hidden: boolean;
@@ -251,6 +260,10 @@ function RefRow({
       <Eye hidden={hidden} onClick={() => onSetHidden([r.short], !hidden)} />
       <Icon name={current ? "check" : "branch"} size={12} className={s.refIco} />
       <span className={s.refName}>{label}</span>
+      {/* Sits between the name and the kebab, and is replaced by the kebab
+          on hover - the same slot-sharing the section headers use, so the
+          age costs no width when you are reaching for the menu. */}
+      {age.length > 0 && <span className={s.refAge}>{age}</span>}
       <RowControls hidden={hidden} onMenu={(x, y) => onContext(r, x, y)} />
     </div>
   );
@@ -289,6 +302,7 @@ export function Sidebar({
   onSetHidden,
   onOpenSubmodule,
   onSubmoduleContext,
+  onStashContext,
 }: {
   data: GraphPayload;
   onContext: (ref: Ref, x: number, y: number) => void;
@@ -302,6 +316,7 @@ export function Sidebar({
   /** Opens a submodule as its own repository tab. */
   onOpenSubmodule: (sub: Submodule) => void;
   onSubmoduleContext: (sub: Submodule, x: number, y: number) => void;
+  onStashContext: (selector: string, x: number, y: number) => void;
 }) {
   const [filter, setFilter] = useState("");
   // Which single section is expanded. Clicking the open one closes it, which
@@ -327,6 +342,36 @@ export function Sidebar({
 
   const hidden = useMemo(() => new Set(data.hidden ?? []), [data.hidden]);
   const submodules = data.submodules ?? [];
+  const stashes = data.stashes ?? [];
+
+  const { folders, set: setFolders } = useBranchFolders();
+
+  /**
+   * When each branch last moved, from the commits already on screen.
+   *
+   * Deliberately not a `git for-each-ref` of its own: the graph payload
+   * already carries every commit in the window with its date, and a branch
+   * tip is by definition one of the walk's starting points, so it is in there.
+   * A tip old enough to have fallen off the end of the window comes back 0 -
+   * which sorts it last, and last is where a branch nobody has touched in two
+   * thousand commits belongs anyway.
+   */
+  const dateOf = useMemo(() => {
+    const byHash = new Map<string, number>();
+    for (const c of data.commits) byHash.set(c.hash, c.date);
+    return (r: Ref) => byHash.get(r.hash) ?? 0;
+  }, [data.commits]);
+
+  // The same number the ordering uses, shown on the row - otherwise the list
+  // is in an order with no visible reason for it, and "why is this one first?"
+  // has no answer on screen.
+  const ageOf = useMemo(() => {
+    const now = Date.now();
+    return (r: Ref) => {
+      const at = dateOf(r);
+      return at === 0 ? "" : ago(now - at * 1000);
+    };
+  }, [dateOf]);
 
   const { localTree, localCount, remoteTrees, remoteCount, tags } = useMemo(() => {
     const f = filter.trim().toLowerCase();
@@ -335,7 +380,10 @@ export function Sidebar({
     const locals = data.refs.filter((r) => r.kind === "local" && match(r));
     const tags = data.refs.filter((r) => r.kind === "tag" && match(r));
 
-    const localTree = buildTree(locals, (r) => r.short);
+    const arrange = (refs: Ref[], pathOf: (r: Ref) => string) =>
+      folders ? buildTree(refs, pathOf, dateOf) : flatTree(refs, pathOf, dateOf);
+
+    const localTree = arrange(locals, (r) => r.short);
 
     // Remote branches nest under their remote's row, so the remote's own name
     // is stripped before the tree is built - otherwise every remote's branches
@@ -355,12 +403,12 @@ export function Sidebar({
     for (const [remote, refs] of byRemote) {
       remoteTrees.set(
         remote,
-        buildTree(refs, (r) => r.short.substring(remote.length + 1)),
+        arrange(refs, (r) => r.short.substring(remote.length + 1)),
       );
     }
 
     return { localTree, localCount: locals.length, remoteTrees, remoteCount, tags };
-  }, [data.refs, filter]);
+  }, [data.refs, filter, folders, dateOf]);
 
   // Every configured remote, including one never fetched and so owning no refs
   // - it still exists, and hiding it would make "add a remote" look like it
@@ -380,6 +428,7 @@ export function Sidebar({
     onContext,
     onFolderContext,
     onSetHidden,
+    ageOf,
   };
 
   return (
@@ -391,6 +440,20 @@ export function Sidebar({
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
         />
+        {/* Beside the filter rather than in Preferences: this is a way of
+            looking at the list, and you decide you want it while looking at
+            the list. */}
+        <button
+          className={`${s.grouping} ${folders ? s.groupingOn : ""}`}
+          onClick={() => setFolders(!folders)}
+          title={
+            folders
+              ? "Grouping branches into folders by name. Click to flatten the list and show every branch by date."
+              : "Showing every branch by date, most recent first. Click to group them into folders by name."
+          }
+        >
+          <Icon name="folder" size={13} />
+        </button>
       </div>
       <div className={s.scroll}>
         <Section
@@ -469,6 +532,39 @@ export function Sidebar({
             </div>
           ))}
         </Section>
+
+        {/* Like submodules: shown only when there are any. A permanent empty
+            STASHES row would be a reminder of nothing in most repositories.
+            No eye control - a stash is not a ref and cannot be hidden from
+            the graph, because it is not reachable from one. */}
+        {stashes.length > 0 && (
+          <Section
+            name="STASHES"
+            count={stashes.length}
+            open={expanded === "STASHES"}
+            onToggle={() => toggle("STASHES")}
+          >
+            {stashes.map((st) => (
+              <div
+                key={st.selector}
+                className={s.ref}
+                style={{ paddingLeft: 4 }}
+                title={`${st.selector} — ${st.subject}\nright-click to apply, pop or delete`}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  onStashContext(st.selector, e.clientX, e.clientY);
+                }}
+              >
+                <Icon name="stash" size={12} className={s.refIco} />
+                <span className={s.refName}>{stashName(st.subject)}</span>
+                <RowControls
+                  hidden={false}
+                  onMenu={(x, y) => onStashContext(st.selector, x, y)}
+                />
+              </div>
+            ))}
+          </Section>
+        )}
 
         {/* Only when the repository has any: an always-present empty section
             would be noise in the overwhelming majority of repositories. */}

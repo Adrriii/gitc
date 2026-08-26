@@ -194,6 +194,10 @@ export function App() {
     if (data === null) return null;
     const lanes: string[] = [];
     for (let i = 0; i < 9; i++) lanes.push(themeColors["lane-" + String(i)]);
+    // One past the lanes, matching STASH_COLOR in the engine. Stashes are not
+    // branches and do not take a lane colour, so the theme gives them their
+    // own rather than spending one of the nine.
+    lanes.push(themeColors["stash"]);
     return { ...data, colors: lanes };
   }, [data, themeColors]);
 
@@ -382,33 +386,77 @@ export function App() {
   const freshness = useRepoWatch(activeId, refresh);
 
   /**
-   * Fetches the active repository on a timer.
+   * Keeps the active repository's remote data from going stale.
    *
    * Quiet by design: no spinner, no notice, and a failure - offline, no remote,
    * credentials wanted - is swallowed. An automatic action nobody asked for
    * should not be able to interrupt someone with an error, and the ticker
    * shows the command anyway for anyone who wants to see it happen.
+   *
+   * This is a *deadline*, not a metronome, and the difference is the whole
+   * point. The first version was a `setInterval(fetchMinutes)` that skipped
+   * its turn whenever the window was unfocused - so a window left in the
+   * background all day never fetched once, and every skipped turn cost a
+   * further full interval. With the setting on "1 minute" the remote could
+   * still read dozens of hours old, which is what it did.
+   *
+   * So the timer is short and cheap - it compares two numbers - and the
+   * decision is made from how old the remote data actually is. FETCH_HEAD's
+   * mtime is the source (`freshness.fetched`), which means a fetch run in a
+   * terminal counts too. Regaining focus checks immediately rather than
+   * waiting out a tick, because that is exactly the moment somebody is about
+   * to look.
    */
+  const fetchedRef = freshness.fetched;
+  const checkedRef = freshness.checked;
   useEffect(() => {
     if (activeId === null || fetchMinutes === 0) return;
     let stopped = false;
+    // Guards the two ways this could pile up: a fetch slower than the poll,
+    // and a remote that is refusing us - a failure leaves FETCH_HEAD alone,
+    // so without remembering the attempt we would retry every few seconds
+    // forever.
+    let inFlight = false;
+    let attempted = 0;
 
-    const tick = async () => {
-      if (stopped || !document.hasFocus() || document.hidden) return;
+    const due = fetchMinutes * 60 * 1000;
+
+    const check = async () => {
+      if (stopped || inFlight || !document.hasFocus() || document.hidden) return;
+      // No successful poll yet: `fetched` is still 0 because nobody has
+      // asked, not because the repository has never fetched.
+      if (checkedRef.current === 0) return;
+      const now = Date.now();
+      if (now - attempted < due) return;
+      if (fetchedRef.current !== 0 && now - fetchedRef.current < due) return;
+
+      inFlight = true;
+      attempted = now;
       try {
         await api.op(activeId, { op: "fetch" });
         if (!stopped) refresh();
       } catch {
         // Left alone on purpose - see above.
+      } finally {
+        inFlight = false;
       }
     };
 
-    const id = window.setInterval(() => void tick(), fetchMinutes * 60 * 1000);
+    // Short enough that "1 minute" means roughly a minute, cheap enough that
+    // it does not matter: everything past the guards above is arithmetic.
+    const id = window.setInterval(() => void check(), 5000);
+    const onFocus = () => void check();
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onFocus);
+    void check();
+
     return () => {
       stopped = true;
       window.clearInterval(id);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onFocus);
     };
-  }, [activeId, fetchMinutes, refresh]);
+  }, [activeId, fetchMinutes, refresh, fetchedRef, checkedRef]);
 
   /** Runs a repository operation and folds the outcome back into the UI. */
   const runOp = useCallback(
@@ -431,7 +479,12 @@ export function App() {
         if (!r.ok) {
           if (r.pending.length > 0) setWarning(r.note);
           else setError(r.note);
-        } else if (r.note.length > 0) setNotice(r.note);
+        } else if (r.note.length > 0) {
+          // Succeeded-with-a-caveat: green would read as "your branch is up to
+          // date" for the case that says precisely the opposite.
+          if (r.warn) setWarning(r.note);
+          else setNotice(r.note);
+        }
       } catch (e) {
         setError((e as Error).message);
       } finally {
@@ -1142,14 +1195,73 @@ export function App() {
    * and handed to the same menu the sidebar uses - one menu, one behaviour,
    * wherever a branch appears.
    */
+  /**
+   * The three things you can do with a stash.
+   *
+   * Apply and pop differ by one thing - whether the entry survives - and that
+   * is the difference worth spelling out, because getting it wrong the other
+   * way round loses work. Delete asks first for the same reason: a dropped
+   * stash is the one git operation with nothing left to recover from.
+   *
+   * The selector is positional and shifts the moment any stash is added or
+   * removed, so it is used immediately and never remembered.
+   */
+  const stashMenu = useCallback(
+    (selector: string, x: number, y: number) => {
+      setMenu({
+        x,
+        y,
+        items: [
+          {
+            label: `Apply ${selector}`,
+            hint: "keeps the stash",
+            action: () => void runOp({ op: "stashApply", ref: selector }),
+          },
+          {
+            label: `Pop ${selector}`,
+            hint: "applies, then drops it",
+            action: () => void runOp({ op: "stashPop", ref: selector }),
+          },
+          { separator: true },
+          {
+            label: `Delete ${selector}`,
+            action: () =>
+              setConfirm({
+                title: "Delete stash?",
+                body: (
+                  <p>
+                    <b>{selector}</b> will be dropped. The changes it holds are not on any
+                    branch, so this cannot be undone.
+                  </p>
+                ),
+                confirmLabel: "Delete",
+                destructive: true,
+                onConfirm: () => {
+                  setConfirm(null);
+                  void runOp({ op: "stashDrop", ref: selector });
+                },
+              }),
+          },
+        ],
+      });
+    },
+    [runOp],
+  );
+
   const chipMenu = useCallback(
     (kind: string, name: string, x: number, y: number) => {
       if (!data) return;
+      // A stash is not in `data.refs` - it is not a ref, it is a reflog entry -
+      // so it gets its own menu rather than being looked up and missed.
+      if (kind === "stash") {
+        stashMenu(name, x, y);
+        return;
+      }
       const ref = data.refs.find((r) => r.kind === kind && r.short === name);
       if (ref === undefined) return;
       refMenu(ref, x, y);
     },
-    [data, refMenu],
+    [data, refMenu, stashMenu],
   );
 
   // --- toolbar --------------------------------------------------------------
@@ -1286,6 +1398,7 @@ export function App() {
               onSetHidden={(refs, hide) => void setHidden(refs, hide)}
               onOpenSubmodule={(sub) => void openSubmodule(sub)}
               onSubmoduleContext={submoduleMenu}
+              onStashContext={stashMenu}
               onAddRemote={addRemote}
               onNewBranch={() =>
                 setPrompt({

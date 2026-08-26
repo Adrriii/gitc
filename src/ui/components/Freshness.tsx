@@ -1,24 +1,8 @@
 import { useEffect, useState } from "react";
 import type { Freshness as Signals } from "../useRepoWatch";
+import { ago, since } from "../ago";
 import { Icon } from "./Icon";
 import s from "./Freshness.module.scss";
-
-/** A duration, at the coarsest unit that still says something useful. */
-function ago(ms: number): string {
-  const secs = Math.floor(ms / 1000);
-  if (secs < 2) return "now";
-  if (secs < 60) return `${secs}s`;
-  const mins = Math.floor(secs / 60);
-  if (mins < 60) return `${mins}m`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h`;
-  return `${Math.floor(hours / 24)}d`;
-}
-
-/** The same duration as prose, where "now ago" would not do. */
-function since(ms: number): string {
-  return ms < 2000 ? "a moment ago" : `${ago(ms)} ago`;
-}
 
 function when(at: number): string {
   return new Date(at).toLocaleString();

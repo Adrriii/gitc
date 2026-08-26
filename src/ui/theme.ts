@@ -118,15 +118,20 @@ export const TOKEN_GROUPS: TokenGroup[] = [
     title: "Graph lanes",
     blurb: "Assigned to branches in order. They need to stay apart from each other.",
     tokens: [
-      { name: "lane-0", label: "Lane 1" },
-      { name: "lane-1", label: "Lane 2" },
-      { name: "lane-2", label: "Lane 3" },
-      { name: "lane-3", label: "Lane 4" },
-      { name: "lane-4", label: "Lane 5" },
-      { name: "lane-5", label: "Lane 6" },
-      { name: "lane-6", label: "Lane 7" },
-      { name: "lane-7", label: "Lane 8" },
-      { name: "lane-8", label: "Lane 9" },
+      // Not "Lane 1": the graph keeps this one for master/main and gives it
+      // to nothing else (see TRUNK_COLOR), so the label should say so rather
+      // than suggest it is the first of nine interchangeable slots.
+      { name: "lane-0", label: "master / main" },
+      { name: "lane-1", label: "Lane 1" },
+      { name: "lane-2", label: "Lane 2" },
+      { name: "lane-3", label: "Lane 3" },
+      { name: "lane-4", label: "Lane 4" },
+      { name: "lane-5", label: "Lane 5" },
+      { name: "lane-6", label: "Lane 6" },
+      { name: "lane-7", label: "Lane 7" },
+      { name: "lane-8", label: "Lane 8" },
+      // Not one of the lanes: stashes are drawn in this and nothing else is.
+      { name: "stash", label: "Stash" },
     ],
   },
 ];
@@ -189,6 +194,7 @@ const MIDNIGHT: Palette = {
   "lane-6": "#db61a2",
   "lane-7": "#7ee787",
   "lane-8": "#ff9d5c",
+  stash: "#8b93a1",
   "syn-keyword": "#569cd6",
   "syn-type": "#4ec9b0",
   "syn-number": "#b5cea8",
@@ -236,6 +242,7 @@ const GRAPHITE: Palette = {
   "lane-6": "#ba68c8",
   "lane-7": "#aed581",
   "lane-8": "#ffb74d",
+  stash: "#8d9296",
 };
 
 /** Warm and low-contrast, with amber where Midnight is blue. */
@@ -279,6 +286,7 @@ const EMBER: Palette = {
   "lane-6": "#d1729b",
   "lane-7": "#a8cf7e",
   "lane-8": "#f0a055",
+  stash: "#9b8d7d",
 };
 
 /** A light palette. Every token is defined here, not inherited from a dark one. */
@@ -326,6 +334,7 @@ const DAYLIGHT: Palette = {
   "lane-6": "#bf3989",
   "lane-7": "#2da44e",
   "lane-8": "#bc4c00",
+  stash: "#8e959d",
   "syn-keyword": "#cf222e",
   "syn-type": "#953800",
   "syn-number": "#0550ae",

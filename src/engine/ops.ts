@@ -84,9 +84,34 @@ export interface OpResult {
   pending: string;
   /** Set when a push was refused; `kind` is "none" otherwise. */
   refusal: PushRefusal;
+  /**
+   * The operation ran, but not the way it was probably meant to.
+   *
+   * Green for "done" and red for "broke" left nothing for the case that
+   * matters most here: double-clicking a remote branch whose local
+   * counterpart has diverged checks it out and then, correctly, refuses to
+   * throw away the local commits. Reporting that in green as a success would
+   * be telling somebody their branch is up to date when it is not.
+   */
+  warn: boolean;
 }
 
-const ok = (note: string): OpResult => ({ ok: true, note, pending: "", refusal: NO_REFUSAL });
+const ok = (note: string): OpResult => ({
+  ok: true,
+  note,
+  pending: "",
+  refusal: NO_REFUSAL,
+  warn: false,
+});
+
+/** Succeeded, with a caveat the user needs to see. */
+const warned = (note: string): OpResult => ({
+  ok: true,
+  note,
+  pending: "",
+  refusal: NO_REFUSAL,
+  warn: true,
+});
 
 /**
  * Quotes a path for the editor commands git will run through a shell.
@@ -155,10 +180,23 @@ async function conflictProne(
         note: label + " stopped with conflicts. Resolve them, then continue - or abort.",
         pending: pending.kind,
         refusal: NO_REFUSAL,
+        warn: false,
       };
     }
     throw e;
   }
+}
+
+/**
+ * Whether the index holds unmerged entries.
+ *
+ * The only evidence a conflicted stash restore leaves. Unlike a merge or a
+ * rebase there is no operation in progress and no marker file in .git, so
+ * "did that conflict?" has to be asked of the index itself.
+ */
+async function hasUnmerged(repo: string): Promise<boolean> {
+  const out = await gitOrNull(repo, ["--no-optional-locks", "ls-files", "--unmerged"]);
+  return out !== null && out.trim().length > 0;
 }
 
 /** Counts commits in a range, 0 if the range cannot be resolved. */
@@ -289,11 +327,12 @@ async function detachedWarning(repo: string): Promise<string> {
  */
 async function checkoutCarryingChanges(
   repo: string,
+  args: string[],
   ref: string,
   note: string,
 ): Promise<OpResult> {
   try {
-    await git(repo, ["checkout", ref]);
+    await git(repo, args);
     return ok(note);
   } catch (e) {
     const message = (e as Error).message;
@@ -315,12 +354,12 @@ async function checkoutCarryingChanges(
   ]);
   if (stashed.indexOf("No local changes") !== -1) {
     // Nothing to stash after all, so the refusal was about something else.
-    await git(repo, ["checkout", ref]);
+    await git(repo, args);
     return ok(note);
   }
 
   try {
-    await git(repo, ["checkout", ref]);
+    await git(repo, args);
   } catch (e) {
     // Could not switch even with a clean tree - put the work back before
     // reporting, so the failure costs nothing.
@@ -341,10 +380,177 @@ async function checkoutCarryingChanges(
       // No marker file exists for this, so name the state ourselves.
       pending: pending.kind.length > 0 ? pending.kind : "unmerged",
       refusal: NO_REFUSAL,
+      warn: false,
     };
   }
 
   return ok("switched to " + ref + " and brought your changes across");
+}
+
+/** Whether a fully-qualified ref exists. */
+async function refExists(repo: string, full: string): Promise<boolean> {
+  return (await gitOrNull(repo, ["rev-parse", "--verify", "--quiet", full])) !== null;
+}
+
+/**
+ * Links a local branch to the remote branch of the same name.
+ *
+ * A local `main` and an `origin/main` are the same branch as far as anyone
+ * working is concerned, and every part of gitc that says "2 ahead, 1 behind",
+ * or pushes without asking where to, needs the tracking config to say so.
+ * Setting it by hand is `git branch --set-upstream-to=origin/main main`,
+ * which is a thing nobody should have to remember.
+ *
+ * So checking a branch out adopts the obvious upstream when it has none.
+ * Narrowly:
+ *
+ *  - an upstream that is already set is never touched. It may deliberately
+ *    point somewhere else, and guessing over an explicit choice is worse than
+ *    not guessing at all.
+ *  - `prefer` wins when given - the remote whose branch was double-clicked.
+ *  - otherwise exactly one remote must carry the name. With two, "the obvious
+ *    upstream" is not obvious, and picking one silently would send a push to
+ *    a place that was never chosen.
+ *
+ * Returns the upstream it set, or "" for "left alone".
+ */
+async function adoptUpstream(repo: string, name: string, prefer: string): Promise<string> {
+  const existing = await gitOrNull(repo, [
+    "for-each-ref",
+    "--format=%(upstream:short)",
+    "refs/heads/" + name,
+  ]);
+  if (existing !== null && existing.trim().length > 0) return "";
+
+  let upstream = "";
+  if (prefer.length > 0 && (await refExists(repo, "refs/remotes/" + prefer))) {
+    upstream = prefer;
+  } else {
+    for (const remote of readRemotes(repo).remotes) {
+      const candidate = remote + "/" + name;
+      if (!(await refExists(repo, "refs/remotes/" + candidate))) continue;
+      // A second one makes the answer ambiguous, so there is no answer.
+      if (upstream.length > 0) return "";
+      upstream = candidate;
+    }
+  }
+  if (upstream.length === 0) return "";
+
+  const done = await gitOrNull(repo, ["branch", "--set-upstream-to=" + upstream, name]);
+  return done === null ? "" : upstream;
+}
+
+/**
+ * Checking out what was double-clicked, which for a remote branch is not the
+ * ref that was double-clicked.
+ *
+ * `git checkout origin/main` does exactly what it is told: it moves HEAD to a
+ * remote-tracking ref, which detaches it. Nothing is broken at that moment,
+ * and that is the trouble - the next operation is the one that fails, with
+ * "not on a branch", well after the double-click that caused it.
+ *
+ * Nobody double-clicks `origin/main` wanting a detached HEAD. They want the
+ * local branch of that name, holding what the remote holds. So:
+ *
+ *   no local branch     create one tracking the remote, and check it out
+ *   local branch behind check it out and fast-forward it onto the remote
+ *   local branch level  check it out; there is nothing to bring across
+ *   local branch ahead  check it out; the remote has nothing we lack
+ *   diverged            check it out and say so - a local commit that is not
+ *                       on the remote would have to be destroyed to "update
+ *                       to the remote version", and a double-click is not
+ *                       consent to that. Rebase or reset says it properly.
+ *
+ * Only remote-tracking refs take this path. A local branch, a tag or a sha is
+ * passed to git untouched, including the case where a local branch is itself
+ * named `origin/something` - that ref is checked first for exactly that
+ * reason.
+ */
+async function checkoutRef(repo: string, ref: string, note: string): Promise<OpResult> {
+  const plain = () => checkoutCarryingChanges(repo, ["checkout", ref], ref, note);
+  // `note` carries the "left a detached HEAD behind" warning when there is
+  // one, and it outranks anything said below - so it is kept in front rather
+  // than replaced by the outcome message. `tracking` is filled in late, by
+  // whichever path adopted an upstream, and reported wherever it lands.
+  let tracking = "";
+  const say = (text: string): string => {
+    const head = (note.length > 0 ? note + "; " : "") + text;
+    if (tracking.length === 0) return head;
+    // Some of these outcomes are fragments ("on main, already level with
+    // origin/main") and one is two full sentences. A dash after a full stop
+    // reads badly, so the clause matches whichever it is joining.
+    return head.endsWith(".")
+      ? head + " Now tracking " + tracking + "."
+      : head + " - now tracking " + tracking;
+  };
+
+  if (await refExists(repo, "refs/heads/" + ref)) {
+    const switchedLocal = await plain();
+    if (!switchedLocal.ok) return switchedLocal;
+    tracking = await adoptUpstream(repo, ref, "");
+    return tracking.length === 0 ? switchedLocal : ok(say("on " + ref));
+  }
+
+  const slash = ref.indexOf("/");
+  if (slash <= 0) return plain();
+  if (!(await refExists(repo, "refs/remotes/" + ref))) return plain();
+
+  const name = ref.substring(slash + 1);
+  // `origin/HEAD` is a symbolic ref naming the remote's default branch, not a
+  // branch called HEAD. Checking out a local "HEAD" is not a thing to do.
+  if (name.length === 0 || name === "HEAD") return plain();
+
+  if (!(await refExists(repo, "refs/heads/" + name))) {
+    return checkoutCarryingChanges(
+      repo,
+      ["checkout", "-b", name, "--track", ref],
+      name,
+      say("created " + name + " from " + ref + " and checked it out"),
+    );
+  }
+
+  const switched = await checkoutCarryingChanges(repo, ["checkout", name], name, note);
+  // A conflicted stash pop on the way in wants resolving before anything is
+  // merged on top of it.
+  if (!switched.ok) return switched;
+
+  // The remote that was double-clicked is the one meant, even where several
+  // carry the name.
+  tracking = await adoptUpstream(repo, name, ref);
+
+  const behind = await countCommits(repo, name + ".." + ref);
+  const ahead = await countCommits(repo, ref + ".." + name);
+  const commits = (n: number): string => String(n) + (n === 1 ? " commit" : " commits");
+
+  if (behind === 0) {
+    if (ahead === 0) return ok(say("on " + name + ", already level with " + ref));
+    return ok(
+      say("on " + name + " - " + commits(ahead) + " ahead of " + ref + ", nothing to bring across"),
+    );
+  }
+
+  if (ahead > 0) {
+    return warned(
+      say(
+        "On " +
+          name +
+          ", but it has diverged from " +
+          ref +
+          " (" +
+          String(ahead) +
+          " ahead, " +
+          String(behind) +
+          " behind). Taking the remote's version would drop " +
+          commits(ahead) +
+          " of your own - rebase onto " +
+          ref +
+          ", or reset to it if you meant to discard them.",
+      ),
+    );
+  }
+
+  await git(repo, ["merge", "--ff-only", ref]);
+  return ok(say("updated " + name + " to " + ref + " - " + commits(behind)));
 }
 
 export async function runOp(repo: string, req: OpRequest): Promise<OpResult> {
@@ -354,7 +560,7 @@ export async function runOp(repo: string, req: OpRequest): Promise<OpResult> {
     case "checkout": {
       const ref = needRef(req.ref, "branch");
       const note = await detachedWarning(repo);
-      return checkoutCarryingChanges(repo, ref, note);
+      return checkoutRef(repo, ref, note);
     }
 
     case "checkoutCommit": {
@@ -496,9 +702,54 @@ export async function runOp(repo: string, req: OpRequest): Promise<OpResult> {
       return ok("stashed");
     }
 
-    case "stashPop": {
-      await git(repo, ["stash", "pop"]);
-      return ok("popped the latest stash");
+    /**
+     * Restoring a stash, either kind.
+     *
+     * `ref` names one - "stash@{2}" - or is empty for the most recent, which
+     * is what the toolbar's Pop button sends and what git itself defaults to.
+     *
+     * Both can conflict, and a conflicted apply or pop is not a failure: git
+     * leaves the working tree with markers in it and, crucially, KEEPS the
+     * stash entry so nothing has been lost. That has to reach the UI as a
+     * next step rather than as an error, which is what conflictProne does.
+     */
+    case "stashPop":
+    case "stashApply": {
+      const which = req.ref.trim();
+      const keep = req.op === "stashApply";
+      const args = ["stash", keep ? "apply" : "pop"];
+      if (which.length > 0) args.push(which);
+      const named = which.length > 0 ? which : "the latest stash";
+      try {
+        await git(repo, args);
+        return ok((keep ? "applied " : "popped ") + named);
+      } catch (e) {
+        // conflictProne is no use here: it recognises a stopped operation by
+        // the marker file git writes, and a conflicted stash restore writes
+        // none - there is no operation in progress to abort, only unmerged
+        // entries in the index. So the state is named here instead, the same
+        // way the checkout path has to (docs, and `checkoutCarryingChanges`).
+        const pending = readPending(repo);
+        if (pending.kind.length === 0 && !(await hasUnmerged(repo))) throw e;
+        return {
+          ok: false,
+          note:
+            "Restoring " +
+            named +
+            " hit conflicts. Resolve them below - the stash itself is untouched, so nothing is lost either way.",
+          pending: pending.kind.length > 0 ? pending.kind : "unmerged",
+          refusal: NO_REFUSAL,
+          warn: false,
+        };
+      }
+    }
+
+    case "stashDrop": {
+      const which = needRef(req.ref, "stash");
+      await git(repo, ["stash", "drop", which]);
+      // Worth saying plainly: every stash below this one has just been
+      // renumbered, so a selector read a moment ago now means something else.
+      return ok("dropped " + which);
     }
 
     // --- managing remotes -------------------------------------------------
@@ -750,6 +1001,7 @@ export async function runOp(repo: string, req: OpRequest): Promise<OpResult> {
               note: "The remote moved while you were deciding.",
               pending: "",
               refusal,
+              warn: false,
             };
           }
         }
@@ -771,6 +1023,7 @@ export async function runOp(repo: string, req: OpRequest): Promise<OpResult> {
                   : "The remote has commits you do not.",
             pending: "",
             refusal,
+            warn: false,
           };
         }
       }

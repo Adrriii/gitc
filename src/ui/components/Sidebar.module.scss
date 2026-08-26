@@ -11,10 +11,42 @@
 .top {
   padding: 8px;
   flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+// Folders on or off. Lit when on, so the state is readable without hovering
+// for the tooltip - it is the difference between two whole arrangements of
+// the list, not a minor preference.
+.grouping {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-inset);
+  color: var(--fg-muted);
+  cursor: pointer;
+
+  &:hover {
+    color: var(--fg);
+    border-color: var(--line-strong);
+  }
+}
+
+.groupingOn {
+  color: var(--accent);
+  border-color: var(--accent-line);
+  background: var(--accent-bg);
 }
 
 .filter {
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   background: var(--bg-inset);
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -238,6 +270,18 @@
   }
 }
 
+// When each branch last moved, in the same short form the status bar uses.
+// Faint on purpose: the list is ordered by it, so it only has to explain the
+// order, not compete with the name for attention.
+.refAge {
+  flex: none;
+  margin-left: 4px;
+  font-size: 10px;
+  color: var(--fg-faint);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .ref:hover .eye,
 .ref:hover .kebab,
 .folder:hover .eye,
@@ -245,6 +289,12 @@
 .group:hover .eye,
 .group:hover .kebab {
   visibility: visible;
+}
+
+// The kebab takes the age's place rather than pushing the name along - the
+// row is 208px wide and both do not fit.
+.ref:hover .refAge {
+  display: none;
 }
 
 .ref:hover .eye,

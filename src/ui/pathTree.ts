@@ -39,7 +39,15 @@ function emptyNode<T>(name: string, path: string): TreeNode<T> {
  * - remote branches arrive as `origin/adri/x` but nest under the remote's own
  * row, so only `adri/x` should form the tree.
  */
-export function buildTree<T>(items: T[], pathOf: (item: T) => string): TreeNode<T>[] {
+export function buildTree<T>(
+  items: T[],
+  pathOf: (item: T) => string,
+  /**
+   * How recent an item is, for ordering the leaves. Larger is newer; omit it
+   * and the leaves fall back to alphabetical.
+   */
+  recencyOf?: (item: T) => number,
+): TreeNode<T>[] {
   const roots: TreeNode<T>[] = [];
   const index = new Map<string, TreeNode<T>>();
 
@@ -69,24 +77,59 @@ export function buildTree<T>(items: T[], pathOf: (item: T) => string): TreeNode<
     }
   }
 
-  sortTree(roots);
+  sortTree(roots, recencyOf);
   return roots;
 }
 
 /**
- * Folders first, then branches, each alphabetically.
+ * Every item on one level, most recent first.
+ *
+ * The ungrouped view: same rows, no nesting, and the whole list in one order
+ * rather than one order per folder. `name` becomes the full path, since
+ * without the folder above it a bare last segment would not say which branch
+ * it is.
+ */
+export function flatTree<T>(
+  items: T[],
+  pathOf: (item: T) => string,
+  recencyOf?: (item: T) => number,
+): TreeNode<T>[] {
+  const nodes: TreeNode<T>[] = [];
+  for (const entry of items) {
+    const full = pathOf(entry);
+    if (full.length === 0) continue;
+    nodes.push({ name: full, path: full, item: entry, children: [] });
+  }
+  sortTree(nodes, recencyOf);
+  return nodes;
+}
+
+/**
+ * Folders first, then branches.
  *
  * Grouping the folders keeps the expandable rows together instead of
- * scattering them through the leaves, which makes the list scannable.
+ * scattering them through the leaves, which makes the list scannable. They
+ * stay alphabetical: a folder has no date of its own that is not a lie -
+ * "adri/" is as recent as whichever branch inside it was touched last, which
+ * would shuffle the folders around every time anybody committed anything.
+ *
+ * The branches inside are ordered by `recencyOf`, newest first, because the
+ * question a branch list is asked is almost always "what was I doing?" and
+ * almost never "which branch starts with a P?". Ties and unknown dates fall
+ * back to alphabetical so the order is at least stable.
  */
-function sortTree<T>(nodes: TreeNode<T>[]): void {
+function sortTree<T>(nodes: TreeNode<T>[], recencyOf?: (item: T) => number): void {
   nodes.sort((a, b) => {
     const aFolder = a.children.length > 0;
     const bFolder = b.children.length > 0;
     if (aFolder !== bFolder) return aFolder ? -1 : 1;
+    if (!aFolder && recencyOf !== undefined && a.item !== null && b.item !== null) {
+      const diff = recencyOf(b.item) - recencyOf(a.item);
+      if (diff !== 0) return diff;
+    }
     return a.name.localeCompare(b.name);
   });
-  for (const node of nodes) sortTree(node.children);
+  for (const node of nodes) sortTree(node.children, recencyOf);
 }
 
 /** Every folder path in the tree - what "expand all" needs to open. */
