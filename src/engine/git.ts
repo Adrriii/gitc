@@ -678,8 +678,33 @@ export interface WorkingFile {
 }
 
 /** Working-directory state: the WIP node at the top of the graph. */
+/**
+ * The working tree, as the staging panel lists it.
+ *
+ * `--ignore-submodules=dirty` is a performance fix that is also the more
+ * honest answer. `git status` otherwise walks into every submodule looking
+ * for uncommitted work inside it - on a superproject with five of them that
+ * was 223ms of the 228ms this call cost, and `-uno` proved it was nothing to
+ * do with untracked files.
+ *
+ * What it drops is a row you cannot act on. A submodule with modified content
+ * but an unmoved HEAD lists as `M vendor`, and `git add vendor` then stages
+ * nothing at all: from the superproject's point of view nothing has changed,
+ * because the commit it records is the same one. What it KEEPS is the row you
+ * can act on - a submodule whose recorded commit moved, which is a real
+ * change to this repository and is stageable.
+ *
+ * The dirt inside is not lost, it is reported where it belongs: the deferred
+ * submodule read marks such a submodule "dirty" (see submodules.ts).
+ */
 export async function readStatus(repo: string): Promise<WorkingFile[]> {
-  const raw = await git(repo, ["status", "--porcelain=v1", "-z", "-uall"]);
+  const raw = await git(repo, [
+    "status",
+    "--porcelain=v1",
+    "-z",
+    "-uall",
+    "--ignore-submodules=dirty",
+  ]);
   const out: WorkingFile[] = [];
   const parts = raw.split(SEP);
   let i = 0;

@@ -18,8 +18,29 @@ export type SubmoduleState =
   | "current"
   /** Checked out, but at a different commit than the superproject records. */
   | "moved"
+  /**
+   * Checked out at the recorded commit, but with uncommitted work inside it.
+   *
+   * Reported here rather than in the staging panel, which is where git puts
+   * it and where it cannot be acted on: staging a submodule stages the
+   * commit the superproject records, and that has not moved. So the panel
+   * showed a row that did nothing, and this says the same thing somewhere it
+   * means something.
+   */
+  | "dirty"
   /** Merge conflicts inside the submodule. */
-  | "conflicted";
+  | "conflicted"
+  /**
+   * Declared, but its live state has not been read yet.
+   *
+   * The declared list is one file read. The live state is `git submodule
+   * status`, which walks into every submodule and measured at 727ms on a
+   * repository with one and 892ms on a repository with five - two thirds of
+   * the entire cold load, paid again on every refresh. Nothing on screen
+   * needs it to draw the window, so the list now arrives with the graph
+   * wearing this, and the states land when they land.
+   */
+  | "pending";
 
 export interface Submodule {
   /** The name in .gitmodules, which is not always the path. */
@@ -130,6 +151,47 @@ async function liveState(repo: string): Promise<Map<string, { state: SubmoduleSt
   return byPath;
 }
 
+/**
+ * Which submodules have uncommitted work inside them.
+ *
+ * `git submodule status` does not say - a dirty submodule and a clean one
+ * both come back with a leading space - so it takes a second question. This
+ * is the walk `readStatus` stopped doing on the critical path, asked once
+ * here where nothing is waiting on it.
+ *
+ * `-uno` because untracked files in the superproject are irrelevant to the
+ * question and enumerating them is not free.
+ */
+async function dirtyPaths(repo: string): Promise<Map<string, boolean>> {
+  const out = new Map<string, boolean>();
+
+  const raw = await gitOrNull(repo, [
+    "--no-optional-locks",
+    "status",
+    "--porcelain=v1",
+    "-z",
+    "-uno",
+    "--ignore-submodules=none",
+  ]);
+  if (raw === null) return out;
+
+  const NUL = String.fromCharCode(0);
+  const parts = raw.split(NUL);
+  let i = 0;
+  while (i < parts.length) {
+    const entry = parts[i];
+    if (entry.length < 4) {
+      i += 1;
+      continue;
+    }
+    // A rename carries its old path in the next field; skip it.
+    if (entry.charAt(0) === "R" || entry.charAt(0) === "C") i += 1;
+    out.set(entry.substring(3), true);
+    i += 1;
+  }
+  return out;
+}
+
 export async function readSubmodules(repo: string): Promise<Submodule[]> {
   const out: Submodule[] = [];
 
@@ -137,6 +199,7 @@ export async function readSubmodules(repo: string): Promise<Submodule[]> {
   if (list.length === 0) return out;
 
   const live = await liveState(repo);
+  const dirty = await dirtyPaths(repo);
 
   for (const entry of list) {
     const state = live.get(entry.path);
@@ -147,12 +210,46 @@ export async function readSubmodules(repo: string): Promise<Submodule[]> {
       url: entry.url,
       // Declared but absent from `submodule status` means git does not know
       // about it yet either - which is the uninitialised case.
-      state: state === undefined ? "uninitialized" : state.state,
+      //
+      // "dirty" is the weakest of these and only applies when nothing louder
+      // does: a submodule that has MOVED is reported as moved whether or not
+      // it is also dirty, because the moved commit is the part this
+      // repository records and can stage.
+      state:
+        state === undefined
+          ? "uninitialized"
+          : state.state === "current" && (dirty.get(entry.path) ?? false)
+            ? "dirty"
+            : state.state,
       sha: state === undefined ? "" : state.sha,
       label: state === undefined ? "" : state.label,
     });
   }
 
+  out.sort((a, b) => a.path.toLowerCase().localeCompare(b.path.toLowerCase()));
+  return out;
+}
+
+/**
+ * The declared submodules, without asking git anything.
+ *
+ * Everything here comes out of .gitmodules: enough to draw the section, name
+ * every entry, and open one as its own tab. Only the state is missing, and
+ * only the state costs a subprocess.
+ */
+export function listSubmodules(repo: string): Submodule[] {
+  const out: Submodule[] = [];
+  for (const entry of declared(repo)) {
+    out.push({
+      name: entry.name,
+      path: entry.path,
+      absolute: join(repo, entry.path),
+      url: entry.url,
+      state: "pending",
+      sha: "",
+      label: "",
+    });
+  }
   out.sort((a, b) => a.path.toLowerCase().localeCompare(b.path.toLowerCase()));
   return out;
 }

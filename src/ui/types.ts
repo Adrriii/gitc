@@ -39,7 +39,14 @@ export interface Listing {
   home: string;
 }
 
-export type SubmoduleState = "uninitialized" | "current" | "moved" | "conflicted";
+/** "pending" means the live state has not been fetched yet - see api.submodules. */
+export type SubmoduleState =
+  | "uninitialized"
+  | "current"
+  | "moved"
+  | "conflicted"
+  | "dirty"
+  | "pending";
 
 export interface Submodule {
   name: string;

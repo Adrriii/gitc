@@ -366,6 +366,36 @@ export function App() {
     };
   }, [activeId, reloadToken]);
 
+  /**
+   * Live submodule state, fetched after the window is already drawn.
+   *
+   * `git submodule status` walks into every submodule and was measured at
+   * 727ms on a repository with one and 892ms on a repository with five -
+   * two thirds of the whole load, paid again on every refresh, for a sidebar
+   * section that is collapsed by default. The graph payload carries the
+   * declared list from .gitmodules, which is a file read and enough to draw
+   * the section and open any entry; this fills in the states behind it.
+   *
+   * Skipped entirely when nothing is declared, so a repository with no
+   * submodules never makes the call at all.
+   */
+  const declaredSubmodules = data?.submodules.length ?? 0;
+  const [submodules, setSubmodules] = useState<Submodule[] | null>(null);
+  useEffect(() => {
+    setSubmodules(null);
+    if (activeId === null || declaredSubmodules === 0) return;
+    let live = true;
+    api
+      .submodules(activeId)
+      .then((r) => live && setSubmodules(r.submodules))
+      // Left as pending rather than reported: nothing is broken for the user
+      // if a state never arrives, and the section says so itself.
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [activeId, reloadToken, declaredSubmodules]);
+
   // Conflict detail is only fetched while something is actually pending, so
   // the common case costs nothing.
   const pendingKind = data?.pending.kind ?? "";
@@ -1414,6 +1444,7 @@ export function App() {
           >
             <Sidebar
               data={data}
+              submodules={submodules ?? data.submodules}
               onContext={refMenu}
               onCheckout={(ref) => void runOp({ op: "checkout", ref })}
               onRemoteContext={remoteMenu}

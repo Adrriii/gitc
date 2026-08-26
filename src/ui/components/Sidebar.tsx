@@ -271,28 +271,37 @@ function RefRow({
 
 /** The badge text: short enough for a 208px sidebar. */
 function shortState(sub: Submodule): string {
+  // An ellipsis rather than a word: the state is a second away, and a row
+  // that says "checking" in the same slot the answer lands in reads as a
+  // state of its own.
+  if (sub.state === "pending") return "…";
   if (sub.state === "uninitialized") return "not cloned";
   if (sub.state === "moved") return "moved";
+  if (sub.state === "dirty") return "modified";
   if (sub.state === "conflicted") return "conflicts";
   return "";
 }
 
 function stateClass(sub: Submodule, styles: Record<string, string>): string {
   if (sub.state === "conflicted") return styles.subBad;
-  if (sub.state === "moved") return styles.subWarn;
+  if (sub.state === "moved" || sub.state === "dirty") return styles.subWarn;
   return styles.subDim;
 }
 
 /** The longer form, for the tooltip. */
 function describeSubmodule(sub: Submodule): string {
+  if (sub.state === "pending") return "reading its state";
   if (sub.state === "uninitialized") return "declared but not checked out";
   if (sub.state === "moved") return "at a different commit than this repository records";
+  if (sub.state === "dirty")
+    return "has uncommitted work inside it - nothing this repository can stage";
   if (sub.state === "conflicted") return "has merge conflicts";
   return "at the recorded commit" + (sub.label.length > 0 ? " (" + sub.label + ")" : "");
 }
 
 export function Sidebar({
   data,
+  submodules,
   onContext,
   onCheckout,
   onRemoteContext,
@@ -305,6 +314,11 @@ export function Sidebar({
   onStashContext,
 }: {
   data: GraphPayload;
+  /**
+   * The declared list from the graph payload, replaced by the live one once
+   * it arrives. Entries read "pending" until then - see api.submodules.
+   */
+  submodules: Submodule[];
   onContext: (ref: Ref, x: number, y: number) => void;
   onCheckout: (ref: string) => void;
   /** Right-click on a remote's own row, not one of its branches. */
@@ -341,7 +355,6 @@ export function Sidebar({
   const isOpen = (key: string) => filtering || !collapsed.has(key);
 
   const hidden = useMemo(() => new Set(data.hidden ?? []), [data.hidden]);
-  const submodules = data.submodules ?? [];
   const stashes = data.stashes ?? [];
 
   const { folders, set: setFolders } = useBranchFolders();

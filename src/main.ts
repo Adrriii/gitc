@@ -33,7 +33,7 @@ import {
   unresolve,
 } from "./engine/conflicts.ts";
 import type { OpRequest } from "./engine/ops.ts";
-import type { RawCommit, Person } from "./engine/git.ts";
+import type { RawCommit, RawStash, Person } from "./engine/git.ts";
 import {
   stagePaths,
   stageAll,
@@ -53,7 +53,7 @@ import { readHead, readRefs, readPending, readRemotes, gitDir } from "./engine/r
 import type { Ref } from "./engine/refs.ts";
 import { loadHidden, saveHidden } from "./engine/visibility.ts";
 import { listDir } from "./engine/browse.ts";
-import { readSubmodules } from "./engine/submodules.ts";
+import { readSubmodules, listSubmodules } from "./engine/submodules.ts";
 import { install, uninstall, installedBinary, runningFromInstall } from "./engine/install.ts";
 import { rewriteTodo, writeMessage } from "./engine/rebaseHelper.ts";
 import { running, handOff, focusWindow } from "./engine/instance.ts";
@@ -233,20 +233,6 @@ async function graphPayload(tab: Tab, limit: number): Promise<string> {
   const head = readHead(tab.path);
   const refs = readRefs(tab.path);
 
-  // Annotated tags name a tag OBJECT, and the graph matches chips to commits -
-  // so a release tagged the usual way (`git tag -a`, or a forge's release
-  // button) drew no chip at all. Packed refs carry the peeled commit beside
-  // them and are already handled; a loose tag object has to be read, which
-  // means asking git. One call, and only where there are tags.
-  if (refs.some((r) => r.kind === "tag")) {
-    const peeled = await peeledTags(tab.path);
-    for (const ref of refs) {
-      if (ref.kind !== "tag") continue;
-      const commit = peeled.get(ref.name);
-      if (commit !== undefined && commit.length > 0) ref.hash = commit;
-    }
-  }
-
   // Hidden refs still LIST in the sidebar - you need somewhere to click to
   // bring them back - they just do not contribute commits to the walk.
   const hidden = loadHidden(tab.path);
@@ -265,13 +251,70 @@ async function graphPayload(tab: Tab, limit: number): Promise<string> {
     }
   }
 
-  // Read before the walk: whether there is uncommitted work decides whether
-  // the walk gets a WIP commit at the front of it.
-  const status = await readStatus(tab.path);
+  /**
+   * The four subprocesses, started together.
+   *
+   * None of them needs another's answer - the walk needs `hide`, which is
+   * worked out above without asking git anything - and they were nevertheless
+   * awaited one after another, so their durations added up. Started at once
+   * they overlap, and the cost of the group is the slowest rather than the
+   * sum: on a large repository that is 200ms of `git status` instead of that
+   * plus the walk plus the tags plus the stashes.
+   *
+   * Each is guarded so it is only started when there is anything to ask
+   * about, and the two optional ones get a rejection handler attached
+   * immediately - without it, one failing while another is being awaited
+   * surfaces as an unhandled rejection rather than as the error it is.
+   */
+  const statusP = readStatus(tab.path);
+  const historyP = readCommits(tab.path, limit, hide);
+  // Annotated tags name a tag OBJECT, and the graph matches chips to commits -
+  // so a release tagged the usual way (`git tag -a`, or a forge's release
+  // button) drew no chip at all. Packed refs carry the peeled commit beside
+  // them and are already handled; a loose tag object has to be read, which
+  // means asking git. One call, and only where there are tags.
+  const peeledP = refs.some((r) => r.kind === "tag") ? peeledTags(tab.path) : null;
+  // Stashes, hung off the commits they were taken from. Only where there is a
+  // stash ref to list.
+  const stashesP = existsSync(join(gitDir(tab.path), "logs", "refs", "stash"))
+    ? readStashes(tab.path)
+    : null;
 
-  // Hiding everything leaves every family empty and HEAD the only thing
-  // walked, which is the honest answer and needs no special case.
-  const history = await readCommits(tab.path, limit, hide);
+  /**
+   * `status` decides whether the walk gets a WIP commit at the front of it;
+   * hiding everything leaves the walk with HEAD alone, which is the honest
+   * answer and needs no special case.
+   *
+   * These two are the only ones that can reject - the other two go through
+   * gitOrNull and answer null instead - so they are the only two that need
+   * this shape. Awaiting them in turn would leave the walk's rejection with
+   * no handler attached for as long as `status` was still running, and an
+   * unhandled rejection is not something to find out about in production.
+   * `Promise.all` would attach to both at once and does not lower here: it
+   * needs every entry to be the same Promise<T>, and these are not.
+   */
+  let status;
+  try {
+    status = await statusP;
+  } catch (e) {
+    // Observed, then dropped: the status failure is the one worth reporting.
+    try {
+      await historyP;
+    } catch {
+      // Both failed. Still the status error that gets reported.
+    }
+    throw e;
+  }
+  const history = await historyP;
+
+  if (peeledP !== null) {
+    const peeled = await peeledP;
+    for (const ref of refs) {
+      if (ref.kind !== "tag") continue;
+      const commit = peeled.get(ref.name);
+      if (commit !== undefined && commit.length > 0) ref.hash = commit;
+    }
+  }
 
   /**
    * Uncommitted work, as the commit it is about to become.
@@ -310,12 +353,11 @@ async function graphPayload(tab: Tab, limit: number): Promise<string> {
 
   const walkedRows = buildGraph(walked, trunkTip(refs));
 
-  // Stashes, hung off the commits they were taken from. One extra git call,
-  // and only where there is a stash ref to list - the same shape as the
-  // peeled-tag call above.
-  const stashes = existsSync(join(gitDir(tab.path), "logs", "refs", "stash"))
-    ? await readStashes(tab.path)
-    : [];
+  // Started with the others above; collected here, where they are first
+  // needed. `noStashes` rather than a bare [] - scriptc types an empty
+  // literal as number[] and will not widen it (docs/toolchain.md).
+  const noStashes: RawStash[] = [];
+  const stashes = stashesP === null ? noStashes : await stashesP;
   const spliced = spliceStashes(
     walked,
     walkedRows,
@@ -377,7 +419,9 @@ async function graphPayload(tab: Tab, limit: number): Promise<string> {
   // pending, and the user is left with a broken working tree and no UI.
   if (pending.conflicted && pending.kind.length === 0) pending.kind = "unmerged";
 
-  const submodules = await readSubmodules(tab.path);
+  // Declared only - a file read. The live state is fetched separately, off
+  // the path to a drawn window; see SubmoduleState "pending".
+  const submodules = listSubmodules(tab.path);
   const remoteInfo = readRemotes(tab.path);
   const upstream =
     head.branch === null ? null : (remoteInfo.upstreams.get(head.branch) ?? null);
@@ -579,6 +623,33 @@ async function handleApi(
       const err = e as Error;
       send(res, 500, "application/json", JSON.stringify({ error: err.message }));
     }
+    return true;
+  }
+
+  /**
+   * Live submodule state, asked for separately.
+   *
+   * Split out of the graph payload because it is the single most expensive
+   * thing gitc used to do on every load and nothing waits on it: the sidebar
+   * section it fills is collapsed by default. The declared list ships with
+   * the graph, so the section can be drawn and its entries opened long
+   * before this answers.
+   */
+  if (path.startsWith("/api/submodules")) {
+    const q = path.indexOf("?");
+    const params = q === -1 ? "" : path.substring(q + 1);
+    let id = "";
+    for (const pair of params.split("&")) {
+      const eq = pair.indexOf("=");
+      if (eq === -1) continue;
+      if (pair.substring(0, eq) === "id") id = decodeURIComponent(pair.substring(eq + 1));
+    }
+    const tab = findTab(id);
+    if (tab === null) {
+      send(res, 404, "application/json", JSON.stringify({ error: "no such tab" }));
+      return true;
+    }
+    sendJson(res, JSON.stringify({ submodules: await readSubmodules(tab.path) }));
     return true;
   }
 

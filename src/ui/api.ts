@@ -13,6 +13,7 @@ import type {
   OpResult,
   ConflictState,
   ConflictVersions,
+  Submodule,
 } from "./types";
 import type { DiffTarget } from "./components/DiffView";
 
@@ -78,6 +79,10 @@ export const api = {
 
   graph: (id: string, limit = 2000) =>
     json<GraphPayload>(`/api/graph?id=${encodeURIComponent(id)}&limit=${limit}`),
+
+  /** Live submodule state, which the graph payload deliberately omits. */
+  submodules: (id: string) =>
+    json<{ submodules: Submodule[] }>(`/api/submodules?id=${encodeURIComponent(id)}`),
 
   rangeFiles: (id: string, from: string, to: string) =>
     json<{ files: FileChange[] }>(
