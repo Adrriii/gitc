@@ -127,6 +127,7 @@ interface TreeProps {
   onSetHidden: (refs: string[], hide: boolean) => void;
   /** How long ago a ref last moved, formatted for the row. */
   ageOf: (r: Ref) => string;
+  onSelectRef: (r: Ref) => void;
 }
 
 /**
@@ -198,6 +199,7 @@ function Tree(p: TreeProps) {
                 r={node.item}
                 label={node.name}
                 age={p.ageOf(node.item)}
+                onSelect={p.onSelectRef}
                 // A name that is also a folder sits at its folder's own depth,
                 // so its row indents one more step to read as being inside it.
                 depth={folder ? p.depth + 1 : p.depth}
@@ -227,6 +229,7 @@ function RefRow({
   r,
   label,
   age,
+  onSelect,
   depth,
   headBranch,
   hidden,
@@ -244,13 +247,16 @@ function RefRow({
   onCheckout: (ref: string) => void;
   onContext: (ref: Ref, x: number, y: number) => void;
   onSetHidden: (refs: string[], hide: boolean) => void;
+  /** Single click: take the graph to this branch tip. */
+  onSelect: (r: Ref) => void;
 }) {
   const current = r.kind === "local" && r.short === headBranch;
   return (
     <div
       className={`${s.ref} ${current ? s.current : ""} ${hidden ? s.dim : ""}`}
       style={{ paddingLeft: 4 + depth * INDENT }}
-      title={`${r.short} — double-click to check out, right-click for more`}
+      title={`${r.short} — click to find it in the graph, double-click to check out`}
+      onClick={() => onSelect(r)}
       onDoubleClick={() => onCheckout(r.short)}
       onContextMenu={(e) => {
         e.preventDefault();
@@ -312,6 +318,7 @@ export function Sidebar({
   onOpenSubmodule,
   onSubmoduleContext,
   onStashContext,
+  onSelectRef,
 }: {
   data: GraphPayload;
   /**
@@ -331,6 +338,8 @@ export function Sidebar({
   onOpenSubmodule: (sub: Submodule) => void;
   onSubmoduleContext: (sub: Submodule, x: number, y: number) => void;
   onStashContext: (selector: string, x: number, y: number) => void;
+  /** Single click on a ref row - select its commit and scroll to it. */
+  onSelectRef: (r: Ref) => void;
 }) {
   const [filter, setFilter] = useState("");
   // Which single section is expanded. Clicking the open one closes it, which
@@ -442,6 +451,7 @@ export function Sidebar({
     onFolderContext,
     onSetHidden,
     ageOf,
+    onSelectRef,
   };
 
   return (

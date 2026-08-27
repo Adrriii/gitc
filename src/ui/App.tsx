@@ -48,6 +48,18 @@ import { rangeSelect, toggleSelect } from "./selection";
 import { nextAfter, stagedFiles, unstagedFiles } from "./staging";
 import s from "./App.module.scss";
 
+const DEFAULT_LIMIT = 2000;
+/**
+ * How far back the graph reads once someone asks for something older.
+ *
+ * The default walk is 2000 commits, which is plenty to look at and not
+ * enough to find things in: most branches in a long-lived repository point
+ * further back than that. Raised only when a reveal misses, and it stays
+ * raised for the rest of the tab - having asked once you are likely to ask
+ * again, and the second ask should be instant.
+ */
+const DEEP_LIMIT = 50000;
+
 interface MenuState {
   x: number;
   y: number;
@@ -160,6 +172,7 @@ export function App() {
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
+  const [limit, setLimit] = useState(DEFAULT_LIMIT);
   const [conflicts, setConflicts] = useState<ConflictState | null>(null);
   /** The conflicted file open in the merge editor, if any. */
   const [mergeFile, setMergeFile] = useState<string | null>(null);
@@ -188,6 +201,59 @@ export function App() {
   const setWarning = useCallback((message: string) => pushToast("warn", message), [pushToast]);
 
   const refresh = useCallback(() => setReloadToken((n) => n + 1), []);
+
+  /**
+   * Selecting a commit and taking the view to it.
+   *
+   * Selecting a branch used to change the selection and leave the graph where
+   * it was, so choosing a branch last touched in March selected something two
+   * thousand rows below the fold - and there was no way to find it, even
+   * after checking it out.
+   *
+   * The token is what lets the same commit be asked for twice. `quiet` is for
+   * the times gitc decides to move the view by itself, where the commit not
+   * being on screen is not a thing the user did and not a thing to tell them
+   * about.
+   */
+  const [reveal, setReveal] = useState<{ hash: string; token: number } | null>(null);
+  const revealToken = useRef(0);
+  const revealCommit = useCallback(
+    (hash: string, quiet = false) => {
+      if (hash.length === 0) return;
+      revealToken.current += 1;
+      setSelected([hash]);
+      setAnchor(hash);
+      setReveal({ hash, token: revealToken.current });
+
+      // Not in the window the walk loaded, so there is no row to scroll to.
+      // On a real repository that is the common case rather than the corner
+      // one - 78 of Quaver's 114 refs point outside the first 2000 commits -
+      // so warning and stopping would leave the original complaint standing
+      // for most branches. Load deeper instead; the reveal is already
+      // pending and fires by itself when the bigger walk arrives.
+      if (data !== null && !data.commits.some((c) => c.hash === hash)) {
+        setLimit((current) => (current >= DEEP_LIMIT ? current : DEEP_LIMIT));
+        if (!quiet) setNotice("Reading further back to find it…");
+      }
+    },
+    [data, setNotice],
+  );
+
+  /**
+   * Follow HEAD when it moves.
+   *
+   * A checkout, a reset, a commit: each is a moment when "where am I now?" is
+   * the question, and the answer being off-screen is the complaint this
+   * exists for. Quiet, and only when it actually changed - not on first load,
+   * which would fight the initial selection.
+   */
+  const lastHead = useRef<string | null>(null);
+  useEffect(() => {
+    const head = data?.head.hash ?? null;
+    if (head === null) return;
+    if (lastHead.current !== null && lastHead.current !== head) revealCommit(head, true);
+    lastHead.current = head;
+  }, [data?.head.hash, revealCommit]);
 
   // Lane colours come from the engine, but the theme is what decides them -
   // substituted here so the graph itself stays unaware that themes exist.
@@ -335,6 +401,8 @@ export function App() {
    */
   useEffect(() => {
     setData(null);
+    // A new repository starts shallow; depth is earned per tab.
+    setLimit(DEFAULT_LIMIT);
   }, [activeId]);
 
   useEffect(() => {
@@ -345,7 +413,7 @@ export function App() {
     let live = true;
     setLoading(true);
     api
-      .graph(activeId)
+      .graph(activeId, limit)
       .then((d) => {
         if (!live) return;
         setData(d);
@@ -364,7 +432,7 @@ export function App() {
     return () => {
       live = false;
     };
-  }, [activeId, reloadToken]);
+  }, [activeId, reloadToken, limit]);
 
   /**
    * Live submodule state, fetched after the window is already drawn.
@@ -520,6 +588,22 @@ export function App() {
         // A conflict comes back ok:false with a next step rather than as an
         // error; the banner takes over from there, and amber says "your turn"
         // where red would say "something broke".
+        // git objected rather than failed, and the objection has an answer.
+        // Asking here means the same operation runs again with force, so the
+        // thing git told you to go and type is a button instead.
+        if (r.confirm.length > 0) {
+          setConfirm({
+            title: r.confirm,
+            body: <p>{r.note}</p>,
+            confirmLabel: "Delete anyway",
+            destructive: true,
+            onConfirm: () => {
+              setConfirm(null);
+              void runOp({ ...args, force: true });
+            },
+          });
+          return;
+        }
         if (!r.ok) {
           if (r.pending.length > 0) setWarning(r.note);
           else setError(r.note);
@@ -971,10 +1055,14 @@ export function App() {
               : () =>
                   setConfirm({
                     title: "Delete branch?",
+                    // Nothing about unmerged commits here on purpose: git
+                    // knows whether there are any and this does not, so the
+                    // warning fired on every delete including the great
+                    // majority git allows without complaint. If git objects,
+                    // the answer is a second question rather than a first one.
                     body: (
                       <p>
-                        <b>{ref.short}</b> will be deleted. If it holds commits that exist nowhere
-                        else, git refuses — and gitc reports that rather than forcing it.
+                        <b>{ref.short}</b> will be deleted.
                       </p>
                     ),
                     confirmLabel: "Delete",
@@ -1446,6 +1534,7 @@ export function App() {
               data={data}
               submodules={submodules ?? data.submodules}
               onContext={refMenu}
+              onSelectRef={(r) => revealCommit(r.hash)}
               onCheckout={(ref) => void runOp({ op: "checkout", ref })}
               onRemoteContext={remoteMenu}
               onFolderContext={folderMenu}
@@ -1504,6 +1593,7 @@ export function App() {
                   void runOp({ op: kind === "tag" ? "checkout" : "checkout", ref: name })
                 }
                 menuOpen={menu !== null}
+                reveal={reveal}
                 onQuickCommit={(summary) => {
                   if (!activeTab) return;
                   void api

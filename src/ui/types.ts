@@ -217,6 +217,8 @@ export interface OpResult {
   refusal: PushRefusal;
   /** It worked, but not the way it was probably meant to - amber, not green. */
   warn: boolean;
+  /** A question; answering yes re-runs the same operation with force. */
+  confirm: string;
 }
 
 /** A stash entry, as the sidebar lists it. */

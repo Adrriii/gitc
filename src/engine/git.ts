@@ -334,6 +334,27 @@ function run(repo: string, args: string[], env?: Record<string, string>): Promis
     const child = spawn("git", args, {
       cwd: repo,
       stdio: ["ignore", "pipe", "pipe"],
+      /**
+       * On Windows this is what stops a console window flashing on every
+       * single git call, and it is only needed because gitc itself no longer
+       * has a console to lend.
+       *
+       * scriptc lowers `detached` to DETACHED_PROCESS, and a detached child
+       * gets no console at all rather than allocating one. Without it, a
+       * GUI-subsystem parent has no console for git to inherit, so Windows
+       * gives each of the hundred-odd git calls behind a single graph load
+       * its own - measured at one conhost per git, against a dozen of
+       * background noise with this on.
+       *
+       * `windowsHide` is the option that ought to do this and is documented
+       * as a POSIX no-op; scriptc's CreateProcessW call never reads it.
+       * Unconditional because scriptc requires a boolean literal here. On
+       * POSIX it means setsid(), which costs nothing that matters: these are
+       * short reads and writes over pipes, git cannot prompt on a terminal it
+       * was never given, and a child outliving a killed gitc finishes in
+       * milliseconds.
+       */
+      detached: true,
       env: env === undefined ? process.env : { ...process.env, ...env },
     });
 

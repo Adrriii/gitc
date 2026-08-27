@@ -3,6 +3,8 @@ import type { DiffLine, FileDiff, Hunk } from "../types";
 import { canApplyHunks, hunkPatch } from "../patch";
 import { api } from "../api";
 import { languageFor, highlightLines, MAX_HIGHLIGHT_CHARS } from "../highlight";
+import { wordDiff, pairRuns, type Span } from "../wordDiff";
+import { markHtml } from "../markHtml";
 import { useDiffWrap, useTabSize } from "../settings";
 import { Icon } from "./Icon";
 import s from "./DiffView.module.scss";
@@ -295,14 +297,67 @@ export function DiffView({
     return map;
   }, [diff, language, ws]);
 
+  /**
+   * The characters that actually changed, per line.
+   *
+   * A unified diff says a line became another line and leaves finding the
+   * difference to the reader - which on a long line with one renamed variable
+   * is most of the work of reading the diff.
+   *
+   * Skipped while whitespace markers are on, for the same reason highlighting
+   * is: that mode rewrites the text, and spans measured against the original
+   * would land in the wrong places.
+   */
+  const changed = useMemo(() => {
+    const map = new Map<DiffLine, Span[]>();
+    if (diff === null || ws) return map;
+    for (const hunk of diff.hunks) {
+      const pairs = pairRuns(hunk.lines);
+      for (const line of hunk.lines) {
+        if (line.kind !== "del" && line.kind !== "add") continue;
+        const other = pairs.get(line);
+        if (other === undefined) continue;
+        const d =
+          line.kind === "del"
+            ? wordDiff(line.text, other.text).before
+            : wordDiff(other.text, line.text).after;
+        if (d.length > 0) map.set(line, d);
+      }
+    }
+    return map;
+  }, [diff, ws]);
+
   const text = (line: DiffLine) => (ws ? showWhitespace(line.text, tabSize) : line.text);
 
   /** A line's content: highlighted when we have it, plain text otherwise. */
   const Content = ({ line }: { line: DiffLine }) => {
     const html = highlighted.get(line);
     const cls = wrap ? s.textWrap : s.text;
-    if (html === undefined) return <span className={cls}>{text(line)}</span>;
-    return <span className={cls} dangerouslySetInnerHTML={{ __html: html }} />;
+    const spans = changed.get(line);
+    const mark = line.kind === "del" ? s.wordDel : s.wordAdd;
+
+    if (html !== undefined) {
+      const marked = spans === undefined ? html : markHtml(html, spans, mark);
+      return <span className={cls} dangerouslySetInnerHTML={{ __html: marked }} />;
+    }
+
+    // No highlighting to preserve, so the pieces go straight into the DOM as
+    // text - no markup is built and nothing needs escaping.
+    if (spans === undefined) return <span className={cls}>{text(line)}</span>;
+    const raw = line.text;
+    const parts: React.ReactNode[] = [];
+    let at = 0;
+    spans.forEach((span, i) => {
+      if (span.start > at) parts.push(raw.substring(at, span.start));
+      parts.push(
+        <mark key={i} className={mark}>
+          {raw.substring(span.start, span.end)}
+        </mark>,
+      );
+      at = span.end;
+    });
+    if (at < raw.length) parts.push(raw.substring(at));
+    return <span className={cls}>{parts}</span>;
   };
 
   // Recomputed per diff, so opening a new file starts bounded again.

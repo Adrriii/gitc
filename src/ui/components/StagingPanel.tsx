@@ -34,27 +34,52 @@ function FileRow({
   const kind = code === "A" || code === "?" ? s.add : code === "D" ? s.del : s.mod;
 
   return (
-    <div className={`${s.file} ${active ? s.fileActive : ""}`} title={file.path}>
+    // The click is on the ROW, not on the text inside it. The row is what
+    // lights up on hover, so the row is what the pointer is aiming at - and
+    // with the handler on the label instead, the padding, the status icon and
+    // most of the row's height were dead. A hover that promises a click has
+    // to deliver one everywhere it reaches.
+    <div
+      className={`${s.file} ${active ? s.fileActive : ""}`}
+      title={file.path}
+      onClick={onOpen}
+    >
       <span className={`${s.st} ${kind}`}>
         <Icon name={icon} size={12} />
       </span>
-      <span className={s.name} onClick={onOpen}>
+      <span className={s.name}>
         {dir && <span className={s.dir}>{dir}</span>}
         <span className={s.base}>{base}</span>
       </span>
       <span className={s.rowActions}>
         {onDiscard && (
-          <button className={`${s.iconBtn} ${s.btnDanger}`} onClick={onDiscard} title="Discard changes">
+          <button className={`${s.iconBtn} ${s.btnDanger}`} onClick={(e) => {
+              // The row opens the file; these do their own thing instead.
+              e.stopPropagation();
+              onDiscard();
+            }}
+            title="Discard changes"
+          >
             <Icon name="trash" size={13} />
           </button>
         )}
         {onStage && (
-          <button className={`${s.iconBtn} ${s.btnGood}`} onClick={onStage} title="Stage this file">
+          <button className={`${s.iconBtn} ${s.btnGood}`} onClick={(e) => {
+              e.stopPropagation();
+              onStage();
+            }}
+            title="Stage this file"
+          >
             <Icon name="added" size={13} />
           </button>
         )}
         {onUnstage && (
-          <button className={s.iconBtn} onClick={onUnstage} title="Unstage this file">
+          <button className={s.iconBtn} onClick={(e) => {
+              e.stopPropagation();
+              onUnstage();
+            }}
+            title="Unstage this file"
+          >
             <Icon name="removed" size={13} />
           </button>
         )}

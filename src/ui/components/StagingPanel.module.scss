@@ -130,6 +130,8 @@
   color: var(--fg-dim);
   white-space: nowrap;
   overflow: hidden;
+  // The whole row is the target - see FileRow.
+  cursor: pointer;
 
   &:hover {
     background: var(--bg-3);
@@ -166,7 +168,6 @@
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  cursor: pointer;
 }
 
 .dir {

@@ -94,6 +94,18 @@ export interface OpResult {
    * be telling somebody their branch is up to date when it is not.
    */
   warn: boolean;
+  /**
+   * Empty, or a question to put to the user - and answering yes re-runs the
+   * same operation with force set.
+   *
+   * For the refusals git makes that are an objection rather than a failure.
+   * Deleting an unmerged branch is the first: git declines and tells you to
+   * go and type `git branch -D` yourself, which means leaving the
+   * application to do the thing the application was asked to do. Warning
+   * about it in advance is no better - the warning fires on every delete,
+   * including the great majority that git would allow without complaint.
+   */
+  confirm: string;
 }
 
 const ok = (note: string): OpResult => ({
@@ -102,6 +114,7 @@ const ok = (note: string): OpResult => ({
   pending: "",
   refusal: NO_REFUSAL,
   warn: false,
+  confirm: "",
 });
 
 /** Succeeded, with a caveat the user needs to see. */
@@ -111,6 +124,7 @@ const warned = (note: string): OpResult => ({
   pending: "",
   refusal: NO_REFUSAL,
   warn: true,
+  confirm: "",
 });
 
 /**
@@ -181,6 +195,7 @@ async function conflictProne(
         pending: pending.kind,
         refusal: NO_REFUSAL,
         warn: false,
+        confirm: "",
       };
     }
     throw e;
@@ -381,6 +396,7 @@ async function checkoutCarryingChanges(
       pending: pending.kind.length > 0 ? pending.kind : "unmerged",
       refusal: NO_REFUSAL,
       warn: false,
+      confirm: "",
     };
   }
 
@@ -594,10 +610,38 @@ export async function runOp(repo: string, req: OpRequest): Promise<OpResult> {
 
     case "deleteBranch": {
       needRef(req.ref, "branch");
-      // -d refuses to drop unmerged work; -D is the explicit override, and
-      // the UI only sends force after saying what that means.
-      await git(repo, ["branch", req.force ? "-D" : "-d", req.ref]);
-      return ok("deleted " + req.ref);
+      // -D straight away only when the question below has already been
+      // answered; otherwise -d, so git gets to raise the objection.
+      if (req.force) {
+        await git(repo, ["branch", "-D", req.ref]);
+        return ok("deleted " + req.ref);
+      }
+      try {
+        await git(repo, ["branch", "-d", req.ref]);
+        return ok("deleted " + req.ref);
+      } catch (e) {
+        const message = (e as Error).message;
+        // git's own words are "not fully merged", followed by a suggestion to
+        // go and type `git branch -D` - which is the thing nobody should have
+        // to leave the application to do. Turned into a question here; saying
+        // yes re-runs this with force.
+        if (!message.includes("not fully merged")) throw e;
+        const ahead = await countCommits(repo, "HEAD.." + req.ref);
+        return {
+          ok: false,
+          note:
+            ahead === 1
+              ? req.ref + " has 1 commit that is on no other branch. Deleting it loses that commit."
+              : req.ref +
+                " has " +
+                String(ahead) +
+                " commits that are on no other branch. Deleting it loses them.",
+          pending: "",
+          refusal: NO_REFUSAL,
+          warn: false,
+          confirm: "Delete " + req.ref + " anyway?",
+        };
+      }
     }
 
     case "deleteRemoteBranch": {
@@ -740,6 +784,7 @@ export async function runOp(repo: string, req: OpRequest): Promise<OpResult> {
           pending: pending.kind.length > 0 ? pending.kind : "unmerged",
           refusal: NO_REFUSAL,
           warn: false,
+          confirm: "",
         };
       }
     }
@@ -1002,6 +1047,7 @@ export async function runOp(repo: string, req: OpRequest): Promise<OpResult> {
               pending: "",
               refusal,
               warn: false,
+              confirm: "",
             };
           }
         }
@@ -1024,6 +1070,7 @@ export async function runOp(repo: string, req: OpRequest): Promise<OpResult> {
             pending: "",
             refusal,
             warn: false,
+            confirm: "",
           };
         }
       }

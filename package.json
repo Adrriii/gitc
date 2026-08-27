@@ -1,6 +1,6 @@
 {
   "name": "gitc",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "A fast, minimal git client: commit graph, branching, rebase and conflict resolution in a single native binary.",
   "license": "AGPL-3.0-only",
   "author": "Adrien Boitelle",
@@ -20,7 +20,7 @@
     "dev:engine": "node scripts/version.mjs && node scripts/dev-engine.mjs",
     "dev:ui": "vite",
     "typecheck": "tsc -p src/ui/tsconfig.json --noEmit",
-    "test": "node src/ui/__tests__/selection.test.ts && node src/ui/__tests__/pathTree.test.ts && node src/ui/__tests__/gitCommand.test.ts && node src/ui/__tests__/patch.test.ts && node src/ui/__tests__/staging.test.ts && node src/engine/__tests__/graph.test.ts",
+    "test": "node src/ui/__tests__/selection.test.ts && node src/ui/__tests__/pathTree.test.ts && node src/ui/__tests__/gitCommand.test.ts && node src/ui/__tests__/patch.test.ts && node src/ui/__tests__/staging.test.ts && node src/engine/__tests__/graph.test.ts && node src/ui/__tests__/wordDiff.test.ts",
     "build:ui": "vite build",
     "embed": "node scripts/embed.mjs && node scripts/embed-icons.mjs",
     "build": "npm run version:sync && npm run typecheck && npm run test && npm run build:ui && npm run embed && node scripts/build.mjs",

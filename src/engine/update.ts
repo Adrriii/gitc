@@ -114,7 +114,12 @@ const META_TIMEOUT = [...CONNECT_TIMEOUT, "--max-time", "30"];
  */
 function curl(args: string[]): Promise<string | null> {
   return new Promise((resolve) => {
-    const child = spawn("curl", args, { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn("curl", args, {
+      stdio: ["ignore", "pipe", "pipe"],
+      // Detached for the same reason git is - see run() in git.ts. curl is a
+      // console program too, and the update check runs at launch.
+      detached: true,
+    });
 
     const out: Uint8Array[] = [];
     let code = 0;

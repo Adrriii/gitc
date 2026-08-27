@@ -11,7 +11,7 @@
 //      executable to install, only zig.
 
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const root = resolve(import.meta.dirname, "..");
@@ -126,4 +126,52 @@ if (r.error) {
   console.error("failed to launch scriptc:", r.error.message);
   process.exit(1);
 }
-process.exit(r.status ?? 1);
+if (r.status !== 0) process.exit(r.status ?? 1);
+
+// --- no console window ------------------------------------------------------
+
+/**
+ * Marks the executable as a Windows GUI application.
+ *
+ * A console-subsystem binary gets a console window from Windows whenever it is
+ * started without one - from a shortcut, the Start menu, or Explorer - so gitc
+ * opened its own window with a black cmd window sitting next to it. That is
+ * the single field being changed here: subsystem 3 (console) to 2 (GUI), which
+ * is exactly what `editbin /SUBSYSTEM:WINDOWS` does. scriptc exposes no linker
+ * flags (only SCRIPTC_CC, SCRIPTC_TARGET, SCRIPTC_CACHE_DIR, SCRIPTC_NO_CACHE),
+ * so it is done here rather than at the link.
+ *
+ * The command line still works, which is the part worth checking before
+ * believing this is free. Windows never ALLOCATES a console for a GUI binary,
+ * but it does inherit whatever handles its parent passes - so `gitc --version`
+ * run from cmd.exe or a shell still prints, and cmd still waits for the exit
+ * code. Measured both ways: console build +1 conhost process when launched
+ * without a console, GUI build +0, and `--version` prints under both.
+ *
+ * The PE checksum is deliberately left alone. Windows does not verify it for
+ * ordinary executables, and the patched binary runs.
+ */
+function markAsGuiApp(exe) {
+  const buf = readFileSync(exe);
+  const peOff = buf.readUInt32LE(0x3c);
+  if (buf.toString("ascii", peOff, peOff + 4) !== "PE\0\0") {
+    console.error(`${exe}: not a PE file, leaving the subsystem alone`);
+    return;
+  }
+  // 4 bytes of signature, then the 20-byte COFF header, then 68 bytes into
+  // the optional header that follows it.
+  const at = peOff + 4 + 20 + 68;
+  const CONSOLE = 3;
+  const GUI = 2;
+  const was = buf.readUInt16LE(at);
+  if (was === GUI) return;
+  if (was !== CONSOLE) {
+    console.error(`${exe}: unexpected subsystem ${was}, leaving it alone`);
+    return;
+  }
+  buf.writeUInt16LE(GUI, at);
+  writeFileSync(exe, buf);
+  console.log("marked as a GUI app - no console window when launched from a shortcut");
+}
+
+if (windows) markAsGuiApp(out);

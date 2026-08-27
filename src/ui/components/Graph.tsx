@@ -548,6 +548,7 @@ export function Graph({
   onRefCheckout,
   onQuickCommit,
   menuOpen,
+  reveal,
 }: {
   data: GraphPayload;
   selected: string[];
@@ -561,6 +562,11 @@ export function Graph({
   onQuickCommit: (summary: string) => void;
   /** True while a context menu is showing, so hover lists can stay pinned. */
   menuOpen: boolean;
+  /**
+   * A commit to scroll into view. The token distinguishes one request from
+   * the next, so asking twice for the same commit works.
+   */
+  reveal: { hash: string; token: number } | null;
 }) {
   const scroller = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
@@ -604,6 +610,38 @@ export function Graph({
     setScrollTop(el.scrollTop);
     setHeight(el.clientHeight);
   }, []);
+
+  /**
+   * Brings a commit into view when something outside the graph asks for it.
+   *
+   * Selecting a branch in the sidebar used to change the selection and leave
+   * the viewport where it was, which for a branch whose tip is two thousand
+   * rows down means selecting something you then cannot find. The graph is
+   * virtualised, so there is no element to scroll to - the row's position is
+   * its index times the row height, which is the whole calculation.
+   *
+   * The token is what makes asking twice for the same commit work, and the
+   * ref is what stops the request being honoured again every time the graph
+   * reloads underneath it. A request for a commit that is not in the list yet
+   * is kept rather than dropped: after a checkout the reveal is asked for
+   * before the new graph has arrived, and this then fires when it does.
+   */
+  const revealed = useRef(0);
+  useEffect(() => {
+    if (reveal === null || reveal.token === revealed.current) return;
+    const i = data.commits.findIndex((c) => c.hash === reveal.hash);
+    if (i === -1) return;
+    const el = scroller.current;
+    if (el === null) return;
+    revealed.current = reveal.token;
+
+    const top = i * ROW_H;
+    const view = el.clientHeight;
+    // Already comfortably on screen: moving the viewport would be the more
+    // disorienting of the two options.
+    if (top >= el.scrollTop && top + ROW_H <= el.scrollTop + view) return;
+    el.scrollTop = Math.max(0, top - Math.round(view / 2) + ROW_H);
+  }, [reveal, data.commits]);
 
   const first = Math.max(0, Math.floor(scrollTop / ROW_H) - OVERSCAN);
   const last = Math.min(total, Math.ceil((scrollTop + height) / ROW_H) + OVERSCAN);

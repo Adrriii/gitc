@@ -395,3 +395,27 @@ $hatch: var(--line-strong);
     color: var(--red-fg);
   }
 }
+
+// The characters that actually changed, inside a changed line.
+//
+// A second, brighter wash of the line's own colour rather than a new hue: the
+// reference does the same, sampled at rgb(88,42,43) inside a rgb(56,36,39)
+// removed line and rgb(48,79,53) inside a rgb(38,53,44) added one. Expressed
+// as an alpha over whatever the line background already is, so it follows
+// every theme instead of pinning four more colours.
+//
+// `mark` is a browser element with a yellow background and black text of its
+// own, both of which have to go.
+.wordDel,
+.wordAdd {
+  color: inherit;
+  border-radius: 2px;
+}
+
+.wordDel {
+  background: color-mix(in srgb, var(--red) 22%, transparent);
+}
+
+.wordAdd {
+  background: color-mix(in srgb, var(--green) 22%, transparent);
+}
