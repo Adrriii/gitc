@@ -33,11 +33,11 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # scriptc needs Node 24 or newer; it is the interpreter the build runs
       # under, so this is the whole Node requirement.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
 
@@ -112,7 +112,7 @@ jobs:
       # These only carry the binary from the build job to the publish job -
       # the release assets are the lasting copy. A day is plenty, and it stops
       # every release leaving a duplicate behind in the artifact store.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.built }}
@@ -127,7 +127,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
 
@@ -140,7 +140,7 @@ jobs:
           (cd release && sha256sum gitc gitc.exe > SHA256SUMS)
           cat release/SHA256SUMS
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: release/*
           generate_release_notes: true
