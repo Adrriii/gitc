@@ -7,6 +7,7 @@ import { wordDiff, pairRuns, type Span } from "../wordDiff";
 import { markHtml } from "../markHtml";
 import { useDiffWrap, useTabSize } from "../settings";
 import { Icon } from "./Icon";
+import { CloseButton } from "./CloseButton";
 import s from "./DiffView.module.scss";
 
 export type DiffTarget =
@@ -515,9 +516,7 @@ export function DiffView({
         <span className={s.context}>in {contextLabel}</span>
         <span className={s.spacer} />
         <span className={s.enc}>UTF-8</span>
-        <button className={s.close} onClick={onClose} title="Close diff (Esc)">
-          <Icon name="close" size={12} />
-        </button>
+        <CloseButton onClick={onClose} title="Close diff (Esc)" />
       </div>
 
       <div className={s.toolbar}>

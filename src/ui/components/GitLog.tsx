@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { GitCall } from "../types";
 import { commandType } from "../settings";
 import { Icon } from "./Icon";
+import { CloseButton } from "./CloseButton";
 import s from "./GitLog.module.scss";
 
 function clock(at: number): string {
@@ -96,9 +97,7 @@ export function GitLog({
         <button className={s.action} onClick={onClear} title="Clear this view">
           Clear
         </button>
-        <button className={s.close} onClick={onClose} title="Close (Esc)">
-          <Icon name="close" size={12} />
-        </button>
+        <CloseButton onClick={onClose} title="Close (Esc)" />
       </div>
 
       <div

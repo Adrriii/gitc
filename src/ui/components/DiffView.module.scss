@@ -58,21 +58,6 @@ $hatch: var(--line-strong);
   letter-spacing: 0.05em;
 }
 
-.close {
-  width: 20px;
-  height: 20px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--radius);
-  color: var(--fg-dim);
-  font-size: 12px;
-
-  &:hover {
-    background: var(--bg-4);
-    color: var(--fg);
-  }
-}
 
 .toolbar {
   height: 34px;

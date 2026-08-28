@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { Toast } from "../useToasts";
 import { Icon } from "./Icon";
+import { CloseButton } from "./CloseButton";
 import s from "./Toasts.module.scss";
 
 const ICON: Record<Toast["kind"], "check" | "warning" | "close"> = {
@@ -67,9 +68,7 @@ export function Toasts({
               {isOpen && <pre className={s.detail}>{t.detail}</pre>}
             </div>
 
-            <button className={s.close} onClick={() => onDismiss(t.id)} title="Dismiss">
-              <Icon name="close" size={11} />
-            </button>
+            <CloseButton onClick={() => onDismiss(t.id)} title="Dismiss" size={11} />
           </div>
         );
       })}

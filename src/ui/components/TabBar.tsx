@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { Session } from "../types";
 import { Icon } from "./Icon";
+import { CloseButton } from "./CloseButton";
 import s from "./TabBar.module.scss";
 
 export function TabBar({
@@ -87,15 +88,15 @@ export function TabBar({
         >
           <Icon name="repo" size={13} className={s.ico} />
           <span className={s.name}>{t.name}</span>
-          <span
+          <CloseButton
             className={s.x}
+            size={11}
+            title="Close repository"
             onClick={(e) => {
               e.stopPropagation();
               onClose(t.id);
             }}
-          >
-            <Icon name="close" size={11} />
-          </span>
+          />
         </div>
       ))}
       <div className={s.add} onClick={onNew} title="Open a repository">

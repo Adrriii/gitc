@@ -11,6 +11,7 @@ import {
 import type { Segment, Selection } from "../conflictParse";
 import { languageFor, highlightLines } from "../highlight";
 import { Icon } from "./Icon";
+import { CloseButton } from "./CloseButton";
 import s from "./MergeEditor.module.scss";
 
 /** One rendered line, on one side. */
@@ -430,9 +431,7 @@ export function MergeEditor({
           <Icon name="warning" size={13} className={s.warn} />
           <span className={s.pathBase}>{path}</span>
           <span className={s.spacer} />
-          <button className={s.close} onClick={onClose}>
-            <Icon name="close" size={12} />
-          </button>
+          <CloseButton onClick={onClose} title="Close (Esc)" />
         </div>
         <div className={s.note}>
           Binary file — there are no lines to merge. Take one side from the panel.
@@ -477,9 +476,7 @@ export function MergeEditor({
         >
           {saving ? "Saving…" : "Save & mark resolved"}
         </button>
-        <button className={s.close} onClick={onClose} title="Close (Esc)">
-          <Icon name="close" size={12} />
-        </button>
+        <CloseButton onClick={onClose} title="Close (Esc)" />
       </div>
 
       {error !== null && <div className={s.error}>{error}</div>}

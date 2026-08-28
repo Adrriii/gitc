@@ -62,16 +62,6 @@
   }
 }
 
-.close {
-  display: flex;
-  align-items: center;
-  padding: 2px;
-  color: var(--fg-muted);
-
-  &:hover {
-    color: var(--fg);
-  }
-}
 
 .body {
   flex: 1;

@@ -120,14 +120,3 @@
   word-break: break-word;
 }
 
-.close {
-  flex: none;
-  display: flex;
-  align-items: center;
-  padding: 2px;
-  color: var(--fg-faint);
-
-  &:hover {
-    color: var(--fg);
-  }
-}

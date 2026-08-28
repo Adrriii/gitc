@@ -1,0 +1,31 @@
+// Every close button in gitc.
+//
+// There were five, one per component, and they had drifted exactly as far as
+// five copies drift: --fg-dim here, --fg-muted there, --fg-faint in the
+// toasts, three different box sizes, and one of them centring an inline SVG
+// with line-height so it sat on the text baseline. None of them were red.
+//
+// Closing is the one destructive-shaped action that appears in every corner of
+// the app, so it gets one look and earns it on hover rather than shouting from
+// a resting state - a row of permanently red crosses reads as an error list.
+.close {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius);
+  // Inherited, so the cross sits a step behind whatever it belongs to instead
+  // of being pinned to one grey that is too dim on a bright header and too
+  // bright on a dim one.
+  color: inherit;
+  opacity: 0.55;
+  cursor: pointer;
+
+  &:hover {
+    opacity: 1;
+    background: var(--red-bg);
+    color: var(--red-fg);
+  }
+}

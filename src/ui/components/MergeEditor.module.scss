@@ -53,20 +53,6 @@ $picked: rgba(255, 255, 255, 0.09);
 }
 
 .navBtn,
-.close {
-  width: 22px;
-  height: 20px;
-  border-radius: var(--radius);
-  color: var(--fg-dim);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-
-  &:hover {
-    background: var(--bg-4);
-    color: var(--fg);
-  }
-}
 
 .save {
   font-size: 11px;
