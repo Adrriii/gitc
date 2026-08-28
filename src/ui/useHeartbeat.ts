@@ -39,7 +39,20 @@ export function useHeartbeat(): boolean {
         if (!res.ok) throw new Error("bad status");
         failures = 0;
 
-        const body = (await res.json()) as { instance?: string };
+        const body = (await res.json()) as { instance?: string; quitting?: boolean };
+
+        // This engine is handing over to a replacement that is about to take
+        // the port. Close now: staying would mean reattaching to the new
+        // engine below and leaving the user with two windows after they asked
+        // to restart one. Checked before the instance comparison, which would
+        // otherwise reload this window onto the replacement.
+        if (body.quitting === true) {
+          stopped = true;
+          setDead(true);
+          window.close();
+          return;
+        }
+
         const instance = body.instance ?? null;
         if (instance !== null) {
           if (engine === null) {
@@ -65,9 +78,27 @@ export function useHeartbeat(): boolean {
     void tick();
     const id = window.setInterval(() => void tick(), INTERVAL_MS);
 
+    // Tell the engine the window is going, so it can exit now rather than
+    // waiting out its 60s heartbeat timeout. Without this gitc stayed alive
+    // for a minute after the window closed, and relaunching inside that
+    // minute handed over to an engine with nothing on screen and quit.
+    //
+    // sendBeacon rather than fetch: the page is being torn down and an
+    // ordinary request is cancelled with it. pagehide rather than
+    // beforeunload, which Chromium does not reliably fire for an --app window.
+    //
+    // This also fires on a reload, including the one an update does - which
+    // is why the engine waits BYE_GRACE_MS and lets the reloaded page's first
+    // ping cancel the exit, instead of taking the beacon as final.
+    const bye = () => {
+      navigator.sendBeacon("/api/bye");
+    };
+    window.addEventListener("pagehide", bye);
+
     return () => {
       stopped = true;
       window.clearInterval(id);
+      window.removeEventListener("pagehide", bye);
     };
   }, []);
 

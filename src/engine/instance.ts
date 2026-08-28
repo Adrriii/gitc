@@ -6,10 +6,6 @@
 // argument to the first and gets out of the way.
 
 import { request } from "node:http";
-import { spawnSync } from "node:child_process";
-import { writeFileSync, rmSync, existsSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 
 /**
  * One loopback request.
@@ -26,6 +22,14 @@ function ask(
 ): Promise<{ status: number; text: string }> {
   return new Promise((resolve) => {
     const headers: Record<string, string> = {};
+    // Marks every request on this path as coming from a launcher rather than
+    // from the window. The engine treats any request as proof its window is
+    // alive - which is right for the window's own traffic and wrong for ours:
+    // without this, probing "has your window gone?" resets the very clock
+    // being asked about, and the answer is always "no". Worse, the probe
+    // cleared a pending goodbye, so asking the question kept a dead engine
+    // alive for another minute.
+    headers["x-gitc-launcher"] = "1";
     if (body !== null) {
       headers["content-type"] = "application/json";
       headers["content-length"] = String(body.length);
@@ -62,79 +66,57 @@ export async function running(port: number): Promise<boolean> {
   return res.status === 200 && res.text.includes("\"ok\"");
 }
 
+/** What one probe of a running instance told us. */
+export interface Probe {
+  /**
+   * Whether that engine believes its window is gone - it has been told
+   * goodbye, or nothing has spoken to it in WINDOW_DEAD_MS. Null from an
+   * engine too old to report it, which means "assume a window is there",
+   * exactly what gitc always assumed before.
+   *
+   * The engine decides this, not the launcher: only it knows about a goodbye
+   * that arrived a second ago, and a launcher comparing timestamps would miss
+   * precisely the case that hurts - closing gitc and starting it again
+   * straight away.
+   */
+  windowGone: boolean | null;
+}
+
+/**
+ * Asks a running instance for its liveness AND its window state in ONE call.
+ *
+ * One call, because a second one would measure only the gap between our own
+ * two requests. Null means nothing is listening at all.
+ *
+ * A running engine is not the same thing as a running application: when the
+ * window closes on a machine where Chromium was already running, the process
+ * gitc spawned exited long before and the browser-exit hook never fires, so
+ * the engine outlives its window. A launcher that only asks "is the port
+ * answering?" hands over to that and quits, which looks like gitc refusing to
+ * start.
+ */
+export async function probe(port: number): Promise<Probe | null> {
+  const res = await ask(port, "/api/ping", "GET", null);
+  if (res.status !== 200 || !res.text.includes("\"ok\"")) return null;
+  if (res.text.includes("\"windowGone\":true")) return { windowGone: true };
+  if (res.text.includes("\"windowGone\":false")) return { windowGone: false };
+  return { windowGone: null };
+}
+
+/**
+ * Asks the running instance to stop, so this one can take the port.
+ *
+ * Best effort: the answer that matters is whether the port goes quiet
+ * afterwards, which the caller waits for, not what this returns. An engine
+ * already on its way out may never reply at all.
+ */
+export async function quitOther(port: number): Promise<boolean> {
+  const res = await ask(port, "/api/quit", "POST", "{}");
+  return res.status === 200;
+}
+
 /** Asks the running instance to open a repository and focus that tab. */
 export async function handOff(port: number, repo: string): Promise<boolean> {
   const res = await ask(port, "/api/open", "POST", JSON.stringify({ path: repo }));
   return res.status === 200;
-}
-
-/**
- * Brings the existing gitc window to the front.
- *
- * Best effort, and deliberately quiet when it fails: the repository has been
- * opened by this point, so a window that did not come forward is a small
- * annoyance rather than a failure worth an error.
- *
- * The window belongs to a browser process, not to gitc, so there is no handle
- * to raise - it has to be found by title, which is what these do.
- */
-export function focusWindow(): void {
-  if (process.platform === "win32") {
-    focusOnWindows();
-    return;
-  }
-  // wmctrl matches the WM_CLASS gitc sets with --class=gitc; xdotool is the
-  // fallback. Neither is guaranteed to be installed, and that is fine.
-  const wm = spawnSync("wmctrl", ["-x", "-a", "gitc"], { stdio: "ignore" });
-  if (wm.status === 0) return;
-  spawnSync("xdotool", ["search", "--class", "gitc", "windowactivate"], { stdio: "ignore" });
-}
-
-function focusOnWindows(): void {
-  // Through a temporary script: the interop needs a here-string, and a
-  // here-string cannot reliably terminate inside a -Command argument.
-  const script = [
-    "$ErrorActionPreference='SilentlyContinue'",
-    "Add-Type -TypeDefinition @'",
-    "using System;",
-    "using System.Runtime.InteropServices;",
-    "using System.Text;",
-    "public static class GitcFocus {",
-    "  [DllImport(\"user32.dll\")] public static extern bool EnumWindows(EnumProc cb, IntPtr l);",
-    "  public delegate bool EnumProc(IntPtr h, IntPtr l);",
-    "  [DllImport(\"user32.dll\")] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);",
-    "  [DllImport(\"user32.dll\")] public static extern bool IsWindowVisible(IntPtr h);",
-    "  [DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr h);",
-    "  [DllImport(\"user32.dll\")] public static extern bool ShowWindow(IntPtr h, int cmd);",
-    "  public static void Raise() {",
-    "    EnumWindows(delegate(IntPtr h, IntPtr l) {",
-    "      if (!IsWindowVisible(h)) return true;",
-    "      var sb = new StringBuilder(256);",
-    "      GetWindowText(h, sb, 256);",
-    "      if (sb.ToString() == \"gitc\") {",
-    "        ShowWindow(h, 9);   // SW_RESTORE, in case it is minimised",
-    "        SetForegroundWindow(h);",
-    "        return false;",
-    "      }",
-    "      return true;",
-    "    }, IntPtr.Zero);",
-    "  }",
-    "}",
-    "'@",
-    "[GitcFocus]::Raise()",
-    "",
-  ].join(String.fromCharCode(10));
-
-  const file = join(tmpdir(), "gitc-focus.ps1");
-  writeFileSync(file, script, "utf8");
-  spawnSync(
-    "powershell",
-    ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", file],
-    { stdio: "ignore" },
-  );
-  try {
-    if (existsSync(file)) rmSync(file, { force: true });
-  } catch {
-    // A leftover script in the temp directory is not worth reporting.
-  }
 }

@@ -56,7 +56,8 @@ import { listDir } from "./engine/browse.ts";
 import { readSubmodules, listSubmodules } from "./engine/submodules.ts";
 import { install, uninstall, installedBinary, runningFromInstall } from "./engine/install.ts";
 import { rewriteTodo, writeMessage } from "./engine/rebaseHelper.ts";
-import { running, handOff, focusWindow } from "./engine/instance.ts";
+import { running, handOff, probe, quitOther } from "./engine/instance.ts";
+import { raiseWindow, confirmTakeOver } from "./engine/quirks.ts";
 import {
   check as checkUpdate,
   apply as applyUpdate,
@@ -88,6 +89,16 @@ let session: Session = loadSession();
 // a browser that forked in a way that detaches the process we spawned.
 let lastPing = 0;
 let sawFirstPing = false;
+// Set when the window says it is going away, cleared by the next request of
+// any kind. See BYE_GRACE_MS and /api/bye below.
+let byeAt = 0;
+// Set by /api/quit: this engine is handing over and its window should close
+// itself rather than be left behind to reattach to the replacement.
+let quitting = false;
+// How long a window has to have been silent before the launcher treats the
+// instance as having no window at all. Comfortably above the UI's 2s
+// heartbeat, so a busy renderer is never mistaken for a closed one.
+const WINDOW_DEAD_MS = 10000;
 
 /**
  * Identifies this process to the window, so a window can tell that the engine
@@ -104,8 +115,24 @@ const INSTANCE = String(process.pid) + "-" + String(Date.now());
 // normally ends the session, and the cost of being wrong here is the app
 // disappearing while someone is using it. Ten seconds was short enough that a
 // single long layout pass could trigger it.
+const MAIN_WINDOW_SIZE = "1600,1000";
 const PING_TIMEOUT_MS = 60000;
 const HANDOFF_GRACE_MS = 3000;
+// How long to wait after the window says goodbye before believing it.
+//
+// A reload fires pagehide exactly like a close does, and an update reloads
+// the window onto the new engine - so exiting on the beacon itself would
+// kill the engine mid-update. Waiting instead means the reloaded page's
+// first ping arrives and cancels the exit, while a real close stays silent
+// and the engine goes. Long enough to cover a page load, short enough that
+// relaunching gitc right after closing it no longer meets a corpse.
+const BYE_GRACE_MS = 4000;
+// How long /api/quit waits before exiting. Long enough for the window's 2s
+// heartbeat to come round once, see that this engine is going, and close -
+// otherwise the window outlives its engine, reattaches to the replacement
+// (which is what useHeartbeat does when a different instance answers) and the
+// user is left with two gitc windows after choosing to restart one.
+const QUIT_GRACE_MS = 3000;
 
 // --------------------------------------------------------------- avatars
 
@@ -568,8 +595,18 @@ async function handleApi(
   // renderer busy laying out a large diff stops firing its 2s timer while
   // still very much running, and treating that silence as a closed window is
   // what made the app vanish mid-work.
-  lastPing = Date.now();
-  sawFirstPing = true;
+  // A launcher's requests must not count as proof the window is alive. It is
+  // asking ABOUT the window; treating its probe as a heartbeat resets the
+  // clock it is reading and revives an engine that was on its way out.
+  const fromLauncher = req.headers["x-gitc-launcher"] !== undefined;
+  if (!fromLauncher) {
+    lastPing = Date.now();
+    sawFirstPing = true;
+    // Any request from the window means it is still there, which cancels a
+    // pending goodbye - this is what makes a reload survive. /api/bye sets it
+    // again after this runs.
+    byeAt = 0;
+  }
 
   // Local avatar overrides: drop <something>.png into %APPDATA%/gitc/avatars
   // and it wins over any remote lookup. This is how you give an identity a
@@ -654,9 +691,42 @@ async function handleApi(
   }
 
   if (path === "/api/ping") {
-    lastPing = Date.now();
-    sawFirstPing = true;
-    sendJson(res, JSON.stringify({ ok: true, instance: INSTANCE }));
+    // The engine's own verdict on whether it still has a window, because only
+    // it knows about a goodbye that arrived a moment ago. A launcher comparing
+    // timestamps would miss the case that actually hurts: closing gitc and
+    // starting it again straight away.
+    const gone = byeAt !== 0 || (sawFirstPing && Date.now() - lastPing > WINDOW_DEAD_MS);
+    sendJson(
+      res,
+      JSON.stringify({ ok: true, instance: INSTANCE, windowGone: gone, quitting: quitting }),
+    );
+    return true;
+  }
+
+  // The window is closing. Sent with sendBeacon on pagehide, because an
+  // ordinary fetch is cancelled when the page goes away.
+  //
+  // The browser-exit hook in openWindow() is still the primary signal, but it
+  // cannot see a close when Chromium handed our window to a browser that was
+  // already running - it exits within the handoff grace and the hook
+  // deliberately ignores that. Before this, the only remaining signal was the
+  // 60s heartbeat timeout, so gitc lingered for a minute after every close
+  // and any relaunch inside that minute silently handed off to a windowless
+  // engine and quit.
+  if (path === "/api/bye") {
+    byeAt = Date.now();
+    sendJson(res, JSON.stringify({ ok: true }));
+    return true;
+  }
+
+  // Asked by a second launch that is taking over, either because this engine
+  // has no window left or because the user chose to restart. Replying first
+  // and exiting a moment later lets the answer reach the caller - the caller
+  // then waits for the port to clear before binding it.
+  if (path === "/api/quit") {
+    quitting = true;
+    sendJson(res, JSON.stringify({ ok: true }));
+    setTimeout(() => process.exit(0), QUIT_GRACE_MS);
     return true;
   }
 
@@ -1162,7 +1232,13 @@ function shutdown(): void {
   process.exit(0);
 }
 
-function openWindow(url: string): boolean {
+function openWindow(
+  url: string,
+  size: string,
+  profileName: string,
+  /** Called when the window is really gone, or null to not care. */
+  onExit: (() => void) | null,
+): boolean {
   const browser = findBrowser();
   if (browser === null) return false;
 
@@ -1170,7 +1246,13 @@ function openWindow(url: string): boolean {
   // like a brand new browser install every time, which makes Edge show its
   // first-run sign-in and sync prompt on top of our window on every start.
   // Reusing one directory means the browser settles down after the first run.
-  const profile = join(tmpdir(), "gitc-window");
+  //
+  // The dialog gets its OWN directory, and must: Chromium only applies
+  // --window-size in the process that actually creates the browser. A second
+  // invocation sharing a profile hands the URL to the running browser and the
+  // flag is dropped, so the confirm opened at whatever bounds the main window
+  // last used - full screen, if that is how gitc was left.
+  const profile = join(tmpdir(), profileName);
 
   // On Linux the window manager identifies a window by its WM_CLASS, and a
   // Chromium started with --app= reports the browser's - so gitc gets the
@@ -1184,7 +1266,7 @@ function openWindow(url: string): boolean {
     browser,
     [
       "--app=" + url,
-      "--window-size=1600,1000",
+      "--window-size=" + size,
       "--user-data-dir=" + profile,
       ...classArgs,
 
@@ -1220,10 +1302,24 @@ function openWindow(url: string): boolean {
     // closing the window, so don't treat it as one - the heartbeat watchdog
     // will notice if nothing is really there.
     if (Date.now() - launchedAt < HANDOFF_GRACE_MS) return;
-    shutdown();
+    if (onExit !== null) onExit();
   });
 
   return true;
+}
+
+/**
+ * Opens the confirm dialog's window. A named function rather than a closure
+ * at the call site, so what is handed to quirks.ts is a plain reference.
+ *
+ * Its lifetime is NOT the application's: this window is one the launcher
+ * opened and will close again, and taking gitc down with it would kill the
+ * launcher mid-takeover - so it gets no exit handler. Whether the user
+ * dismissed it is answered by the page's own heartbeat in confirmTakeOver,
+ * because the process that gets spawned here exits either way.
+ */
+function openDialogWindow(url: string, size: string): boolean {
+  return openWindow(url, size, "gitc-dialog", null);
 }
 
 // ----------------------------------------------------------------- main
@@ -1355,22 +1451,59 @@ async function main(): Promise<void> {
     }
   }
 
-  // If gitc is already running, this invocation is a request to that window,
-  // not a second application: hand the repository over, bring it forward, and
-  // leave. Starting a second copy would fight over the port and the session.
-  if (await running(port)) {
-    if (wanted !== null) {
+  // Something is already on the port. What that means depends on whether it
+  // still has a window.
+  //
+  // One probe, taken before anything else talks to that instance: handing a
+  // repository over is itself a request, and every request resets the engine's
+  // idle clock, so asking afterwards would only measure our own traffic.
+  const other = await probe(port);
+  if (other !== null) {
+    const windowGone = other.windowGone === true;
+
+    // A live window with a repository to open is the ordinary `gitc .` case:
+    // this invocation is a request to that window, not a second application.
+    // Hand it over and leave. Nothing to confirm - the user asked for a repo,
+    // not for a new instance, and they get it.
+    if (!windowGone && wanted !== null) {
       const ok = await handOff(port, wanted);
       if (!ok) {
         console.error("gitc is running but would not open " + wanted);
         process.exit(1);
       }
       console.log("opened " + wanted + " in the running gitc");
-    } else {
-      console.log("gitc is already running");
+      raiseWindow();
+      process.exit(0);
     }
-    focusWindow();
-    process.exit(0);
+
+    // A live window and a bare launch. On Windows the window cannot be
+    // raised, so silently exiting here is indistinguishable from gitc failing
+    // to start - which is the complaint that began all of this. Ask instead.
+    if (!windowGone) {
+      console.log("gitc is already running");
+      if (!(await confirmTakeOver(openDialogWindow))) process.exit(0);
+    }
+
+    // Either the window is gone, or the user chose to restart. Both mean the
+    // same thing: that instance stops and this one takes over. Killing rather
+    // than nursing a windowless engine back to life keeps one path instead of
+    // two, and the session is on disk either way.
+    await quitOther(port);
+
+    // Do not bind a port the outgoing process is still holding. If it will
+    // not go, say so rather than dying on a raw EADDRINUSE.
+    let clear = false;
+    for (let i = 0; i < 40; i++) {
+      if (!(await running(port))) {
+        clear = true;
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    if (!clear) {
+      console.error("the running gitc would not stop - port " + String(port) + " is still in use");
+      process.exit(1);
+    }
   }
 
   if (wanted !== null) await openRepo(wanted);
@@ -1410,6 +1543,7 @@ async function main(): Promise<void> {
   if (!headless) {
     setInterval(() => {
       if (!sawFirstPing) return;
+      if (byeAt !== 0 && Date.now() - byeAt > BYE_GRACE_MS) shutdown();
       if (Date.now() - lastPing > PING_TIMEOUT_MS) shutdown();
     }, 2000);
   }
@@ -1459,7 +1593,8 @@ async function main(): Promise<void> {
           return;
         }
         if (Date.now() > giveUpAt) {
-          if (!openWindow(url)) console.log("no Chromium browser found - open the URL manually");
+          if (!openWindow(url, MAIN_WINDOW_SIZE, "gitc-window", shutdown))
+            console.log("no Chromium browser found - open the URL manually");
           return;
         }
         setTimeout(waitForWindow, 200);
@@ -1468,7 +1603,7 @@ async function main(): Promise<void> {
       return;
     }
 
-    if (!openWindow(url)) {
+    if (!openWindow(url, MAIN_WINDOW_SIZE, "gitc-window", shutdown)) {
       console.log("no Chromium browser found - open the URL manually");
     }
   });

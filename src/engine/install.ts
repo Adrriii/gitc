@@ -15,6 +15,7 @@ import { homedir, tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 
 import { fromBase64 } from "./base64.ts";
+import { powershell } from "./quirks.ts";
 import { ICO_BASE64, PNG_BASE64 } from "../generated/icons.ts";
 import { NAME, VERSION } from "../generated/version.ts";
 
@@ -84,10 +85,7 @@ function addToWindowsPath(dir: string): boolean {
     "if ($p -split ';' -notcontains $d) { " +
     "[Environment]::SetEnvironmentVariable('PATH', ($p.TrimEnd(';') + ';' + $d), 'User') }";
 
-  const r = spawnSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", script], {
-    stdio: "ignore",
-  });
-  return r.status === 0;
+  return powershell(["-NoProfile", "-NonInteractive", "-Command", script]);
 }
 
 /** The C# needed to stamp an AppUserModelID onto a shortcut. */
@@ -175,17 +173,15 @@ function writeWindowsShortcut(target: string, ico: string): boolean {
 
   const file = join(tmpdir(), "gitc-shortcut.ps1");
   writeFileSync(file, script, "utf8");
-  const r = spawnSync(
-    "powershell",
-    ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", file],
-    { stdio: "ignore" },
-  );
+  const ok = powershell([
+    "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", file,
+  ]);
   try {
     rmSync(file, { force: true });
   } catch {
     // A leftover script in the temp directory is not worth failing over.
   }
-  return r.status === 0;
+  return ok;
 }
 
 /** Writes the Linux icon theme entries and the .desktop file. */
@@ -299,10 +295,7 @@ function removeFromWindowsPath(dir: string): boolean {
     "'; $p=[Environment]::GetEnvironmentVariable('PATH','User'); " +
     "$kept=($p -split ';' | Where-Object { $_ -and $_ -ne $d }) -join ';'; " +
     "[Environment]::SetEnvironmentVariable('PATH', $kept, 'User')";
-  const r = spawnSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", script], {
-    stdio: "ignore",
-  });
-  return r.status === 0;
+  return powershell(["-NoProfile", "-NonInteractive", "-Command", script]);
 }
 
 /** Removes everything install() created, leaving repositories untouched. */
