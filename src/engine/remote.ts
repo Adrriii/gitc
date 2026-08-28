@@ -356,6 +356,14 @@ export interface Connection {
   host: string;
   /** Loopback port here that reaches the remote engine. */
   port: number;
+  /**
+   * When this connection was last used, for deciding what has gone idle.
+   *
+   * On the connection rather than in a map beside it: a timestamp keyed by
+   * host outlives the connection it described, so a reconnect inherited the
+   * age of the tunnel it replaced and was swept moments after being made.
+   */
+  usedAt: number;
   /** Ends the tunnel and, with it, the remote engine. */
   close: () => void;
 }
@@ -493,7 +501,7 @@ export async function connect(host: string, bin: string): Promise<Connection> {
 
   const started = Date.now();
   while (Date.now() - started < CONNECT_TIMEOUT_MS) {
-    if (await answering(port)) return { host, port, close };
+    if (await answering(port)) return { host, port, usedAt: Date.now(), close };
     await new Promise((r) => setTimeout(r, 300));
   }
 

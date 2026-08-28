@@ -506,7 +506,7 @@ function proxyToRemote(
   req: import("node:http").IncomingMessage,
   res: import("node:http").ServerResponse,
 ): void {
-  lastUsed.set(conn.host, Date.now());
+  conn.usedAt = Date.now();
   const headers: Record<string, string> = {};
   const type = req.headers["content-type"];
   if (type !== undefined) headers["content-type"] = type;
@@ -717,9 +717,6 @@ async function connectionFor(host: string): Promise<Connection | { error: string
 /** In-flight connection attempts, so several callers share one. */
 const connecting = new Map<string, Promise<Connection | { error: string }>>();
 
-/** When each host was last spoken to, for deciding what has gone idle. */
-const lastUsed = new Map<string, number>();
-
 /**
  * Minutes to hold a tunnel to a host whose tab is not in front, 0 for
  * forever. The window owns the preference and sends it; this is the default
@@ -750,17 +747,14 @@ function sweepIdleConnections(): void {
   const active = session.tabs.find((t) => t.id === session.activeId);
   const inFront = active === undefined ? null : active.host;
 
-  for (const host of [...connections.keys()]) {
+  for (const [host, conn] of [...connections.entries()]) {
     if (host === inFront) {
-      lastUsed.set(host, now);
+      conn.usedAt = now;
       continue;
     }
-    const seen = lastUsed.get(host) ?? now;
-    if (now - seen < hold) continue;
-    const conn = connections.get(host);
-    if (conn !== undefined) conn.close();
+    if (now - conn.usedAt < hold) continue;
+    conn.close();
     connections.delete(host);
-    lastUsed.delete(host);
   }
 }
 
@@ -783,8 +777,8 @@ async function openConnection(host: string): Promise<Connection | { error: strin
     // anything reading `connections` mid-setup would proxy to an engine that
     // does not know the tab yet, and callers waiting on this attempt get a
     // connection that is ready rather than one that merely exists.
+    conn.usedAt = Date.now();
     connections.set(host, conn);
-    lastUsed.set(host, Date.now());
     return conn;
   } catch (e) {
     return { error: "could not reach " + host + ": " + (e as Error).message };
@@ -1934,7 +1928,17 @@ async function main(): Promise<void> {
   // One probe, taken before anything else talks to that instance: handing a
   // repository over is itself a request, and every request resets the engine's
   // idle clock, so asking afterwards would only measure our own traffic.
-  const other = await probe(port);
+  //
+  // Skipped entirely when headless, because a headless gitc is a server, not
+  // an application: it binds its port or it fails. Handing over is right for
+  // a window - a second launch should reach the one already on screen - and
+  // wrong here, where it caused the bug this comment exists for. A remote
+  // engine dies with its tunnel, but not instantly; open a new tunnel to that
+  // host and the dying engine still holds the port, still answers the
+  // readiness ping, and the engine just started hands over to it and exits.
+  // The tunnel then dies with the corpse, and coming back to a remote tab
+  // failed with ECONNRESET.
+  const other = headless ? null : await probe(port);
   if (other !== null) {
     const windowGone = other.windowGone === true;
 
