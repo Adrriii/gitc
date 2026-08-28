@@ -138,7 +138,7 @@ $hatch: var(--line-strong);
   // Horizontal scrolling is what "don't wrap" means; with wrap on nothing
   // ever exceeds the width and the scrollbar simply never appears.
   overflow: auto;
-  font-family: Consolas, "Cascadia Mono", "Courier New", monospace;
+  font-family: var(--mono);
   font-size: 12px;
   line-height: 16px;
 }
@@ -146,7 +146,7 @@ $hatch: var(--line-strong);
 .note {
   padding: 24px;
   color: var(--fg-muted);
-  font-family: "Segoe UI", system-ui, sans-serif;
+  font-family: var(--sans);
   font-size: 12px;
 }
 
@@ -169,13 +169,13 @@ $hatch: var(--line-strong);
 }
 .hunkHeading {
   color: var(--fg-dim);
-  font-family: "Segoe UI", system-ui, sans-serif;
+  font-family: var(--sans);
 }
 
 .revert {
   margin-left: auto;
   font-size: 11px;
-  font-family: "Segoe UI", system-ui, sans-serif;
+  font-family: var(--sans);
   padding: 2px 8px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -366,7 +366,7 @@ $hatch: var(--line-strong);
 
 .hunkAct {
   font-size: 11px;
-  font-family: "Segoe UI", system-ui, sans-serif;
+  font-family: var(--sans);
   padding: 2px 8px;
   border: 1px solid var(--line);
   border-radius: var(--radius);

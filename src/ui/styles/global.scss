@@ -97,7 +97,36 @@
   --sidebar-w: 208px;
   --panel-w: 400px;
 
-  --mono: "Cascadia Mono", Consolas, "JetBrains Mono", "Courier New", monospace;
+  // The two font stacks, as tokens for the same reason the colours are: a
+  // component spelling out its own was how five different stacks drifted into
+  // the app, and every one of them was a place the Linux bug below could come
+  // back. If a component needs a face that is not here, add a token.
+  //
+  // `system-ui` is deliberately absent, and this is not a style preference.
+  // On Windows "Segoe UI" wins and nothing after it is ever consulted; on
+  // Linux Segoe UI does not exist, so `system-ui` is what actually resolves,
+  // through fontconfig, to whatever that machine calls a UI font. Two things
+  // then go wrong, and both of them look like the letters are sitting on top
+  // of each other:
+  //
+  //   - If the resolved family has no bold face installed - distros package
+  //     Regular and Bold separately, so this is common rather than exotic -
+  //     Chromium synthesises one with FreeType's embolden, which widens the
+  //     glyph outlines without widening their advances. Only bold text is
+  //     affected, which is why the branch chips showed it worst: .chipHead is
+  //     600, the boldest small text in the app.
+  //   - Advances are hinted and rounded to whole pixels at scale factor 1, so
+  //     what Blink measured and what Skia painted disagree. Whether it bites
+  //     depends on the box's fontconfig and display scaling, which is why it
+  //     was intermittent rather than constant.
+  //
+  // Naming families that actually ship a bold face is the fix. DejaVu,
+  // Liberation and Noto cover essentially every desktop Linux install between
+  // them; Arial and the generic stay as the last resort.
+  --sans: "Segoe UI", Inter, "Noto Sans", "DejaVu Sans", "Liberation Sans",
+    Arial, sans-serif;
+  --mono: "Cascadia Mono", Consolas, "JetBrains Mono", "DejaVu Sans Mono",
+    "Liberation Mono", "Noto Sans Mono", "Courier New", monospace;
 
   // How wide a tab renders, in characters. The browser default is 8, which is
   // why tabbed files looked so deeply indented; 4 is what most code is written
@@ -123,7 +152,13 @@ body {
   // A 20px line box in a 26px row leaves 3px above and below - enough to
   // separate rows without the airy 22px leading that pushed the old layout
   // toward 28px rows.
-  font: 12px/20px "Segoe UI", system-ui, Inter, Arial, sans-serif;
+  font: 12px/20px var(--sans);
+  // The other half of the Linux hinting problem above. Hinted advances are
+  // snapped to whole pixels, so a run of text is measured at one width and
+  // painted at another; geometricPrecision asks for the exact advances
+  // instead. A no-op on Windows, where DirectWrite already positions glyphs
+  // subpixel - so this costs nothing here and is the whole fix there.
+  text-rendering: geometricPrecision;
   -webkit-font-smoothing: antialiased;
 }
 

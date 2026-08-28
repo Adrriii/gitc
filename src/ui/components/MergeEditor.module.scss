@@ -162,7 +162,7 @@ $picked: rgba(255, 255, 255, 0.09);
   flex: 1;
   min-height: 0;
   overflow: auto;
-  font-family: Consolas, "Cascadia Mono", monospace;
+  font-family: var(--mono);
   font-size: 12px;
   line-height: 18px;
 }
@@ -241,7 +241,7 @@ $picked: rgba(255, 255, 255, 0.09);
   align-items: center;
   gap: 8px;
   padding: 3px 8px 3px 40px;
-  font-family: "Segoe UI", system-ui, sans-serif;
+  font-family: var(--sans);
   font-size: 11px;
   color: var(--fg-dim);
 }
@@ -423,7 +423,7 @@ $picked: rgba(255, 255, 255, 0.09);
   overflow: hidden;
   padding: 8px 0;
   text-align: right;
-  font-family: Consolas, "Cascadia Mono", monospace;
+  font-family: var(--mono);
   font-size: 12px;
   line-height: 18px;
   color: var(--fg-faint);
@@ -447,7 +447,7 @@ $picked: rgba(255, 255, 255, 0.09);
 .outputText {
   margin: 0;
   padding: 8px 12px 8px 0;
-  font-family: Consolas, "Cascadia Mono", monospace;
+  font-family: var(--mono);
   font-size: 12px;
   line-height: 18px;
   white-space: pre;

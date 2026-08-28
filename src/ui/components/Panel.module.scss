@@ -26,7 +26,7 @@
 }
 
 .mono {
-  font-family: Consolas, "Cascadia Mono", monospace;
+  font-family: var(--mono);
   color: var(--fg);
 }
 
@@ -307,7 +307,7 @@
 }
 
 .mhash {
-  font-family: Consolas, monospace;
+  font-family: var(--mono);
   font-size: 11px;
   color: var(--fg-dim);
   flex: none;
