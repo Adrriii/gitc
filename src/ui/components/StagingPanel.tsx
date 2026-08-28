@@ -114,6 +114,16 @@ export function StagingPanel({
   const [error, setError] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<{ tracked: string[]; untracked: string[] } | null>(null);
 
+  // This panel is not remounted when the repository changes - it is handed a
+  // new tabId and keeps its state - so a discard left waiting for an answer
+  // would be answered against whichever repository arrived in the meantime,
+  // because onConfirm reads tabId when it runs. A question about files in one
+  // repository does not survive the move to another. Same rule as the
+  // application's own confirms, enforced there by ConfirmState.tabId.
+  useEffect(() => {
+    setConfirm(null);
+  }, [tabId]);
+
   // Shared with the application, which follows the same lists to decide what
   // to show once a file leaves one of them.
   const unstaged = useMemo(() => unstagedFiles(status), [status]);

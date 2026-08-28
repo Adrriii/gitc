@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
 import type {
   ConflictState,
   GraphPayload,
@@ -39,11 +40,20 @@ import { Form } from "./components/Form";
 import type { Field } from "./components/Form";
 import { useHeartbeat } from "./useHeartbeat";
 import { useRepoWatch } from "./useRepoWatch";
+import { useKeybinds } from "./useKeybinds";
 import { useDragWidth } from "./useDragWidth";
 import { useTheme } from "./theme";
 import { useGitLog } from "./useGitLog";
 import { useToasts } from "./useToasts";
-import { commandType, useFetchInterval, useHiddenCommands, useUpdateCheck } from "./settings";
+import {
+  commandType,
+  useFetchInterval,
+  useFetchOnFocus,
+  useHiddenCommands,
+  useUpdateCheck,
+  useUpdateLevel,
+} from "./settings";
+import { shouldPrompt } from "./version";
 import { rangeSelect, toggleSelect } from "./selection";
 import { nextAfter, stagedFiles, unstagedFiles } from "./staging";
 import s from "./App.module.scss";
@@ -97,6 +107,18 @@ interface ConfirmState {
   confirmLabel: string;
   destructive?: boolean;
   onConfirm: () => void;
+  /**
+   * The repository tab this question was raised for, stamped automatically by
+   * setConfirm - pass it explicitly as null for a question about the
+   * application rather than a repository, like the update prompt.
+   *
+   * It exists because onConfirm runs later, and everything it calls reads the
+   * ACTIVE tab at the moment it runs. Click push on a repo that needs a force,
+   * switch tabs while the question is up, confirm - and the force landed on
+   * whichever repo you had switched to. Every deferred confirm here had the
+   * same shape; push was just the one where it did damage.
+   */
+  tabId?: string | null;
 }
 
 /**
@@ -148,7 +170,19 @@ export function App() {
   } | null>(null);
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [prompt, setPrompt] = useState<PromptState | null>(null);
-  const [confirm, setConfirm] = useState<ConfirmState | null>(null);
+  const [confirm, setConfirmState] = useState<ConfirmState | null>(null);
+  /**
+   * The active tab, readable from a callback without going stale.
+   *
+   * setConfirm stamps the confirm with it, and a callback created in an
+   * earlier render holds an earlier `activeId` - which would stamp the wrong
+   * repository, the exact bug this is here to prevent. A ref is always the
+   * current one.
+   */
+  const activeIdRef = useRef<string | null>(null);
+  const setConfirm = useCallback((next: ConfirmState | null) => {
+    setConfirmState(next === null ? null : { tabId: activeIdRef.current, ...next });
+  }, []);
   const [choose, setChoose] = useState<ChooseState | null>(null);
   const [form, setForm] = useState<FormState | null>(null);
   const [error, setErrorState] = useState<string | null>(null);
@@ -164,6 +198,8 @@ export function App() {
   const { hidden: hiddenCommands, hide: hideCommand } = useHiddenCommands();
   const [logOpen, setLogOpen] = useState(false);
   const { minutes: fetchMinutes } = useFetchInterval();
+  const { onFocus: fetchOnFocus } = useFetchOnFocus();
+  const { level: updateLevel } = useUpdateLevel();
   const { minutes: updateMinutes } = useUpdateCheck();
   // Both side panels are dragged rather than fixed. The handles are on the
   // inner edge of each, so the sidebar grows rightward and the panel leftward.
@@ -353,6 +389,8 @@ export function App() {
         </p>
       ),
       confirmLabel: `Update to ${update.latest}`,
+      // About the application, so it survives switching repositories.
+      tabId: null,
       onConfirm: () => {
         setConfirm(null);
         setUpdating(true);
@@ -389,6 +427,41 @@ export function App() {
 
   const activeId = session?.activeId ?? null;
   const activeTab = session?.tabs.find((t) => t.id === activeId) ?? null;
+  activeIdRef.current = activeId;
+
+  // Ctrl+Tab / Ctrl+Shift+Tab / Ctrl+W. The step wraps in both directions:
+  // adding tabs.length before the modulo keeps -1 from landing outside the
+  // list, which is the whole of "roll over" in one expression.
+  const stepRepo = useCallback(
+    (delta: number) => {
+      const tabs = session?.tabs ?? [];
+      if (tabs.length < 2) return;
+      const at = tabs.findIndex((t) => t.id === activeId);
+      if (at < 0) return;
+      const next = tabs[(at + delta + tabs.length) % tabs.length];
+      void api.activate(next.id).then(setSession);
+    },
+    [session, activeId],
+  );
+
+  useKeybinds({
+    nextRepo: () => stepRepo(1),
+    prevRepo: () => stepRepo(-1),
+    closeRepo: () => {
+      if (activeId === null) return;
+      void api.close(activeId).then(setSession);
+    },
+  });
+
+  // A question about a repository dies with the move to another one.
+  //
+  // The alternative - running it against the repo it was asked for - would
+  // mean force-pushing something the user can no longer see. Asking again is
+  // cheap; acting unseen is not.
+  useEffect(() => {
+    setConfirmState((c) => (c !== null && c.tabId !== null && c.tabId !== activeId ? null : c));
+    setPushRefusal(null);
+  }, [activeId]);
 
   /**
    * Drops the previous repository the moment the tab changes.
@@ -557,18 +630,31 @@ export function App() {
     // Short enough that "1 minute" means roughly a minute, cheap enough that
     // it does not matter: everything past the guards above is arithmetic.
     const id = window.setInterval(() => void check(), 5000);
-    const onFocus = () => void check();
-    window.addEventListener("focus", onFocus);
-    document.addEventListener("visibilitychange", onFocus);
-    void check();
+
+    // Coming back to the window, or arriving on this repository's tab (this
+    // effect re-runs on activeId), checks the deadline immediately instead of
+    // waiting out a tick - that is the moment somebody is about to look.
+    // Optional, because on a rate-limited remote every fetch should be one
+    // the clock earned; the interval itself keeps working either way.
+    if (fetchOnFocus) {
+      const onFocus = () => void check();
+      window.addEventListener("focus", onFocus);
+      document.addEventListener("visibilitychange", onFocus);
+      void check();
+
+      return () => {
+        stopped = true;
+        window.clearInterval(id);
+        window.removeEventListener("focus", onFocus);
+        document.removeEventListener("visibilitychange", onFocus);
+      };
+    }
 
     return () => {
       stopped = true;
       window.clearInterval(id);
-      window.removeEventListener("focus", onFocus);
-      document.removeEventListener("visibilitychange", onFocus);
     };
-  }, [activeId, fetchMinutes, refresh, fetchedRef, checkedRef]);
+  }, [activeId, fetchMinutes, fetchOnFocus, refresh, fetchedRef, checkedRef]);
 
   /** Runs a repository operation and folds the outcome back into the UI. */
   const runOp = useCallback(
@@ -1687,7 +1773,7 @@ export function App() {
               onFetch={() => void runOp({ op: "fetch" })}
             />
             <span className={s.path}>{activeTab.path}</span>
-            {update !== null && update.available && (
+            {update !== null && update.available && shouldPrompt(update.current, update.latest, updateLevel) && (
               <button
                 className={s.update}
                 onClick={runUpdate}
