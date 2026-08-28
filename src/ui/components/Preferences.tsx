@@ -259,7 +259,7 @@ export function Preferences({
             </Row>
             <Row
               label="Fetch on focus"
-              hint="Also check when you come back to the window or switch to this repository's tab, instead of waiting out the interval. The interval still applies, so switching tabs quickly cannot turn into a burst of fetches."
+              hint="Fetch when you come back to the window, or switch to this repository's tab, rather than waiting for the interval. Works with the interval Off. Repeats within a few seconds are skipped, so flipping between tabs does not fetch every time."
             >
               <div className={s.choices}>
                 <button className={fetchOnFocus ? s.on : ""} onClick={() => setFetchOnFocus(true)}>

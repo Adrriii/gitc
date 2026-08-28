@@ -155,9 +155,17 @@ const FETCH_ON_FOCUS_KEY = "gitc.fetchOnFocus";
  *
  * On by default, because returning to the window is precisely the moment
  * somebody is about to look at it, and a view that updates a minute after you
- * started reading it is the one that misleads. It still honours the interval:
- * this decides *when the deadline is checked*, not whether there is one, so a
- * burst of tab switching cannot turn into a burst of fetches.
+ * started reading it is the one that misleads.
+ *
+ * It fetches; it does not ask the interval whether it is time. Those are
+ * different questions - the interval keeps a repository you are sitting on
+ * from going stale, this one answers "I have just arrived and I am about to
+ * read it" - and routing the second through the first made it useless, since
+ * an interval of five minutes meant a tab switch did nothing for five
+ * minutes. A short cooldown, not the interval, is what stops a burst.
+ *
+ * Independent of the interval in both directions: with the interval Off and
+ * this On, arriving still fetches.
  *
  * Off is for a metered or heavily rate-limited remote, where every fetch
  * should be one you asked for or one the clock earned.

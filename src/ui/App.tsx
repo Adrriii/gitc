@@ -70,6 +70,14 @@ const DEFAULT_LIMIT = 2000;
  */
 const DEEP_LIMIT = 50000;
 
+/**
+ * How recently a repository must have been fetched for arriving at it to skip
+ * fetching again. Short on purpose: this exists to stop a burst when someone
+ * flips between two tabs, not to ration fetches - the interval setting does
+ * that. Anything long enough to notice would make "fetch on focus" a lie.
+ */
+const FETCH_ON_ARRIVE_COOLDOWN_MS = 15000;
+
 interface MenuState {
   x: number;
   y: number;
@@ -200,6 +208,12 @@ export function App() {
   const { minutes: fetchMinutes } = useFetchInterval();
   const { onFocus: fetchOnFocus } = useFetchOnFocus();
   const { level: updateLevel } = useUpdateLevel();
+  /**
+   * When each repository was last fetched because it was arrived at, kept
+   * outside the fetch effect because that effect is rebuilt on every tab
+   * change - which is exactly the event whose repeats need limiting.
+   */
+  const arrivedRef = useRef(new Map<string, number>());
   const { minutes: updateMinutes } = useUpdateCheck();
   // Both side panels are dragged rather than fixed. The handles are on the
   // inner edge of each, so the sidebar grows rightward and the panel leftward.
@@ -595,7 +609,7 @@ export function App() {
   const fetchedRef = freshness.fetched;
   const checkedRef = freshness.checked;
   useEffect(() => {
-    if (activeId === null || fetchMinutes === 0) return;
+    if (activeId === null) return;
     let stopped = false;
     // Guards the two ways this could pile up: a fetch slower than the poll,
     // and a remote that is refusing us - a failure leaves FETCH_HEAD alone,
@@ -606,17 +620,10 @@ export function App() {
 
     const due = fetchMinutes * 60 * 1000;
 
-    const check = async () => {
-      if (stopped || inFlight || !document.hasFocus() || document.hidden) return;
-      // No successful poll yet: `fetched` is still 0 because nobody has
-      // asked, not because the repository has never fetched.
-      if (checkedRef.current === 0) return;
-      const now = Date.now();
-      if (now - attempted < due) return;
-      if (fetchedRef.current !== 0 && now - fetchedRef.current < due) return;
-
+    const fetchNow = async () => {
+      if (stopped || inFlight) return;
       inFlight = true;
-      attempted = now;
+      attempted = Date.now();
       try {
         await api.op(activeId, { op: "fetch" });
         if (!stopped) refresh();
@@ -627,24 +634,64 @@ export function App() {
       }
     };
 
+    // The deadline poll.
+    const check = async () => {
+      if (stopped || inFlight || !document.hasFocus() || document.hidden) return;
+      // No successful poll yet: `fetched` is still 0 because nobody has
+      // asked, not because the repository has never fetched.
+      if (checkedRef.current === 0) return;
+      const now = Date.now();
+      if (now - attempted < due) return;
+      if (fetchedRef.current !== 0 && now - fetchedRef.current < due) return;
+      await fetchNow();
+    };
+
+    /**
+     * Arriving: the window regained focus, or this repository's tab did.
+     *
+     * This fetches, rather than asking the deadline whether it is time. The
+     * interval answers "keep it from going stale while I sit here"; this
+     * answers "I have just come back and I am about to read it", and routing
+     * it through the deadline made it useless - with the interval on five
+     * minutes, switching tabs did nothing at all for five minutes.
+     *
+     * It could not even do that much on a tab switch: useRepoWatch clears its
+     * freshness the moment tabId changes, so `checked` was 0 and the deadline
+     * check returned before looking at anything.
+     *
+     * The only guard is a short cooldown, held per repository OUTSIDE this
+     * effect so it survives the switch that re-creates it. Flipping between
+     * two tabs cannot become a fetch per flip, and coming back a minute later
+     * still fetches.
+     */
+    const onArrive = async () => {
+      if (stopped || inFlight || !document.hasFocus() || document.hidden) return;
+      const now = Date.now();
+      const last = arrivedRef.current.get(activeId) ?? 0;
+      if (now - last < FETCH_ON_ARRIVE_COOLDOWN_MS) return;
+      // A fetch we already know about, from the interval or from a terminal.
+      if (fetchedRef.current !== 0 && now - fetchedRef.current < FETCH_ON_ARRIVE_COOLDOWN_MS) {
+        return;
+      }
+      arrivedRef.current.set(activeId, now);
+      await fetchNow();
+    };
+
     // Short enough that "1 minute" means roughly a minute, cheap enough that
     // it does not matter: everything past the guards above is arithmetic.
-    const id = window.setInterval(() => void check(), 5000);
+    // Off entirely when the interval is - "Off" means no clock, not no fetch
+    // on arrival, which is its own setting.
+    const id = fetchMinutes === 0 ? null : window.setInterval(() => void check(), 5000);
 
-    // Coming back to the window, or arriving on this repository's tab (this
-    // effect re-runs on activeId), checks the deadline immediately instead of
-    // waiting out a tick - that is the moment somebody is about to look.
-    // Optional, because on a rate-limited remote every fetch should be one
-    // the clock earned; the interval itself keeps working either way.
     if (fetchOnFocus) {
-      const onFocus = () => void check();
+      const onFocus = () => void onArrive();
       window.addEventListener("focus", onFocus);
       document.addEventListener("visibilitychange", onFocus);
-      void check();
+      void onArrive();
 
       return () => {
         stopped = true;
-        window.clearInterval(id);
+        if (id !== null) window.clearInterval(id);
         window.removeEventListener("focus", onFocus);
         document.removeEventListener("visibilitychange", onFocus);
       };
@@ -652,7 +699,7 @@ export function App() {
 
     return () => {
       stopped = true;
-      window.clearInterval(id);
+      if (id !== null) window.clearInterval(id);
     };
   }, [activeId, fetchMinutes, fetchOnFocus, refresh, fetchedRef, checkedRef]);
 
