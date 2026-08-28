@@ -14,6 +14,7 @@ import type {
   ConflictState,
   ConflictVersions,
   Submodule,
+  SshHost,
 } from "./types";
 import type { DiffTarget } from "./components/DiffView";
 
@@ -32,8 +33,37 @@ import type { DiffTarget } from "./components/DiffView";
  * strictly as UTF-8 first, which is what Linux and macOS give and what git
  * emits, and as Windows-1252 when that fails, which is what an ANSI name is.
  */
+/**
+ * The tab a request is about, taken from the request itself.
+ *
+ * The engine routes remote tabs on this header: a repository on another
+ * machine is served by the gitc over there, and this is what tells the local
+ * engine to pass the request through rather than answer it.
+ *
+ * Read off the URL and the body rather than passed in by every caller,
+ * because a caller that forgets it does not fail loudly - it quietly asks the
+ * wrong machine, and the answer looks plausible. Every repository call already
+ * carries the id: in the query for reads, in the body for writes.
+ *
+ * Session-level calls carry an id too (close, activate) and will set the
+ * header; the engine keeps a list of endpoints that never travel, so those are
+ * answered locally regardless.
+ */
+function tabHeader(url: string, body?: unknown): Record<string, string> {
+  const q = url.indexOf("?");
+  if (q !== -1) {
+    const id = new URLSearchParams(url.substring(q + 1)).get("id");
+    if (id !== null && id.length > 0) return { "x-gitc-tab": id };
+  }
+  if (body !== null && typeof body === "object" && body !== undefined) {
+    const id = (body as { id?: unknown }).id;
+    if (typeof id === "string" && id.length > 0) return { "x-gitc-tab": id };
+  }
+  return {};
+}
+
 async function jsonBytes<T>(url: string): Promise<T> {
-  const res = await fetch(url);
+  const res = await fetch(url, { headers: tabHeader(url) });
   if (!res.ok) throw new Error(res.statusText);
 
   const buffer = await res.arrayBuffer();
@@ -47,7 +77,10 @@ async function jsonBytes<T>(url: string): Promise<T> {
 }
 
 async function json<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init);
+  const res = await fetch(url, {
+    ...init,
+    headers: { ...(init?.headers as Record<string, string>), ...tabHeader(url) },
+  });
   if (!res.ok) {
     const body = (await res.json().catch(() => ({ error: res.statusText }))) as {
       error?: string;
@@ -60,7 +93,7 @@ async function json<T>(url: string, init?: RequestInit): Promise<T> {
 function post<T>(url: string, body: unknown): Promise<T> {
   return json<T>(url, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...tabHeader(url, body) },
     body: JSON.stringify(body),
   });
 }
@@ -68,7 +101,11 @@ function post<T>(url: string, body: unknown): Promise<T> {
 export const api = {
   session: () => json<Session>("/api/session"),
 
-  open: (path: string) => post<{ tab: unknown; session: Session }>("/api/open", { path }),
+  open: (path: string, host?: string) =>
+    post<{ tab: unknown; session: Session }>("/api/open", { path, host: host ?? "" }),
+
+  /** Hosts from ~/.ssh/config that a remote tab could be opened on. */
+  hosts: () => json<{ hosts: SshHost[] }>("/api/hosts").then((r) => r.hosts),
 
   close: (id: string) => post<Session>("/api/close", { id }),
 

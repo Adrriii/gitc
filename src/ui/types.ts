@@ -18,6 +18,14 @@ export interface Tab {
   host: string | null;
 }
 
+/** A host offered by ~/.ssh/config. */
+export interface SshHost {
+  alias: string;
+  hostName: string | null;
+  user: string | null;
+  port: number | null;
+}
+
 export interface Session {
   tabs: Tab[];
   activeId: string | null;

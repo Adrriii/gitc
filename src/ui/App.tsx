@@ -756,9 +756,9 @@ export function App() {
     [activeTab, refresh],
   );
 
-  const open = useCallback(async (path: string) => {
+  const open = useCallback(async (path: string, host?: string) => {
     try {
-      const r = await api.open(path);
+      const r = await api.open(path, host);
       setSession(r.session);
       setError(null);
     } catch (e) {
