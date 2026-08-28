@@ -18,7 +18,6 @@ export function Welcome({
   const [hosts, setHosts] = useState<SshHost[]>([]);
   /** The host being opened on, or null while the choice is this machine. */
   const [host, setHost] = useState<SshHost | null>(null);
-  const [remotePath, setRemotePath] = useState("");
   /** Connecting is slow enough to need saying so: install, then a tunnel. */
   const [connecting, setConnecting] = useState(false);
 
@@ -131,28 +130,19 @@ export function Welcome({
                   Change
                 </button>
               </div>
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  const path = remotePath.trim();
-                  if (path.length === 0 || connecting) return;
+              {/* The same picker as the local one, browsing that machine.
+                  The first listing is slow - it installs gitc there and opens
+                  the tunnel - and every one after it is down the same tunnel. */}
+              <RepoPicker
+                host={host.alias}
+                onOpen={(path) => {
                   setConnecting(true);
                   onOpen(path, host.alias);
                 }}
-              >
-                <input
-                  className={s.search}
-                  placeholder={"Path on " + host.alias + ", e.g. /srv/app"}
-                  value={remotePath}
-                  onChange={(e) => setRemotePath(e.target.value)}
-                  disabled={connecting}
-                  autoFocus
-                />
-              </form>
+              />
               {connecting && (
                 <div className={s.connecting}>
-                  Connecting to {host.alias} - installing gitc there if it is not already, then
-                  opening a tunnel. This takes a moment the first time.
+                  Opening {host.alias}...
                 </div>
               )}
             </div>

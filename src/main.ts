@@ -661,14 +661,51 @@ async function openRepo(path: string, wantId?: string): Promise<Tab | null> {
 }
 
 /**
- * Live tunnels, by the tab they serve.
+ * Live tunnels, by the HOST they reach.
  *
- * A tab's id is the key on BOTH sides: openRemoteRepo tells the remote engine
- * which id to use, so a request for that tab can be handed through untouched.
- * Rewriting ids in transit would mean parsing every body on the way past, and
- * getting it wrong once means an operation on the wrong repository.
+ * One engine per machine, not per tab. The remote engine binds a fixed port
+ * over there, so a second tunnel to the same host would start a gitc that
+ * finds one already running, hands over to it and exits - taking its own
+ * tunnel with it and leaving that tab dead. Sharing is also simply right:
+ * three repositories on one server are three tabs of one gitc, exactly as
+ * they would be locally.
+ *
+ * Browsing uses this too, before any tab exists.
  */
 const connections = new Map<string, Connection>();
+
+/**
+ * The tunnel to a host, opening one if this is the first thing to need it.
+ *
+ * Installing and connecting are slow enough to be worth not repeating: the
+ * picker asks for a directory listing on every keystroke.
+ */
+async function connectionFor(host: string): Promise<Connection | { error: string }> {
+  const open = connections.get(host);
+  if (open !== undefined) return open;
+
+  const kind = await detectRemote(host);
+  if (kind.refusal !== null) return { error: kind.refusal };
+
+  const install = await ensureRemote(host);
+  if (!install.ok) return { error: install.error };
+
+  const bin = kind.binPath === null ? "~/.local/bin/gitc" : kind.binPath;
+  try {
+    const conn = await connect(host, bin);
+    connections.set(host, conn);
+    return conn;
+  } catch (e) {
+    return { error: "could not reach " + host + ": " + (e as Error).message };
+  }
+}
+
+/** The connection a tab's requests belong on, or null when it is local. */
+function connectionForTab(id: string): Connection | null {
+  const tab = session.tabs.find((t) => t.id === id);
+  if (tab === undefined || tab.host === null) return null;
+  return connections.get(tab.host) ?? null;
+}
 
 /** Endpoints that are about this gitc rather than about a repository. */
 const LOCAL_ONLY = [
@@ -703,19 +740,8 @@ async function openRemoteRepo(
   host: string,
   path: string,
 ): Promise<{ tab: Tab } | { error: string }> {
-  const kind = await detectRemote(host);
-  if (kind.refusal !== null) return { error: kind.refusal };
-
-  const install = await ensureRemote(host);
-  if (!install.ok) return { error: install.error };
-
-  const bin = kind.binPath === null ? "~/.local/bin/gitc" : kind.binPath;
-  let conn: Connection;
-  try {
-    conn = await connect(host, bin);
-  } catch (e) {
-    return { error: "could not reach " + host + ": " + (e as Error).message };
-  }
+  const conn = await connectionFor(host);
+  if ("error" in conn) return { error: conn.error };
 
   const id = makeId();
   const answer = await tunnelRequest(
@@ -725,18 +751,29 @@ async function openRemoteRepo(
     JSON.stringify({ path, id }),
   );
   if (answer.status !== 200) {
-    conn.close();
+    // The tunnel stays: it may already be serving other tabs, and a host that
+    // refused one path is not a host that has gone away.
     const why = answer.text.length > 0 ? answer.text : "no answer";
     return { error: host + " would not open " + path + ": " + why };
   }
 
   const tab: Tab = { id, name: basename(path), path, host };
-  connections.set(id, conn);
   session.tabs.push(tab);
   session.activeId = id;
   touchRecent(session, tab);
   saveSession(session);
   return { tab };
+}
+
+/** Closes the tunnel to a host once no tab is left using it. */
+function releaseHost(host: string): void {
+  for (const t of session.tabs) {
+    if (t.host === host) return;
+  }
+  const conn = connections.get(host);
+  if (conn === undefined) return;
+  conn.close();
+  connections.delete(host);
 }
 
 async function handleApi(
@@ -921,15 +958,13 @@ async function handleApi(
 
   if (path === "/api/close") {
     const body = JSON.parse(await readBody(req)) as IdRequest;
-    // Closing a remote tab takes its tunnel down, and the remote engine with
-    // it. A connection left open would be a process on somebody's server that
-    // nothing on this side still refers to.
-    const conn = connections.get(body.id);
-    if (conn !== undefined) {
-      conn.close();
-      connections.delete(body.id);
-    }
+    // Which machine this tab was on, before it stops being in the list.
+    const closing = session.tabs.find((t) => t.id === body.id);
+    const wasOn = closing === undefined ? null : closing.host;
     session.tabs = session.tabs.filter((t) => t.id !== body.id);
+    // A tunnel outliving every tab that used it is a process on somebody's
+    // server that nothing here still refers to.
+    if (wasOn !== null) releaseHost(wasOn);
     if (session.activeId === body.id) {
       const head = at(session.tabs, 0);
       session.activeId = head === undefined ? null : head.id;
@@ -1013,11 +1048,35 @@ async function handleApi(
     const q = path.indexOf("?");
     const params = q === -1 ? "" : path.substring(q + 1);
     let dir = "";
+    let host = "";
     for (const pair of params.split("&")) {
       const eq = pair.indexOf("=");
       if (eq === -1) continue;
-      if (pair.substring(0, eq) === "path") dir = decodeURIComponent(pair.substring(eq + 1));
+      const key = pair.substring(0, eq);
+      if (key === "path") dir = decodeURIComponent(pair.substring(eq + 1));
+      if (key === "host") host = decodeURIComponent(pair.substring(eq + 1));
     }
+
+    // Browsing a machine you have not opened anything on yet. This is the one
+    // repository call that cannot route by tab, because its whole job is to
+    // find the repository a tab would be made from - so it names the host
+    // itself, and opens the tunnel that the eventual tab will go on sharing.
+    if (host.length > 0) {
+      const conn = await connectionFor(host);
+      if ("error" in conn) {
+        send(res, 502, "application/json", JSON.stringify({ error: conn.error }));
+        return true;
+      }
+      const answer = await tunnelRequest(
+        conn.port,
+        "/api/ls?path=" + encodeURIComponent(dir),
+        "GET",
+        null,
+      );
+      send(res, answer.status === 0 ? 502 : answer.status, "application/json", answer.text);
+      return true;
+    }
+
     sendJson(res, JSON.stringify(listDir(dir)));
     return true;
   }
@@ -1715,8 +1774,8 @@ async function main(): Promise<void> {
       // that can send an operation to the wrong repository.
       const tabHeader = req.headers["x-gitc-tab"];
       if (tabHeader !== undefined && !isLocalOnly(path)) {
-        const conn = connections.get(tabHeader);
-        if (conn !== undefined) {
+        const conn = connectionForTab(tabHeader);
+        if (conn !== null) {
           proxyToRemote(conn, path, req, res);
           return;
         }

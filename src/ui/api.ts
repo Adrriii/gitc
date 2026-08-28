@@ -153,8 +153,18 @@ export const api = {
   /** Downloads and installs it. gitc restarts itself when this succeeds. */
   applyUpdate: () => post<UpdateResult>("/api/update", {}),
 
-  /** Lists a directory for the repository picker: completion and browsing. */
-  ls: (path: string) => jsonBytes<Listing>(`/api/ls?path=${encodeURIComponent(path)}`),
+  /**
+   * Lists a directory for the repository picker: completion and browsing.
+   *
+   * With a host, the directory is on that machine. This is the one repository
+   * call that cannot be routed by tab - its job is to find the repository a
+   * tab would be made from - so it names the host itself.
+   */
+  ls: (path: string, host?: string) =>
+    jsonBytes<Listing>(
+      `/api/ls?path=${encodeURIComponent(path)}` +
+        (host === undefined || host.length === 0 ? "" : `&host=${encodeURIComponent(host)}`),
+    ),
 
   /** Replaces the hidden-ref set and returns the graph rebuilt without them. */
   setHidden: (id: string, hidden: string[]) =>
