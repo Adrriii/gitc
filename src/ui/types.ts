@@ -5,7 +5,17 @@
 export interface Tab {
   id: string;
   name: string;
+  /** The repository's path ON THE MACHINE THAT HOLDS IT - remote or not. */
   path: string;
+  /**
+   * The ssh destination this repository lives on, or null for this machine.
+   *
+   * A remote tab is served by a gitc running over there; everything the window
+   * asks about it is answered by that engine and passed through this one. The
+   * id is deliberately the SAME on both sides - see openRepo - so nothing has
+   * to be rewritten in transit.
+   */
+  host: string | null;
 }
 
 export interface Session {

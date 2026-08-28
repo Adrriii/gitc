@@ -4,7 +4,7 @@
 // which gives a chromeless window without needing a GUI toolkit - see
 // docs/toolchain.md for why that is the shape of this program.
 
-import { createServer } from "node:http";
+import { createServer, request } from "node:http";
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join, basename, resolve } from "node:path";
@@ -58,6 +58,8 @@ import { install, uninstall, installedBinary, runningFromInstall } from "./engin
 import { rewriteTodo, writeMessage } from "./engine/rebaseHelper.ts";
 import { running, handOff, probe, quitOther } from "./engine/instance.ts";
 import { raiseWindow, confirmTakeOver } from "./engine/quirks.ts";
+import { connect, ensureRemote, detectRemote, tunnelRequest, type Connection } from "./engine/remote.ts";
+import { readSshHosts } from "./engine/sshConfig.ts";
 import {
   check as checkUpdate,
   apply as applyUpdate,
@@ -489,6 +491,61 @@ function sendJson(res: import("node:http").ServerResponse, body: string): void {
   send(res, 200, "application/json; charset=utf-8", body);
 }
 
+/**
+ * Hands one request to the engine at the far end of a tunnel and streams the
+ * answer back.
+ *
+ * Bytes in, bytes out. The body is not parsed and the response is not decoded:
+ * paths arrive as the operating system's raw bytes and have to leave the same
+ * way (see the note on jsonBytes in api.ts), and anything this re-encoded on
+ * the way past would be a name broken by the trip rather than by git.
+ */
+function proxyToRemote(
+  conn: Connection,
+  path: string,
+  req: import("node:http").IncomingMessage,
+  res: import("node:http").ServerResponse,
+): void {
+  const headers: Record<string, string> = {};
+  const type = req.headers["content-type"];
+  if (type !== undefined) headers["content-type"] = type;
+  const length = req.headers["content-length"];
+  if (length !== undefined) headers["content-length"] = length;
+
+  const outbound = request(
+    {
+      hostname: "127.0.0.1",
+      port: conn.port,
+      path: path,
+      method: req.method === undefined ? "GET" : req.method,
+      headers: headers,
+      timeout: 120000,
+    },
+    (answer) => {
+      const back: Record<string, string> = {};
+      const ct = answer.headers["content-type"];
+      back["content-type"] = ct === undefined ? "application/json" : ct;
+      res.writeHead(answer.statusCode ?? 502, back);
+      answer.on("data", (chunk: Buffer) => res.write(chunk));
+      answer.on("end", () => res.end());
+    },
+  );
+
+  outbound.on("error", (e: Error) => {
+    // The tunnel died under us - the host went away, the network dropped, ssh
+    // was killed. Say so as an error the window can show rather than leaving
+    // the request hanging until something times out.
+    send(res, 502, "application/json", JSON.stringify({ error: conn.host + ": " + e.message }));
+  });
+  outbound.on("timeout", () => {
+    outbound.destroy();
+    send(res, 504, "application/json", JSON.stringify({ error: conn.host + " did not answer" }));
+  });
+
+  req.on("data", (chunk: Buffer) => outbound.write(chunk));
+  req.on("end", () => outbound.end());
+}
+
 function readBody(req: import("node:http").IncomingMessage): Promise<string> {
   return new Promise((resolve) => {
     let data = "";
@@ -501,6 +558,13 @@ function readBody(req: import("node:http").IncomingMessage): Promise<string> {
 
 interface OpenRequest {
   path: string;
+  /** An ssh destination, when the repository is on another machine. */
+  host?: string;
+  /**
+   * The id this tab must have. Sent by a gitc acting as somebody's client, so
+   * that the tab is the same id at both ends of the tunnel.
+   */
+  id?: string;
 }
 interface PathsRequest {
   id: string;
@@ -565,7 +629,12 @@ function makeId(): string {
   return id;
 }
 
-async function openRepo(path: string): Promise<Tab | null> {
+/**
+ * @param wantId The id the tab must have, when somebody else has already
+ *   chosen it. A remote engine is told the id its caller is using, so a tab is
+ *   the same id on both sides and a proxied request needs no rewriting.
+ */
+async function openRepo(path: string, wantId?: string): Promise<Tab | null> {
   if (!(await isRepo(path))) return null;
   const root = await repoRoot(path);
   const resolved = root === null ? path : root;
@@ -578,12 +647,96 @@ async function openRepo(path: string): Promise<Tab | null> {
     saveSession(session);
     return t;
   }
-  const tab: Tab = { id: makeId(), name: basename(resolved), path: resolved };
+  const tab: Tab = {
+    id: wantId === undefined ? makeId() : wantId,
+    name: basename(resolved),
+    path: resolved,
+    host: null,
+  };
   session.tabs.push(tab);
   session.activeId = tab.id;
   touchRecent(session, tab);
   saveSession(session);
   return tab;
+}
+
+/**
+ * Live tunnels, by the tab they serve.
+ *
+ * A tab's id is the key on BOTH sides: openRemoteRepo tells the remote engine
+ * which id to use, so a request for that tab can be handed through untouched.
+ * Rewriting ids in transit would mean parsing every body on the way past, and
+ * getting it wrong once means an operation on the wrong repository.
+ */
+const connections = new Map<string, Connection>();
+
+/** Endpoints that are about this gitc rather than about a repository. */
+const LOCAL_ONLY = [
+  "/api/ping",
+  "/api/bye",
+  "/api/quit",
+  "/api/window",
+  "/api/session",
+  "/api/open",
+  "/api/close",
+  "/api/activate",
+  "/api/reorder",
+  "/api/hosts",
+  "/api/update",
+];
+
+function isLocalOnly(path: string): boolean {
+  for (const p of LOCAL_ONLY) {
+    if (path === p || path.startsWith(p + "?")) return true;
+  }
+  return false;
+}
+
+/**
+ * Opens a repository that lives on another machine.
+ *
+ * The remote engine is told the id to use, so both sides agree from the first
+ * moment. Anything that fails here fails before a tab exists, which is the
+ * point: a tab that cannot be served is worse than no tab.
+ */
+async function openRemoteRepo(
+  host: string,
+  path: string,
+): Promise<{ tab: Tab } | { error: string }> {
+  const kind = await detectRemote(host);
+  if (kind.refusal !== null) return { error: kind.refusal };
+
+  const install = await ensureRemote(host);
+  if (!install.ok) return { error: install.error };
+
+  const bin = kind.binPath === null ? "~/.local/bin/gitc" : kind.binPath;
+  let conn: Connection;
+  try {
+    conn = await connect(host, bin);
+  } catch (e) {
+    return { error: "could not reach " + host + ": " + (e as Error).message };
+  }
+
+  const id = makeId();
+  const answer = await tunnelRequest(
+    conn.port,
+    "/api/open",
+    "POST",
+    JSON.stringify({ path, id }),
+  );
+  if (answer.status !== 200) {
+    conn.close();
+    const why = answer.text.length > 0 ? answer.text : "no answer";
+    return { error: host + " would not open " + path + ": " + why };
+  }
+
+  const tab: Tab = { id, name: basename(path), path, host };
+  connections.set(id, conn);
+  session.tabs.push(tab);
+  session.activeId = id;
+  touchRecent(session, tab);
+  saveSession(session);
+  return { tab };
 }
 
 async function handleApi(
@@ -737,7 +890,19 @@ async function handleApi(
 
   if (path === "/api/open") {
     const body = JSON.parse(await readBody(req)) as OpenRequest;
-    const tab = await openRepo(body.path);
+
+    const host = body.host;
+    if (host !== undefined && host.length > 0) {
+      const opened = await openRemoteRepo(host, body.path);
+      if ("error" in opened) {
+        send(res, 400, "application/json", JSON.stringify({ error: opened.error }));
+        return true;
+      }
+      sendJson(res, JSON.stringify({ tab: opened.tab, session }));
+      return true;
+    }
+
+    const tab = await openRepo(body.path, body.id);
     if (tab === null) {
       send(res, 400, "application/json", JSON.stringify({ error: "not a git repository" }));
       return true;
@@ -746,8 +911,24 @@ async function handleApi(
     return true;
   }
 
+  // The hosts a remote tab could be opened on. Read fresh rather than cached:
+  // ~/.ssh/config is edited by hand, and a host added a minute ago is exactly
+  // the one somebody is trying to reach.
+  if (path === "/api/hosts") {
+    sendJson(res, JSON.stringify({ hosts: readSshHosts() }));
+    return true;
+  }
+
   if (path === "/api/close") {
     const body = JSON.parse(await readBody(req)) as IdRequest;
+    // Closing a remote tab takes its tunnel down, and the remote engine with
+    // it. A connection left open would be a process on somebody's server that
+    // nothing on this side still refers to.
+    const conn = connections.get(body.id);
+    if (conn !== undefined) {
+      conn.close();
+      connections.delete(body.id);
+    }
     session.tabs = session.tabs.filter((t) => t.id !== body.id);
     if (session.activeId === body.id) {
       const head = at(session.tabs, 0);
@@ -1517,6 +1698,23 @@ async function main(): Promise<void> {
     const path = url === "/" ? "/index.html" : url;
 
     if (path.startsWith("/api/")) {
+      // A request about a repository on another machine is answered by the
+      // gitc over there. It goes through untouched - same path, same body -
+      // because both sides call that tab by the same id.
+      //
+      // Routed on a header rather than by digging the id out of the body: the
+      // id is in the query for some calls and the body for others, and a
+      // proxy that has to parse a body to decide where to send it is a proxy
+      // that can send an operation to the wrong repository.
+      const tabHeader = req.headers["x-gitc-tab"];
+      if (tabHeader !== undefined && !isLocalOnly(path)) {
+        const conn = connections.get(tabHeader);
+        if (conn !== undefined) {
+          proxyToRemote(conn, path, req, res);
+          return;
+        }
+      }
+
       handleApi(path, req, res)
         .then((handled) => {
           if (!handled) send(res, 404, "text/plain", "not found");

@@ -62,6 +62,15 @@ export function sshRun(host: string, command: string): Promise<Ran> {
       },
     );
 
+    // See localRun: these are not narrowed by the compiler, and a failed
+    // spawn has neither.
+    const stdout = child.stdout;
+    const stderr = child.stderr;
+    if (stdout === null || stderr === null) {
+      resolve({ code: 127, out: "", err: "could not start ssh" });
+      return;
+    }
+
     const out: Uint8Array[] = [];
     const err: Uint8Array[] = [];
     let code = 0;
@@ -77,13 +86,13 @@ export function sshRun(host: string, command: string): Promise<Ran> {
       });
     };
 
-    child.stdout.on("data", (c: Buffer) => out.push(c));
-    child.stderr.on("data", (c: Buffer) => err.push(c));
-    child.stdout.on("end", () => {
+    stdout.on("data", (c: Buffer) => out.push(c));
+    stderr.on("data", (c: Buffer) => err.push(c));
+    stdout.on("end", () => {
       open--;
       settle();
     });
-    child.stderr.on("end", () => {
+    stderr.on("end", () => {
       open--;
       settle();
     });
@@ -199,6 +208,14 @@ export async function ensureRemote(host: string): Promise<InstallOutcome> {
 function localRun(cmd: string, args: string[]): Promise<Ran> {
   return new Promise((resolve) => {
     const child = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"], detached: true });
+    // Guarded rather than assumed: scriptc does not narrow these off the stdio
+    // tuple, and a spawn that failed outright has neither stream.
+    const stdout = child.stdout;
+    const stderr = child.stderr;
+    if (stdout === null || stderr === null) {
+      resolve({ code: 127, out: "", err: "could not start " + cmd });
+      return;
+    }
     const out: Uint8Array[] = [];
     const err: Uint8Array[] = [];
     let code = 0;
@@ -212,13 +229,13 @@ function localRun(cmd: string, args: string[]): Promise<Ran> {
         err: Buffer.concat(err).toString("utf8"),
       });
     };
-    child.stdout.on("data", (c: Buffer) => out.push(c));
-    child.stderr.on("data", (c: Buffer) => err.push(c));
-    child.stdout.on("end", () => {
+    stdout.on("data", (c: Buffer) => out.push(c));
+    stderr.on("data", (c: Buffer) => err.push(c));
+    stdout.on("end", () => {
       open--;
       settle();
     });
-    child.stderr.on("end", () => {
+    stderr.on("end", () => {
       open--;
       settle();
     });
@@ -285,13 +302,16 @@ export async function pushRemote(
     // scp writes it beside the real name; the move is what makes it live, so a
     // transfer that dies halfway cannot leave a half-written binary behind.
     const incoming = bin + ".incoming";
+    // scp resolves a relative path against the remote's home directory, which
+    // is what the leading "~/" in binPath means anyway. Stripped by hand:
+    // String.replace runs in an embedded dynamic engine this build leaves out
+    // (SC2012).
+    const relative = incoming.startsWith("~/") ? incoming.substring(2) : incoming;
     const scp = await localRun("scp", [
       "-o", "BatchMode=yes",
       "-o", "ConnectTimeout=15",
       binary,
-      // scp resolves a relative path against the remote's home directory,
-      // which is what the leading "~/" in binPath means anyway.
-      host + ":" + incoming.replace("~/", ""),
+      host + ":" + relative,
     ]);
     if (scp.code !== 0) {
       return { ok: false, error: "could not copy gitc to " + host + ": " + scp.err.trim() };
@@ -353,6 +373,49 @@ function freePort(): Promise<number> {
   });
 }
 
+/**
+ * One request to the engine at the far end of a tunnel.
+ *
+ * Used for the handshake that opens a repository there. Ordinary traffic does
+ * not come through here - it is proxied straight through from the window, so
+ * the bytes are never parsed twice.
+ */
+export function tunnelRequest(
+  port: number,
+  path: string,
+  method: string,
+  body: string | null,
+): Promise<{ status: number; text: string }> {
+  return new Promise((resolve) => {
+    const headers: Record<string, string> = {};
+    if (body !== null) {
+      headers["content-type"] = "application/json";
+      headers["content-length"] = String(Buffer.byteLength(body));
+    }
+    const req = request(
+      {
+        hostname: "127.0.0.1",
+        port: port,
+        path: path,
+        method: method,
+        headers: headers,
+        timeout: 30000,
+      },
+      (res) => {
+        let text = "";
+        res.on("data", (chunk: Buffer) => {
+          text += chunk.toString("utf8");
+        });
+        res.on("end", () => resolve({ status: res.statusCode ?? 0, text }));
+      },
+    );
+    req.on("error", () => resolve({ status: 0, text: "" }));
+    req.on("timeout", () => resolve({ status: 0, text: "" }));
+    if (body !== null) req.write(body);
+    req.end();
+  });
+}
+
 /** Is the tunnel carrying a live gitc yet? */
 function answering(port: number): Promise<boolean> {
   return new Promise((resolve) => {
@@ -410,10 +473,15 @@ export async function connect(host: string, bin: string): Promise<Connection> {
     { stdio: ["ignore", "pipe", "pipe"], detached: true },
   );
 
+  // Kept for the failure message: when the engine never answers, ssh's own
+  // complaint is the only thing that says why.
   let stderr = "";
-  child.stderr.on("data", (c: Buffer) => {
-    stderr += c.toString("utf8");
-  });
+  const errStream = child.stderr;
+  if (errStream !== null) {
+    errStream.on("data", (c: Buffer) => {
+      stderr += c.toString("utf8");
+    });
+  }
 
   const close = () => {
     try {
