@@ -49,7 +49,10 @@
   display: flex;
   align-items: stretch;
   user-select: none;
-  cursor: default;
+  // The whole row selects the commit, so it says so. The chip inside overrides
+  // this with context-menu, which is a promise about the right button and
+  // outranks the general "this does something" of the row it sits on.
+  cursor: pointer;
 
   &:hover .msg {
     background: rgba(255, 255, 255, 0.035);
