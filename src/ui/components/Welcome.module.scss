@@ -233,3 +233,22 @@ h1 {
   font-size: 11px;
   white-space: nowrap;
 }
+
+// Said the moment a recent is clicked. Opening a remote repository takes
+// seconds - install, tunnel, first read - and until the tab appears nothing
+// else on this screen changes, which reads as the click having missed.
+.opening {
+  margin-left: auto;
+  flex: none;
+  color: var(--accent);
+  font-size: 11px;
+}
+
+// While one is opening, the rest stop offering themselves.
+.rowBusy {
+  pointer-events: none;
+
+  &:not(:hover) {
+    opacity: 0.5;
+  }
+}

@@ -167,9 +167,24 @@ function validateRemoteUrl(value: string): string | null {
 }
 
 export function App() {
-  const dead = useHeartbeat();
+  const { dead, remotes } = useHeartbeat();
   const [session, setSession] = useState<Session | null>(null);
-  const [data, setData] = useState<GraphPayload | null>(null);
+  const [liveData, setData] = useState<GraphPayload | null>(null);
+  /**
+   * The last repository this window actually drew.
+   *
+   * Kept so that loading something new does not blank the screen. Switching
+   * tabs clears `liveData` deliberately - the old graph must not be mistaken
+   * for the new one - but showing nothing at all for the seconds a remote
+   * repository takes to arrive is its own kind of wrong. What is drawn during
+   * that wait is the previous view, dimmed and inert, under an overlay that
+   * names what is being loaded.
+   */
+  const lastDrawn = useRef<GraphPayload | null>(null);
+  if (liveData !== null) lastDrawn.current = liveData;
+  const data = liveData ?? lastDrawn.current;
+  /** True while what is on screen is the previous repository, not this one. */
+  const stale = liveData === null && data !== null;
   const [selected, setSelected] = useState<string[]>([]);
   const [anchor, setAnchor] = useState<string | null>(null);
   const [openFile, setOpenFile] = useState<{
@@ -1601,6 +1616,7 @@ export function App() {
     <div className={s.root}>
       <TabBar
         session={session}
+        remotes={remotes}
         onActivate={(id) => api.activate(id).then(setSession)}
         onClose={(id) => api.close(id).then(setSession)}
         onNew={() => setSession({ ...session, activeId: null })}
@@ -1638,7 +1654,13 @@ export function App() {
         */
         <Loading name={activeTab.name} error={error} />
       ) : (
-        <div className={s.app}>
+        <div className={`${s.app} ${stale ? s.stale : ""}`}>
+          {/* Named so the wait says which repository, not just "loading". */}
+          {stale && (
+            <div className={s.staleOverlay}>
+              <Loading name={activeTab.name} error={error} />
+            </div>
+          )}
           <Toolbar
             repo={activeTab.name}
             branch={data.head.branch ?? "detached"}

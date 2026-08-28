@@ -1101,9 +1101,33 @@ async function handleApi(
     // timestamps would miss the case that actually hurts: closing gitc and
     // starting it again straight away.
     const gone = byeAt !== 0 || (sawFirstPing && Date.now() - lastPing > WINDOW_DEAD_MS);
+
+    // What each machine a tab lives on is currently doing. Carried on the
+    // heartbeat the window already sends rather than on a poll of its own:
+    // this changes exactly when the connection does, and the window is asking
+    // every two seconds anyway.
+    const remotes: { host: string; state: string }[] = [];
+    for (const tab of session.tabs) {
+      const host = tab.host;
+      if (host === null) continue;
+      if (remotes.some((r) => r.host === host)) continue;
+      const state = connections.has(host)
+        ? "online"
+        : connecting.has(host)
+          ? "connecting"
+          : "offline";
+      remotes.push({ host, state });
+    }
+
     sendJson(
       res,
-      JSON.stringify({ ok: true, instance: INSTANCE, windowGone: gone, quitting: quitting }),
+      JSON.stringify({
+        ok: true,
+        instance: INSTANCE,
+        windowGone: gone,
+        quitting: quitting,
+        remotes,
+      }),
     );
     return true;
   }
@@ -1804,7 +1828,15 @@ async function main(): Promise<void> {
   for (let i = 0; i < process.argv.length; i++) {
     const arg = at(process.argv, i);
     if (arg === undefined) continue;
-    if (arg === "--no-window") headless = true;
+    // Two spellings, one behaviour, because they are two different jobs and
+    // the next person to change one should know which they are changing.
+    //
+    // --no-window is the dev loop: `npm run dev` pairs it with Vite on 5173.
+    // --serve is production - the engine a remote tab talks to, started over
+    // ssh by another gitc. Sharing a flag meant the remote path was steered
+    // by a comment about a development server, and a change made for the dev
+    // loop would have altered how gitc behaves on somebody's server.
+    if (arg === "--no-window" || arg === "--serve") headless = true;
     if (arg === "--portable") portable = true;
 
     // Editor modes for interactive rebase. git appends the file it wants
@@ -2099,7 +2131,7 @@ async function main(): Promise<void> {
     const url = "http://127.0.0.1:" + port + "/";
     console.log("gitc serving " + url);
     if (headless) {
-      console.log("--no-window: API only (pair with `npm run dev:ui` on 5173)");
+      console.log("engine only, no window");
       return;
     }
 

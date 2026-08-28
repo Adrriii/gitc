@@ -143,3 +143,32 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+// A repository being read while the previous one is still on screen.
+//
+// Dimmed rather than replaced: blanking the window for the seconds a remote
+// repository takes to arrive loses the answer to "what was I looking at",
+// and a spinner alone does not say which repository is coming.
+.stale {
+  position: relative;
+
+  // Inert as well as faded. Everything under here belongs to the repository
+  // being replaced, so a click would act on the wrong one - and the buttons
+  // still look pressable at this opacity.
+  > *:not(.staleOverlay) {
+    opacity: 0.35;
+    pointer-events: none;
+    user-select: none;
+  }
+}
+
+.staleOverlay {
+  position: absolute;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  // Nothing here is clickable either: it is a statement, not a control.
+  pointer-events: none;
+}

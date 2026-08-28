@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import type { RemoteState } from "./types";
 
 const INTERVAL_MS = 2000;
 // Two misses is four seconds, which a restarting engine or a moment of load
@@ -24,8 +25,10 @@ const FAILURES_BEFORE_DEAD = 5;
  * Chromium --app window. If a browser refuses it, the caller renders a
  * "disconnected" overlay instead of pretending everything is fine.
  */
-export function useHeartbeat(): boolean {
+export function useHeartbeat(): { dead: boolean; remotes: RemoteState[] } {
   const [dead, setDead] = useState(false);
+  /** What each machine a tab lives on is doing, straight off the heartbeat. */
+  const [remotes, setRemotes] = useState<RemoteState[]>([]);
 
   useEffect(() => {
     let failures = 0;
@@ -39,7 +42,12 @@ export function useHeartbeat(): boolean {
         if (!res.ok) throw new Error("bad status");
         failures = 0;
 
-        const body = (await res.json()) as { instance?: string; quitting?: boolean };
+        const body = (await res.json()) as {
+          instance?: string;
+          quitting?: boolean;
+          remotes?: RemoteState[];
+        };
+        setRemotes(body.remotes ?? []);
 
         // This engine is handing over to a replacement that is about to take
         // the port. Close now: staying would mean reattaching to the new
@@ -102,5 +110,5 @@ export function useHeartbeat(): boolean {
     };
   }, []);
 
-  return dead;
+  return { dead, remotes };
 }

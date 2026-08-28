@@ -107,3 +107,30 @@
 .dropAfter {
   box-shadow: inset -2px 0 0 var(--accent);
 }
+
+// Whether the machine a remote tab lives on is reachable.
+//
+// A dot rather than a word: it sits in a 150px tab beside a repository name
+// that already has to truncate, and the three states only have to be
+// distinguishable, not readable.
+.led {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--fg-faint);
+}
+
+.ledOnline {
+  background: var(--green);
+}
+
+// Reaching for it: installing, tunnelling, re-registering tabs. Amber because
+// it is not an error yet - most of these end green a second later.
+.ledConnecting {
+  background: var(--amber);
+}
+
+.ledOffline {
+  background: var(--red);
+}

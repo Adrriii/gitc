@@ -20,6 +20,14 @@ export function Welcome({
   const [host, setHost] = useState<SshHost | null>(null);
   /** Connecting is slow enough to need saying so: install, then a tunnel. */
   const [connecting, setConnecting] = useState(false);
+  /**
+   * The recent being opened.
+   *
+   * A remote one takes seconds to connect, and until the tab appears nothing
+   * on screen changed - which reads as the click not having registered, and
+   * is what made people click again and open it twice.
+   */
+  const [opening, setOpening] = useState<string | null>(null);
 
   // A host added to ~/.ssh/config a minute ago is exactly the one somebody is
   // trying to reach, so this is read on arrival rather than cached.
@@ -85,12 +93,16 @@ export function Welcome({
           // different repositories.
           <div
             key={(r.host ?? "") + r.path}
-            className={s.row}
+            className={`${s.row} ${opening !== null ? s.rowBusy : ""}`}
             // Reopened on the machine it came from. Without the host this
             // asked the local filesystem for a path that only exists on a
             // server, and failed in a way that looked like the repository had
             // been deleted.
-            onClick={() => onOpen(r.path, r.host ?? undefined)}
+            onClick={() => {
+              if (opening !== null) return;
+              setOpening((r.host ?? "") + r.path);
+              onOpen(r.path, r.host ?? undefined);
+            }}
           >
             <span className={s.name}>{r.name}</span>
             {r.host !== null && (
@@ -100,6 +112,9 @@ export function Welcome({
               </span>
             )}
             <span className={s.path}>{r.path}</span>
+            {opening === (r.host ?? "") + r.path && (
+              <span className={s.opening}>Opening...</span>
+            )}
           </div>
         ))}
       </div>

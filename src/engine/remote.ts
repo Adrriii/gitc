@@ -456,7 +456,10 @@ export async function connect(host: string, bin: string): Promise<Connection> {
   const forward = String(port) + ":127.0.0.1:" + String(REMOTE_PORT);
   // --port= with the equals sign: the space form is ignored, and the engine
   // would then find the default port, hand off to whatever holds it and exit.
-  const remote = "exec " + bin + " --no-window --port=" + String(REMOTE_PORT);
+  // --serve, not --no-window: the same behaviour, but the production spelling.
+  // --no-window belongs to the dev loop, and a remote engine steered by a dev
+  // flag is a change made for `npm run dev` reaching somebody's server.
+  const remote = "exec " + bin + " --serve --port=" + String(REMOTE_PORT);
 
   const child = spawn(
     "ssh",

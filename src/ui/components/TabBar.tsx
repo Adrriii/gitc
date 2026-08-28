@@ -1,11 +1,27 @@
 import { useState } from "react";
-import type { Session } from "../types";
+import type { RemoteState, Session } from "../types";
 import { Icon } from "./Icon";
 import { CloseButton } from "./CloseButton";
 import s from "./TabBar.module.scss";
 
+/** Green online, orange reaching for it, red not connected. */
+function ledOf(remotes: RemoteState[], host: string): "Online" | "Connecting" | "Offline" {
+  const found = remotes.find((r) => r.host === host);
+  if (found === undefined) return "Offline";
+  if (found.state === "online") return "Online";
+  if (found.state === "connecting") return "Connecting";
+  return "Offline";
+}
+
+function ledTitle(host: string, led: string): string {
+  if (led === "Online") return host + " - connected";
+  if (led === "Connecting") return host + " - connecting";
+  return host + " - not connected; opening this tab will reconnect";
+}
+
 export function TabBar({
   session,
+  remotes,
   onActivate,
   onClose,
   onNew,
@@ -13,6 +29,8 @@ export function TabBar({
   onReorder,
 }: {
   session: Session;
+  /** What each machine a tab lives on is doing, for the dot on its tab. */
+  remotes: RemoteState[];
   onActivate: (id: string) => void;
   onClose: (id: string) => void;
   onNew: () => void;
@@ -59,7 +77,7 @@ export function TabBar({
             t.id === dragging ? s.dragging : "",
             over?.id === t.id ? (over.after ? s.dropAfter : s.dropBefore) : "",
           ].join(" ")}
-          title={t.path}
+          title={t.host === null ? t.path : t.host + ":" + t.path}
           draggable
           onClick={() => onActivate(t.id)}
           onDragStart={(e) => {
@@ -87,6 +105,12 @@ export function TabBar({
           onDragEnd={drop}
         >
           <Icon name="repo" size={13} className={s.ico} />
+          {t.host !== null && (
+            <span
+              className={`${s.led} ${s["led" + ledOf(remotes, t.host)]}`}
+              title={ledTitle(t.host, ledOf(remotes, t.host))}
+            />
+          )}
           <span className={s.name}>{t.name}</span>
           <CloseButton
             className={s.x}

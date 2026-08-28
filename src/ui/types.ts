@@ -18,6 +18,19 @@ export interface Tab {
   host: string | null;
 }
 
+/**
+ * What a machine a tab lives on is doing.
+ *
+ * "connecting" covers installing, tunnelling and re-registering tabs - every
+ * part of reaching a host that is not yet answering. "offline" is a host that
+ * has a tab and no connection, which after this session's work means one that
+ * failed rather than one nobody has asked for yet.
+ */
+export interface RemoteState {
+  host: string;
+  state: "online" | "connecting" | "offline";
+}
+
 /** A host offered by ~/.ssh/config. */
 export interface SshHost {
   alias: string;
