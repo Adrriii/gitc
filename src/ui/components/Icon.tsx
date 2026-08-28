@@ -70,11 +70,16 @@ const PATHS: Record<IconName, React.ReactNode> = {
       <path d="M4 4h16" />
     </>
   ),
-  // Two nodes and a line: the graph's own shape, at icon scale.
+  // A hub inside a toothed outline. This used to be a small circle with eight
+  // strokes radiating from it, which is a sun - and read as one. The teeth are
+  // an outline that steps between a rim radius and a tip radius rather than
+  // spokes standing off a ring, because spokes read as a ship's wheel; the
+  // round joins do the softening. Eight teeth on a 45 degree pitch, generated
+  // rather than eyeballed, which is why the numbers are what they are.
   gear: (
     <>
-      <circle cx="12" cy="12" r="3.2" />
-      <path d="M12 2.6v2.6M12 18.8v2.6M21.4 12h-2.6M5.2 12H2.6M18.6 5.4l-1.8 1.8M7.2 16.8l-1.8 1.8M18.6 18.6l-1.8-1.8M7.2 7.2L5.4 5.4" />
+      <path d="M9.9 5.9 L10.4 3.2 L13.6 3.2 L14.1 5.9 L14.8 6.2 L17.1 4.6 L19.4 6.9 L17.8 9.2 L18.1 9.9 L20.8 10.4 L20.8 13.6 L18.1 14.1 L17.8 14.8 L19.4 17.1 L17.1 19.4 L14.8 17.8 L14.1 18.1 L13.6 20.8 L10.4 20.8 L9.9 18.1 L9.2 17.8 L6.9 19.4 L4.6 17.1 L6.2 14.8 L5.9 14.1 L3.2 13.6 L3.2 10.4 L5.9 9.9 L6.2 9.2 L4.6 6.9 L6.9 4.6 L9.2 6.2 Z" />
+      <circle cx="12" cy="12" r="3" />
     </>
   ),
   kebab: (

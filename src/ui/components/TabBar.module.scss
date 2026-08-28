@@ -47,20 +47,30 @@
   white-space: nowrap;
 }
 
+// Flex, not line-height and text-align: the child is an inline SVG, not text,
+// so it sat on the text baseline and rode low in the box - visibly off centre
+// against the tab name beside it. Centring an icon is a box problem.
+//
+// The colour is inherited rather than fixed at --fg-muted, which left the
+// cross the same dim grey on the active tab as on an inactive one while the
+// name next to it went to --fg-bright: it read as washed out precisely where
+// the tab was meant to look live. Inheriting keeps it a step behind whatever
+// the tab is doing, at every state, with one rule instead of three.
 .x {
   flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 15px;
   height: 15px;
-  line-height: 15px;
-  text-align: center;
   border-radius: var(--radius);
-  color: var(--fg-muted);
-  font-size: 10px;
+  color: inherit;
+  opacity: 0.55;
   visibility: hidden;
 
   &:hover {
     background: var(--line-strong);
-    color: var(--fg);
+    opacity: 1;
   }
 }
 
