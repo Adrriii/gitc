@@ -879,7 +879,7 @@ async function handleApi(
   if (path === "/api/quit") {
     quitting = true;
     sendJson(res, JSON.stringify({ ok: true }));
-    setTimeout(() => process.exit(0), QUIT_GRACE_MS);
+    setTimeout(() => shutdown(), QUIT_GRACE_MS);
     return true;
   }
 
@@ -954,7 +954,7 @@ async function handleApi(
       // Answer first, then go: the UI needs to hear that the update took
       // before this process disappears out from under it.
       if (result.restarting) {
-        setTimeout(() => process.exit(0), 400);
+        setTimeout(() => shutdown(), 400);
       }
       return true;
     }
@@ -1410,6 +1410,13 @@ function findBrowser(): string | null {
 
 /** Shuts the whole app down - called when the window goes away. */
 function shutdown(): void {
+  // Take every tunnel down first. The ssh children are spawned detached, so
+  // they outlive this process rather than dying with it - which would leave a
+  // gitc running on each connected host with nothing left here that refers to
+  // it. This covers every orderly exit; a hard kill still cannot, and the
+  // answer for that has to live on the remote side.
+  for (const conn of connections.values()) conn.close();
+  connections.clear();
   process.exit(0);
 }
 
