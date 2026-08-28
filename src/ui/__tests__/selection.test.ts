@@ -56,4 +56,5 @@ eq("deselect a middle resets", toggleSelect(commits, ["A", "B", "C"], "B"), ["B"
 eq("non-adjacent replaces", toggleSelect(commits, ["A", "B"], "E"), ["E"]);
 
 console.log(`\n${pass} passed, ${fail} failed`);
-process.exit(fail === 0 ? 0 : 1);
+// exitCode, not exit(): exit() can abort a queued stdout write on Windows.
+process.exitCode = fail === 0 ? 0 : 1;

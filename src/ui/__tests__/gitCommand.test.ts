@@ -30,4 +30,5 @@ eq("a fetch", commandType("fetch --all --prune"), "fetch");
 eq("a commit's files", commandType("show --name-status -m --first-parent abc123"), "show");
 
 console.log(`\n${pass} passed, ${fail} failed`);
-if (fail > 0) process.exit(1);
+// exitCode, not exit(): exit() can abort a queued stdout write on Windows.
+if (fail > 0) process.exitCode = 1;

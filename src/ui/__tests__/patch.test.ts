@@ -110,4 +110,5 @@ eq("a newly added file is staged whole", canApplyHunks(diff({ status: "A" })), f
 eq("no hunks at all", canApplyHunks(diff({ hunks: [] })), false);
 
 console.log(`\n${pass} passed, ${fail} failed`);
-if (fail > 0) process.exit(1);
+// exitCode, not exit(): exit() can abort a queued stdout write on Windows.
+if (fail > 0) process.exitCode = 1;

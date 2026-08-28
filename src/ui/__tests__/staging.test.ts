@@ -76,4 +76,5 @@ console.log("what to open once a file leaves the list");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
-if (fail > 0) process.exit(1);
+// exitCode, not exit(): exit() can abort a queued stdout write on Windows.
+if (fail > 0) process.exitCode = 1;
