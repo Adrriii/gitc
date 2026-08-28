@@ -35,9 +35,28 @@ export function Welcome({
     };
   }, []);
 
+  /**
+   * How a remote recent is labelled: the resolved destination when the alias
+   * is still in ~/.ssh/config, and the alias itself when it is not.
+   *
+   * "server" says nothing about which machine that was six months later, and
+   * the same path exists on several of them.
+   */
+  const where = (host: string): string => {
+    const known = hosts.find((h) => h.alias === host);
+    if (known === undefined) return host;
+    const user = known.user === null ? "" : known.user + "@";
+    return user + (known.hostName ?? known.alias);
+  };
+
   const f = search.trim().toLowerCase();
   const recents = session.recents.filter(
-    (r) => f === "" || r.name.toLowerCase().includes(f) || r.path.toLowerCase().includes(f),
+    (r) =>
+      f === "" ||
+      r.name.toLowerCase().includes(f) ||
+      r.path.toLowerCase().includes(f) ||
+      // Findable by machine too: "which repositories were on the build box?"
+      (r.host !== null && where(r.host).toLowerCase().includes(f)),
   );
 
   return (
@@ -63,8 +82,24 @@ export function Welcome({
         <div className={s.recentLabel}>Recent</div>
         {recents.length === 0 && <div className={s.none}>No repositories yet.</div>}
         {recents.map((r) => (
-          <div key={r.path} className={s.row} onClick={() => onOpen(r.path)}>
+          // Keyed by host and path: the same path on two machines is two
+          // different repositories.
+          <div
+            key={(r.host ?? "") + r.path}
+            className={s.row}
+            // Reopened on the machine it came from. Without the host this
+            // asked the local filesystem for a path that only exists on a
+            // server, and failed in a way that looked like the repository had
+            // been deleted.
+            onClick={() => onOpen(r.path, r.host ?? undefined)}
+          >
             <span className={s.name}>{r.name}</span>
+            {r.host !== null && (
+              <span className={s.rowHost} title={"On " + where(r.host)}>
+                <Icon name="repo" size={11} />
+                {where(r.host)}
+              </span>
+            )}
             <span className={s.path}>{r.path}</span>
           </div>
         ))}

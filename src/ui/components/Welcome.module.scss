@@ -217,3 +217,19 @@ h1 {
   font-size: 11px;
   line-height: 1.5;
 }
+
+// Which machine a recent repository was on. Between the name and the path,
+// because the path alone is ambiguous - /srv/app exists on every server - and
+// reading it after the path would be finding out too late.
+.rowHost {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  padding: 1px 7px;
+  border-radius: var(--radius);
+  background: var(--bg-2);
+  color: var(--fg-dim);
+  font-size: 11px;
+  white-space: nowrap;
+}

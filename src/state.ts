@@ -46,6 +46,25 @@ function empty(): Session {
   return { tabs: [], activeId: null, recents: [] };
 }
 
+/**
+ * A tab as it may appear in a file written by an older gitc.
+ *
+ * `host` is optional here and not in Tab: every session saved before remote
+ * tabs existed has entries without it, and this is the one place that has to
+ * cope with their absence.
+ */
+interface StoredTab {
+  id: string;
+  name: string;
+  path: string;
+  host?: string | null;
+}
+
+/** Fills in what an older file does not carry, so the rest can assume it. */
+function restore(t: StoredTab): Tab {
+  return { id: t.id, name: t.name, path: t.path, host: t.host ?? null };
+}
+
 /** Reads the saved session, falling back to an empty one on any problem. */
 export function loadSession(): Session {
   const path = statePath();
@@ -53,11 +72,15 @@ export function loadSession(): Session {
   try {
     // JSON.parse is typed as unknown here - the checked cast validates the
     // shape at runtime and throws if the file was hand-edited into nonsense.
-    const parsed = JSON.parse(readFileSync(path, "utf8")) as Session;
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as {
+      tabs: StoredTab[];
+      activeId: string | null;
+      recents: StoredTab[];
+    };
     return {
-      tabs: parsed.tabs,
+      tabs: parsed.tabs.map(restore),
       activeId: parsed.activeId,
-      recents: parsed.recents,
+      recents: parsed.recents.map(restore),
     };
   } catch {
     return empty();
