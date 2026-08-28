@@ -3,12 +3,14 @@ import { api } from "../api";
 import type { UpdateInfo } from "../types";
 import {
   FETCH_INTERVALS,
+  REMOTE_HOLDS,
   TAB_SIZES,
   UPDATE_CHECKS,
   useDiffWrap,
   useFetchInterval,
   useHiddenCommands,
   useFetchOnFocus,
+  useRemoteHold,
   useTabSize,
   useUpdateCheck,
   useUpdateLevel,
@@ -102,6 +104,7 @@ export function Preferences({
   const { minutes: updateMinutes, set: setUpdateMinutes } = useUpdateCheck();
   const { level: updateLevel, set: setUpdateLevel } = useUpdateLevel();
   const { onFocus: fetchOnFocus, set: setFetchOnFocus } = useFetchOnFocus();
+  const { minutes: remoteHold, set: setRemoteHold } = useRemoteHold();
 
   return (
     <div className={s.screen}>
@@ -253,6 +256,22 @@ export function Preferences({
                     onClick={() => setFetchMinutes(n)}
                   >
                     {n === 0 ? "Off" : `${n} min`}
+                  </button>
+                ))}
+              </div>
+            </Row>
+            <Row
+              label="Hold remote connections"
+              hint="A repository on another machine is served by a gitc running over there, reached through an SSH tunnel. This is how long that is kept after you leave its tab - the tab you are looking at is never dropped, and tabbing back reconnects."
+            >
+              <div className={s.choices}>
+                {REMOTE_HOLDS.map((choice) => (
+                  <button
+                    key={choice.minutes}
+                    className={choice.minutes === remoteHold ? s.on : ""}
+                    onClick={() => setRemoteHold(choice.minutes)}
+                  >
+                    {choice.label}
                   </button>
                 ))}
               </div>

@@ -104,6 +104,13 @@ export const api = {
   open: (path: string, host?: string) =>
     post<{ tab: unknown; session: Session }>("/api/open", { path, host: host ?? "" }),
 
+  /**
+   * Tells the engine how long to hold connections to machines you are not
+   * looking at. The engine owns the connections; the window owns the
+   * preference, as it does for every other setting on that screen.
+   */
+  setRemoteHold: (minutes: number) => post<{ ok: boolean }>("/api/remote/hold", { minutes }),
+
   /** Hosts from ~/.ssh/config that a remote tab could be opened on. */
   hosts: () => json<{ hosts: SshHost[] }>("/api/hosts").then((r) => r.hosts),
 

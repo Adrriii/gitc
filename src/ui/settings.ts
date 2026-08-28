@@ -284,6 +284,47 @@ export function useUpdateCheck() {
   return { minutes, set };
 }
 
+// --- how long a remote connection is kept ------------------------------------
+
+/** Minutes to hold a tunnel to a host you are not looking at. 0 = forever. */
+export const REMOTE_HOLDS = [
+  { minutes: 1, label: "1 min" },
+  { minutes: 10, label: "10 min" },
+  { minutes: 60, label: "1 hour" },
+  { minutes: 0, label: "Always" },
+];
+
+const REMOTE_HOLD_KEY = "gitc.remoteHoldMinutes";
+
+function parseRemoteHold(raw: string): number | null {
+  const n = Number(raw);
+  for (const choice of REMOTE_HOLDS) {
+    if (choice.minutes === n) return n;
+  }
+  return null;
+}
+
+/**
+ * How long a connection to another machine is kept after you leave its tab.
+ *
+ * A tunnel is a gitc process running on somebody else's server, so holding
+ * every one you have ever opened until gitc quits is not a neutral default -
+ * it is a handful of idle processes on other people's machines. Ten minutes
+ * covers going away to read something and coming back; longer is for a server
+ * you are working on all day, where reconnecting is the annoyance.
+ *
+ * Dropping one costs nothing but time: tabbing back into a remote repository
+ * reconnects on the first request. The tab you are looking at is never
+ * dropped, whatever this says.
+ */
+export function useRemoteHold() {
+  // Defaults to Always, NOT to ten minutes, until reconnecting after a drop is
+  // reliable - it is not yet, so a shorter hold would break a tab you came
+  // back to. The choice is offered; the default is the one that cannot bite.
+  const [minutes, set] = useStored<number>(REMOTE_HOLD_KEY, 0, parseRemoteHold);
+  return { minutes, set };
+}
+
 const UPDATE_LEVEL_KEY = "gitc.updateLevel";
 
 function parseUpdateLevel(raw: string): Bump | null {

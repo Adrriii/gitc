@@ -51,6 +51,7 @@ import {
   useFetchOnFocus,
   useHiddenCommands,
   useUpdateCheck,
+  useRemoteHold,
   useUpdateLevel,
 } from "./settings";
 import { shouldPrompt } from "./version";
@@ -208,6 +209,13 @@ export function App() {
   const { minutes: fetchMinutes } = useFetchInterval();
   const { onFocus: fetchOnFocus } = useFetchOnFocus();
   const { level: updateLevel } = useUpdateLevel();
+  const { minutes: remoteHold } = useRemoteHold();
+
+  // The engine holds the connections; this screen holds the preference, as it
+  // does for every other setting. Told on arrival and whenever it changes.
+  useEffect(() => {
+    void api.setRemoteHold(remoteHold).catch(() => undefined);
+  }, [remoteHold]);
   /**
    * When each repository was last fetched because it was arrived at, kept
    * outside the fetch effect because that effect is rebuilt on every tab

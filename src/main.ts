@@ -506,6 +506,7 @@ function proxyToRemote(
   req: import("node:http").IncomingMessage,
   res: import("node:http").ServerResponse,
 ): void {
+  lastUsed.set(conn.host, Date.now());
   const headers: Record<string, string> = {};
   const type = req.headers["content-type"];
   if (type !== undefined) headers["content-type"] = type;
@@ -640,8 +641,21 @@ async function openRepo(path: string, wantId?: string): Promise<Tab | null> {
   const resolved = root === null ? path : root;
   for (const t of session.tabs) {
     if (t.path !== resolved) continue;
-    // Already open: focus it rather than silently doing nothing. Opening a
-    // repo should always end with that repo in front.
+
+    // Already open under a different name. A remote engine keeps its own
+    // session across connections, so the second time a client opens a
+    // repository it finds one here already - and returning THIS id while the
+    // client goes on using the one it asked for is how every later request
+    // became "no such tab". The id the caller chose wins.
+    if (wantId !== undefined && t.id !== wantId) {
+      // Anything else already holding that id has to go, or two tabs answer
+      // to one name.
+      session.tabs = session.tabs.filter((o) => o.path === resolved || o.id !== wantId);
+      t.id = wantId;
+    }
+
+    // Focus it rather than silently doing nothing. Opening a repo should
+    // always end with that repo in front.
     session.activeId = t.id;
     touchRecent(session, t);
     saveSession(session);
@@ -684,6 +698,73 @@ async function connectionFor(host: string): Promise<Connection | { error: string
   const open = connections.get(host);
   if (open !== undefined) return open;
 
+  // Joining an attempt already under way rather than starting a second.
+  // Switching to a remote tab fires a handful of requests at once - graph,
+  // status, submodules, the watcher - and each one arriving to find no
+  // connection would otherwise start its own install and its own tunnel.
+  const pending = connecting.get(host);
+  if (pending !== undefined) return await pending;
+
+  const attempt = openConnection(host);
+  connecting.set(host, attempt);
+  try {
+    return await attempt;
+  } finally {
+    connecting.delete(host);
+  }
+}
+
+/** In-flight connection attempts, so several callers share one. */
+const connecting = new Map<string, Promise<Connection | { error: string }>>();
+
+/** When each host was last spoken to, for deciding what has gone idle. */
+const lastUsed = new Map<string, number>();
+
+/**
+ * Minutes to hold a tunnel to a host whose tab is not in front, 0 for
+ * forever. The window owns the preference and sends it; this is the default
+ * until it does, and matches the one in settings.ts.
+ *
+ * Forever for now: dropping a connection is only safe if coming back
+ * reconnects, and that path is not yet reliable.
+ */
+let remoteHoldMinutes = 0;
+
+/**
+ * Drops connections to machines nobody is looking at.
+ *
+ * A tunnel is a gitc process on somebody else's server. Holding every one ever
+ * opened until this process quits leaves idle processes on other people's
+ * machines, which is not a neutral default for a tool that connects to them.
+ *
+ * Costs nothing but time: a request for a remote tab with no tunnel reconnects
+ * before answering, so tabbing back just takes a moment. The host of the tab
+ * in front is never dropped - that is the one being used, whether or not it
+ * happened to send a request in the last few minutes.
+ */
+function sweepIdleConnections(): void {
+  if (remoteHoldMinutes === 0) return;
+  const hold = remoteHoldMinutes * 60 * 1000;
+  const now = Date.now();
+
+  const active = session.tabs.find((t) => t.id === session.activeId);
+  const inFront = active === undefined ? null : active.host;
+
+  for (const host of [...connections.keys()]) {
+    if (host === inFront) {
+      lastUsed.set(host, now);
+      continue;
+    }
+    const seen = lastUsed.get(host) ?? now;
+    if (now - seen < hold) continue;
+    const conn = connections.get(host);
+    if (conn !== undefined) conn.close();
+    connections.delete(host);
+    lastUsed.delete(host);
+  }
+}
+
+async function openConnection(host: string): Promise<Connection | { error: string }> {
   const kind = await detectRemote(host);
   if (kind.refusal !== null) return { error: kind.refusal };
 
@@ -693,7 +774,17 @@ async function connectionFor(host: string): Promise<Connection | { error: string
   const bin = kind.binPath === null ? "~/.local/bin/gitc" : kind.binPath;
   try {
     const conn = await connect(host, bin);
+    // A fresh engine over there knows nothing about the tabs this side is
+    // already showing. Without this, every request after a reconnect asks
+    // about a tab that engine has never heard of - which is what "no such
+    // tab" was, after a restart or after an idle connection was dropped.
+    await registerTabs(host, conn);
+    // Published only once it can actually answer. Registered last on purpose:
+    // anything reading `connections` mid-setup would proxy to an engine that
+    // does not know the tab yet, and callers waiting on this attempt get a
+    // connection that is ready rather than one that merely exists.
     connections.set(host, conn);
+    lastUsed.set(host, Date.now());
     return conn;
   } catch (e) {
     return { error: "could not reach " + host + ": " + (e as Error).message };
@@ -719,6 +810,7 @@ const LOCAL_ONLY = [
   "/api/activate",
   "/api/reorder",
   "/api/hosts",
+  "/api/remote",
   "/api/update",
 ];
 
@@ -736,19 +828,74 @@ function isLocalOnly(path: string): boolean {
  * moment. Anything that fails here fails before a tab exists, which is the
  * point: a tab that cannot be served is worse than no tab.
  */
+/**
+ * Opens under way, so a double click is one tab.
+ *
+ * Keyed by host AND path: the same path on two machines is two repositories,
+ * and deduplicating across hosts would refuse to open the second of them.
+ *
+ * Needed as well as the check below, because connecting takes seconds - a
+ * second click lands long before the first has a tab to be found.
+ */
+const openingRemote = new Map<string, Promise<{ tab: Tab } | { error: string }>>();
+
 async function openRemoteRepo(
+  host: string,
+  path: string,
+): Promise<{ tab: Tab } | { error: string }> {
+  // The same repository on the same machine is one tab, as it is locally.
+  // Two would mean two ids for one thing, and the far end can only call it
+  // one of them.
+  for (const t of session.tabs) {
+    if (t.host !== host || t.path !== path) continue;
+    session.activeId = t.id;
+    touchRecent(session, t);
+    saveSession(session);
+    return { tab: t };
+  }
+
+  const key = host + "\n" + path;
+  const already = openingRemote.get(key);
+  if (already !== undefined) return await already;
+
+  const attempt = openRemoteRepoOnce(host, path);
+  openingRemote.set(key, attempt);
+  try {
+    return await attempt;
+  } finally {
+    openingRemote.delete(key);
+  }
+}
+
+async function openRemoteRepoOnce(
   host: string,
   path: string,
 ): Promise<{ tab: Tab } | { error: string }> {
   const conn = await connectionFor(host);
   if ("error" in conn) return { error: conn.error };
 
-  const id = makeId();
+  const wanted = makeId();
+
+  // Clear any tab the far end already has for this path.
+  //
+  // A remote engine keeps its own session between connections, so a repository
+  // opened on a previous run is still a tab over there - under a name chosen
+  // then, which has nothing to do with the one being used now. Asked to open
+  // it again, that engine returns its own id rather than taking ours, and
+  // every later request arrives about a tab it has never heard of: "no such
+  // tab", for a repository plainly sitting in the list.
+  //
+  // Closing it first means the open below genuinely creates one, with the id
+  // this side chose. It costs a round trip and it works against engines older
+  // than this change, which the version check cannot help with - an out of
+  // date remote is exactly the one that needs it.
+  await closeStaleRemoteTab(conn.port, path, wanted);
+
   const answer = await tunnelRequest(
     conn.port,
     "/api/open",
     "POST",
-    JSON.stringify({ path, id }),
+    JSON.stringify({ path, id: wanted }),
   );
   if (answer.status !== 200) {
     // The tunnel stays: it may already be serving other tabs, and a host that
@@ -757,12 +904,86 @@ async function openRemoteRepo(
     return { error: host + " would not open " + path + ": " + why };
   }
 
+  // Take the id the far end actually used, which is not always the one asked
+  // for. A remote engine keeps its own session between connections, so a
+  // repository opened before is already a tab over there under an older name -
+  // and an engine older than this one returns that name rather than adopting
+  // ours. Insisting on the id we chose is what made every later request "no
+  // such tab": the local tab was t3 and the remote had only ever called it t2.
+  //
+  // Its own id is used only when nothing here has it; otherwise two tabs would
+  // answer to one name locally, and the newer remote has adopted ours anyway.
+  const theirs = readOpenedId(answer.text);
+  const taken = theirs === null || session.tabs.some((t) => t.id === theirs);
+  const id = taken ? wanted : theirs;
+
   const tab: Tab = { id, name: basename(path), path, host };
   session.tabs.push(tab);
   session.activeId = id;
   touchRecent(session, tab);
   saveSession(session);
   return { tab };
+}
+
+/**
+ * Tells a freshly connected engine about every tab this side has on it.
+ *
+ * The tunnel is not the state: the engine at the far end is started fresh, or
+ * restored from a session of its own that was written for somebody else's
+ * ids. Either way the tabs already open here have to be re-established under
+ * the ids this side uses, or the first request about one is about a tab that
+ * does not exist there.
+ *
+ * Best effort per tab. A repository that has been deleted or renamed on the
+ * remote should not stop the others from working.
+ */
+async function registerTabs(host: string, conn: Connection): Promise<void> {
+  for (const tab of session.tabs) {
+    if (tab.host !== host) continue;
+    await closeStaleRemoteTab(conn.port, tab.path, tab.id);
+    await tunnelRequest(
+      conn.port,
+      "/api/open",
+      "POST",
+      JSON.stringify({ path: tab.path, id: tab.id }),
+    );
+  }
+}
+
+/**
+ * Closes a tab the remote already holds for this path, unless it is already
+ * the one we are about to use.
+ *
+ * Best effort throughout: this is the far end's own bookkeeping, and failing
+ * to tidy it is not a reason to refuse to open a repository.
+ */
+async function closeStaleRemoteTab(port: number, path: string, wanted: string): Promise<void> {
+  const got = await tunnelRequest(port, "/api/session", "GET", null);
+  if (got.status !== 200) return;
+
+  let theirs: { tabs: { id: string; path: string }[] };
+  try {
+    theirs = JSON.parse(got.text) as { tabs: { id: string; path: string }[] };
+  } catch {
+    return;
+  }
+
+  for (const t of theirs.tabs) {
+    if (t.path !== path || t.id === wanted) continue;
+    await tunnelRequest(port, "/api/close", "POST", JSON.stringify({ id: t.id }));
+  }
+}
+
+/** The tab id out of a remote engine's answer to /api/open. */
+function readOpenedId(text: string): string | null {
+  try {
+    const parsed = JSON.parse(text) as { tab: { id: string } };
+    const id = parsed.tab.id;
+    return id.length > 0 ? id : null;
+  } catch {
+    // An answer we cannot read is not an answer to trust an id from.
+    return null;
+  }
 }
 
 /** Closes the tunnel to a host once no tab is left using it. */
@@ -945,6 +1166,15 @@ async function handleApi(
       return true;
     }
     sendJson(res, JSON.stringify({ tab, session }));
+    return true;
+  }
+
+  // How long to hold a connection to a machine that is not in front. Sent by
+  // the window, which owns the preference; the engine owns the connections.
+  if (path === "/api/remote/hold") {
+    const body = JSON.parse(await readBody(req)) as { minutes: number };
+    if (body.minutes >= 0) remoteHoldMinutes = body.minutes;
+    sendJson(res, JSON.stringify({ ok: true }));
     return true;
   }
 
@@ -1774,9 +2004,29 @@ async function main(): Promise<void> {
       // that can send an operation to the wrong repository.
       const tabHeader = req.headers["x-gitc-tab"];
       if (tabHeader !== undefined && !isLocalOnly(path)) {
-        const conn = connectionForTab(tabHeader);
-        if (conn !== null) {
-          proxyToRemote(conn, path, req, res);
+        const tab = session.tabs.find((t) => t.id === tabHeader);
+        const on = tab === undefined ? null : tab.host;
+        if (on !== null) {
+          const conn = connections.get(on);
+          if (conn !== undefined) {
+            proxyToRemote(conn, path, req, res);
+            return;
+          }
+
+          // A remote tab with no tunnel: gitc has restarted with it in the
+          // session, or the connection dropped. Reconnect and then answer,
+          // rather than falling through and asking THIS machine for a path
+          // that only exists on that one.
+          //
+          // Attaching the body listeners after the await is safe: the request
+          // stream stays paused until something reads it.
+          void connectionFor(on).then((made) => {
+            if ("error" in made) {
+              send(res, 502, "application/json", JSON.stringify({ error: made.error }));
+              return;
+            }
+            proxyToRemote(made, path, req, res);
+          });
           return;
         }
       }
@@ -1804,6 +2054,14 @@ async function main(): Promise<void> {
   // Once the UI has checked in at least once, silence means it is gone.
   // Headless dev servers stay up regardless: reloading the Vite page would
   // otherwise look like the window closing and take the engine down with it.
+  // Outside the headless guard below: connections to other machines are held
+  // by every kind of gitc, and a headless one holding them for ever is worse,
+  // not better - it is the shape that runs unattended.
+  //
+  // Often enough that "1 minute" means about a minute, cheap enough that it
+  // does not matter: it compares two numbers per open connection.
+  setInterval(() => sweepIdleConnections(), 15000);
+
   if (!headless) {
     setInterval(() => {
       if (!sawFirstPing) return;
