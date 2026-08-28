@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { UPDATE_LEVELS, type Bump } from "./version";
 
 export { commandType } from "./gitCommand";
 
@@ -64,6 +65,19 @@ export const TAB_SIZES = [2, 4, 8];
 
 const TAB_KEY = "gitc.tabSize";
 
+/**
+ * The stored form of every boolean setting: "1" or "0", anything else being a
+ * value this version does not understand, which `useStored` answers with the
+ * default. One parser rather than one per setting - there were three of these,
+ * byte for byte identical, and a fourth was about to borrow the name of an
+ * unrelated one.
+ */
+function parseBool(raw: string): boolean | null {
+  if (raw === "1") return true;
+  if (raw === "0") return false;
+  return null;
+}
+
 function parseTab(raw: string): number | null {
   const n = Number(raw);
   return TAB_SIZES.includes(n) ? n : null;
@@ -100,17 +114,12 @@ export function useTabSize() {
 
 const WRAP_KEY = "gitc.diffWrap";
 
-function parseWrap(raw: string): boolean | null {
-  if (raw === "1") return true;
-  if (raw === "0") return false;
-  return null;
-}
 
 /** Whether long lines wrap in the diff, or scroll horizontally. */
 export function useDiffWrap() {
   // Stored as 1/0, which is what the diff view wrote before this moved here -
   // so an existing preference keeps working.
-  const [wrap, set] = useStored<boolean>(WRAP_KEY, true, parseWrap, (v) => (v ? "1" : "0"));
+  const [wrap, set] = useStored<boolean>(WRAP_KEY, true, parseBool, (v) => (v ? "1" : "0"));
   return { wrap, set };
 }
 
@@ -138,15 +147,32 @@ export function useFetchInterval() {
   return { minutes, set };
 }
 
+const FETCH_ON_FOCUS_KEY = "gitc.fetchOnFocus";
+
+/**
+ * Whether coming back to gitc, or to a repository's tab, checks the remote
+ * straight away instead of waiting for the interval to come round.
+ *
+ * On by default, because returning to the window is precisely the moment
+ * somebody is about to look at it, and a view that updates a minute after you
+ * started reading it is the one that misleads. It still honours the interval:
+ * this decides *when the deadline is checked*, not whether there is one, so a
+ * burst of tab switching cannot turn into a burst of fetches.
+ *
+ * Off is for a metered or heavily rate-limited remote, where every fetch
+ * should be one you asked for or one the clock earned.
+ */
+export function useFetchOnFocus() {
+  const [onFocus, set] = useStored<boolean>(FETCH_ON_FOCUS_KEY, true, parseBool, (v) =>
+    v ? "1" : "0",
+  );
+  return { onFocus, set };
+}
+
 // --- how the sidebar arranges branches ---------------------------------------
 
 const FOLDERS_KEY = "gitc.branchFolders";
 
-function parseFolders(raw: string): boolean | null {
-  if (raw === "1") return true;
-  if (raw === "0") return false;
-  return null;
-}
 
 /**
  * Whether branch names are nested into folders in the sidebar.
@@ -162,7 +188,7 @@ function parseFolders(raw: string): boolean | null {
  * looking at the list you switch while looking at the list.
  */
 export function useBranchFolders() {
-  const [folders, set] = useStored<boolean>(FOLDERS_KEY, true, parseFolders, (v) =>
+  const [folders, set] = useStored<boolean>(FOLDERS_KEY, true, parseBool, (v) =>
     v ? "1" : "0",
   );
   return { folders, set };
@@ -248,4 +274,29 @@ function parseUpdateCheck(raw: string): number | null {
 export function useUpdateCheck() {
   const [minutes, set] = useStored<number>(UPDATE_KEY, 0, parseUpdateCheck);
   return { minutes, set };
+}
+
+const UPDATE_LEVEL_KEY = "gitc.updateLevel";
+
+function parseUpdateLevel(raw: string): Bump | null {
+  for (const choice of UPDATE_LEVELS) {
+    if (choice.level === raw) return choice.level;
+  }
+  return null;
+}
+
+/**
+ * How big a new version has to be before gitc says so.
+ *
+ * "patch" by default - every release - because gitc is young enough that the
+ * patches are where most of the fixes are, and staying quiet about them would
+ * mostly mean staying quiet about the bug someone just hit.
+ *
+ * It gates the prompt, not the check. Preferences still reports the truth
+ * about what is available: this decides when gitc speaks first, and answering
+ * "is there an update?" honestly when asked is a different question.
+ */
+export function useUpdateLevel() {
+  const [level, set] = useStored<Bump>(UPDATE_LEVEL_KEY, "patch", parseUpdateLevel);
+  return { level, set };
 }

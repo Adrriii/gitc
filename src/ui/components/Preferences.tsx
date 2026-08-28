@@ -8,9 +8,12 @@ import {
   useDiffWrap,
   useFetchInterval,
   useHiddenCommands,
+  useFetchOnFocus,
   useTabSize,
   useUpdateCheck,
+  useUpdateLevel,
 } from "../settings";
+import { UPDATE_LEVELS } from "../version";
 import { PRESETS, TOKEN_GROUPS, useTheme } from "../theme";
 import { VERSION } from "../../generated/version";
 import { Icon } from "./Icon";
@@ -97,6 +100,8 @@ export function Preferences({
     showAll: showAllCommands,
   } = useHiddenCommands();
   const { minutes: updateMinutes, set: setUpdateMinutes } = useUpdateCheck();
+  const { level: updateLevel, set: setUpdateLevel } = useUpdateLevel();
+  const { onFocus: fetchOnFocus, set: setFetchOnFocus } = useFetchOnFocus();
 
   return (
     <div className={s.screen}>
@@ -252,6 +257,19 @@ export function Preferences({
                 ))}
               </div>
             </Row>
+            <Row
+              label="Fetch on focus"
+              hint="Also check when you come back to the window or switch to this repository's tab, instead of waiting out the interval. The interval still applies, so switching tabs quickly cannot turn into a burst of fetches."
+            >
+              <div className={s.choices}>
+                <button className={fetchOnFocus ? s.on : ""} onClick={() => setFetchOnFocus(true)}>
+                  On
+                </button>
+                <button className={fetchOnFocus ? "" : s.on} onClick={() => setFetchOnFocus(false)}>
+                  Off
+                </button>
+              </div>
+            </Row>
           </>
         )}
 
@@ -333,6 +351,23 @@ export function Preferences({
                     key={choice.minutes}
                     className={choice.minutes === updateMinutes ? s.on : ""}
                     onClick={() => setUpdateMinutes(choice.minutes)}
+                  >
+                    {choice.label}
+                  </button>
+                ))}
+              </div>
+            </Row>
+            <Row
+              label="Tell me about"
+              hint="How big a new version has to be before gitc mentions it. This page always reports what is actually available."
+            >
+              <div className={s.choices}>
+                {UPDATE_LEVELS.map((choice) => (
+                  <button
+                    key={choice.level}
+                    className={choice.level === updateLevel ? s.on : ""}
+                    onClick={() => setUpdateLevel(choice.level)}
+                    title={choice.hint}
                   >
                     {choice.label}
                   </button>
