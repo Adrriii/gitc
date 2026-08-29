@@ -494,6 +494,22 @@ export async function connect(host: string, bin: string): Promise<Connection> {
     });
   }
 
+  // The remote engine's own words. With -tt everything it prints comes back
+  // on this stream, and it is the only place a reason like "that port is
+  // taken" can appear - ssh only ever reports that the connection closed,
+  // never why the thing at the other end stopped.
+  //
+  // Read as well as kept: an unread pipe eventually fills and blocks the
+  // child, which for a tunnel that is meant to live for hours is a hang
+  // waiting to happen.
+  let remoteSaid = "";
+  const outStream = child.stdout;
+  if (outStream !== null) {
+    outStream.on("data", (c: Buffer) => {
+      if (remoteSaid.length < 4000) remoteSaid += c.toString("utf8");
+    });
+  }
+
   // Distinguishes the two ways a tunnel ends. "We closed it" is ordinary -
   // a swept idle host, a closed tab, gitc exiting. Anything else is the
   // tunnel failing underneath us, and only that needs explaining.
@@ -510,9 +526,11 @@ export async function connect(host: string, bin: string): Promise<Connection> {
   child.on("exit", (code: number | null) => {
     if (closedHere) return;
     const why = stderr.trim();
+    const said = remoteSaid.trim();
     console.log(
       "[tunnel] " + host + " ended on its own, code " + String(code) +
-        (why.length > 0 ? ": " + why : " (ssh said nothing)"),
+        (why.length > 0 ? " - ssh: " + why : "") +
+        (said.length > 0 ? " - remote said: " + said : ""),
     );
   });
 

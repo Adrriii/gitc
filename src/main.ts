@@ -747,7 +747,13 @@ function sweepIdleConnections(): void {
   const active = session.tabs.find((t) => t.id === session.activeId);
   const inFront = active === undefined ? null : active.host;
 
-  for (const [host, conn] of [...connections.entries()]) {
+  // Keys, then get - not a destructured entries() pair. The destructured form
+  // is the natural way to write this and it left the map holding connections
+  // it had just closed: the router then found a dead tunnel, proxied to it,
+  // and the tab failed with ECONNRESET while nothing ever tried to reconnect.
+  for (const host of [...connections.keys()]) {
+    const conn = connections.get(host);
+    if (conn === undefined) continue;
     if (host === inFront) {
       conn.usedAt = now;
       continue;
@@ -755,6 +761,9 @@ function sweepIdleConnections(): void {
     if (now - conn.usedAt < hold) continue;
     conn.close();
     connections.delete(host);
+    console.log(
+      "[sweep] closed " + host + " after " + String(now - conn.usedAt) + "ms idle",
+    );
   }
 }
 
