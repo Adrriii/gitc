@@ -1,6 +1,6 @@
-// Cuts a release: version, build, commit, verify, tag, publish, check.
+// Cuts a release: version, build, commit, verify, tag, publish, check, notes.
 //
-// The steps are not hard, but there are eight of them and getting one wrong
+// The steps are not hard, but there are nine of them and getting one wrong
 // costs a bad release rather than a retry - a tag that fails to build has to
 // be deleted, a published binary that does not start has to be pulled. So
 // they live here rather than in somebody's memory.
@@ -13,7 +13,8 @@
 //   one and, eventually, the stable release that supersedes them.
 //
 //     -m <text>        commit message for the release commit
-//     -F <file>        ... or read it from a file
+//     -F <file>        ... or read it from a file, which also becomes the
+//                      release notes on the published page
 //     --author "N <e>" author for the release commit (default: git's own)
 //     --branch <name>  branch to release from (default: the current one)
 //     --skip-verify    tag without the build-only run first
@@ -32,7 +33,7 @@
 
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -420,6 +421,46 @@ for (const name of readdirSync(dir)) {
   if (expected === undefined) die(`${name} is not listed in SHA256SUMS`);
   if (digest !== expected) die(`${name} does not match its checksum`, `${digest}\n${expected}`);
   info(`${name} matches its checksum`);
+}
+
+// --- 9. put the notes on the release -----------------------------------------
+
+// The workflow's action-gh-release writes the body itself: the download
+// instructions, plus the "What's Changed" GitHub generates from pull request
+// titles. That is the entire release page for everybody who is not reading
+// `git log`, and it does not say what changed - 0.5.0 shipped remote SSH
+// repositories and the page credited a pull request.
+//
+// So the notes this release was committed with go back into the body here,
+// above the generated list. It has to be after the publish: the release does
+// not exist until the tagged run creates it.
+if (messageFile !== null) {
+  step("Putting the notes on the release");
+
+  // Both sides are normalised to LF before anything compares them: gh hands
+  // back CRLF on Windows, and a body that never matches the notes is a run
+  // that appends them a second time every time it is resumed.
+  const lf = (text) => text.replace(/\r\n/g, "\n");
+
+  // The leading "# gitc 0.5.0" is dropped - the page is already titled with
+  // the version, and a heading repeating it reads as a mistake.
+  const notes = lf(readFileSync(messageFile, "utf8")).replace(/^#[^\n]*\n+/, "").trim();
+  const body = lf(gh("release", "view", tag, "--json", "body", "-q", ".body").out);
+
+  if (body.includes(notes)) {
+    skip("the release already carries them");
+  } else {
+    const generated = body.indexOf("## What's Changed");
+    const merged =
+      generated === -1
+        ? `${body.trimEnd()}\n\n${notes}\n`
+        : `${body.slice(0, generated).trimEnd()}\n\n${notes}\n\n${body.slice(generated)}`;
+
+    const file = join(mkdtempSync(join(tmpdir(), "gitc-notes-")), "notes.md");
+    writeFileSync(file, merged);
+    gh("release", "edit", tag, "--notes-file", file);
+    info("the changelog is on the release page");
+  }
 }
 
 const url = gh("release", "view", tag, "--json", "url", "-q", ".url").out;
