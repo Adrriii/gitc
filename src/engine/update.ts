@@ -33,6 +33,14 @@ const windows = process.platform === "win32";
 
 export interface UpdateInfo {
   current: string;
+  /**
+   * True when taking this means leaving the build stream behind rather than
+   * moving forward in it - going back to stable from a release candidate.
+   *
+   * It is the same install either way; the UI says "switch" rather than
+   * "update" so that a version number going DOWN is not read as a mistake.
+   */
+  switching: boolean;
   /** The newest released version, or "" when it could not be determined. */
   latest: string;
   available: boolean;
@@ -70,11 +78,18 @@ export function isPrerelease(version: string): boolean {
  * version older than the one running, and the tester would sit on rc.1 for
  * ever with nothing offering them rc.2.
  */
-function apiUrl(): string {
+/** Which releases a person wants to be offered. */
+export type Channel = "stable" | "test";
+
+function apiUrl(channel: Channel): string {
   const custom = process.env["GITC_UPDATE_API"];
   if (custom !== undefined && custom.length > 0) return custom;
   const base = "https://api.github.com/repos/" + REPO + "/releases";
-  return isPrerelease(VERSION) ? base + "?per_page=20" : base + "/latest";
+  // /releases/latest is defined as the newest release that is neither draft
+  // nor prerelease, so the stable stream needs no filtering of its own. The
+  // test stream asks for the list, which is the only way to see a prerelease
+  // at all - and it still sees stable releases, since they are in the list too.
+  return channel === "test" ? base + "?per_page=20" : base + "/latest";
 }
 
 function downloadBase(tag: string): string {
@@ -277,10 +292,11 @@ function field(json: string, key: string): string {
   return json.substring(start, end);
 }
 
-export async function check(): Promise<UpdateInfo> {
+export async function check(channel: Channel = "stable"): Promise<UpdateInfo> {
   const info: UpdateInfo = {
     current: VERSION,
     latest: "",
+    switching: false,
     available: false,
     page: REPO.length > 0 ? "https://github.com/" + REPO + "/releases/latest" : "",
     error: "",
@@ -302,7 +318,7 @@ export async function check(): Promise<UpdateInfo> {
     "accept: application/vnd.github+json",
     "-H",
     "user-agent: gitc/" + VERSION,
-    apiUrl(),
+    apiUrl(channel),
   ]);
 
   if (body === null) {
@@ -328,7 +344,16 @@ export async function check(): Promise<UpdateInfo> {
   }
 
   info.latest = best;
-  info.available = compare(info.latest, VERSION) > 0;
+
+  // Ordinarily, newer. But somebody on a release candidate who asks for the
+  // stable stream is asking to go BACK to the newest stable, which compares
+  // lower than what they are running - so "is it newer" would answer no and
+  // strand them on a test build with no way out but a manual download. Leaving
+  // the stream is a move they asked for, so it is offered like any other.
+  const newer = compare(info.latest, VERSION) > 0;
+  const leavingTest = channel === "stable" && isPrerelease(VERSION);
+  info.switching = leavingTest && !newer && info.latest !== VERSION;
+  info.available = newer || info.switching;
   return info;
 }
 
@@ -487,16 +512,18 @@ async function contentLength(url: string): Promise<number> {
  * one takes its name, and the leftover is deleted on the next start. On POSIX
  * replacing the file outright is fine.
  */
-export async function apply(): Promise<UpdateResult> {
+export async function apply(channel: Channel = "stable"): Promise<UpdateResult> {
   progress = { phase: "checking", received: 0, total: 0, message: "Checking for the latest release" };
 
-  const info = await check();
+  // The same stream the check offered from, or pressing the button would look
+  // for something the window never mentioned.
+  const info = await check(channel);
   if (info.error.length > 0) {
     setPhase("failed", info.error);
     return { ok: false, message: info.error, restarting: false };
   }
   if (!info.available) {
-    const message = "gitc " + VERSION + " is already the newest version";
+    const message = "gitc " + VERSION + " is already the newest version on this stream";
     setPhase("failed", message);
     return { ok: false, message, restarting: false };
   }

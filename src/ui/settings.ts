@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { UPDATE_LEVELS, type Bump } from "./version";
+import { VERSION } from "../generated/version";
 
 export { commandType } from "./gitCommand";
 
@@ -320,6 +321,46 @@ function parseRemoteHold(raw: string): number | null {
 export function useRemoteHold() {
   const [minutes, set] = useStored<number>(REMOTE_HOLD_KEY, 10, parseRemoteHold);
   return { minutes, set };
+}
+
+export const UPDATE_CHANNELS = [
+  { channel: "stable", label: "Stable", hint: "Published releases" },
+  { channel: "test", label: "Test builds", hint: "Release candidates, before they are everyone's" },
+];
+
+const UPDATE_CHANNEL_KEY = "gitc.updateChannel";
+
+function parseChannel(raw: string): string | null {
+  for (const c of UPDATE_CHANNELS) {
+    if (c.channel === raw) return c.channel;
+  }
+  return null;
+}
+
+/**
+ * Which releases gitc offers.
+ *
+ * Stable is every published release. Test adds the candidates that come
+ * before them - builds meant to be tried and reported on, not relied upon.
+ *
+ * Choosing it here rather than by which binary you happen to have means
+ * switching goes through the updater, which knows how to replace a running
+ * gitc. Downloading a candidate by hand does not: Windows will not overwrite
+ * a running executable, so the installer keeps the copy that is there and
+ * hands off to it, and you would be told nothing and still be on the old
+ * build.
+ *
+ * Defaults from the running version, so somebody who did install a candidate
+ * by hand is on the stream that matches it rather than being offered a
+ * silent trip backwards.
+ */
+export function useUpdateChannel() {
+  const [channel, set] = useStored<string>(
+    UPDATE_CHANNEL_KEY,
+    VERSION.includes("-") ? "test" : "stable",
+    parseChannel,
+  );
+  return { channel, set };
 }
 
 const UPDATE_LEVEL_KEY = "gitc.updateLevel";

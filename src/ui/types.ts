@@ -118,6 +118,8 @@ export interface UpdateProgress {
 
 export interface UpdateInfo {
   current: string;
+  /** True when taking this leaves the stream rather than moving along it. */
+  switching: boolean;
   latest: string;
   available: boolean;
   page: string;

@@ -5,6 +5,7 @@ import {
   FETCH_INTERVALS,
   REMOTE_HOLDS,
   TAB_SIZES,
+  UPDATE_CHANNELS,
   UPDATE_CHECKS,
   useDiffWrap,
   useFetchInterval,
@@ -12,6 +13,7 @@ import {
   useFetchOnFocus,
   useRemoteHold,
   useTabSize,
+  useUpdateChannel,
   useUpdateCheck,
   useUpdateLevel,
 } from "../settings";
@@ -103,6 +105,7 @@ export function Preferences({
   } = useHiddenCommands();
   const { minutes: updateMinutes, set: setUpdateMinutes } = useUpdateCheck();
   const { level: updateLevel, set: setUpdateLevel } = useUpdateLevel();
+  const { channel: updateChannel, set: setUpdateChannel } = useUpdateChannel();
   const { onFocus: fetchOnFocus, set: setFetchOnFocus } = useFetchOnFocus();
   const { minutes: remoteHold, set: setRemoteHold } = useRemoteHold();
 
@@ -358,6 +361,23 @@ export function Preferences({
                     {checking ? "Checking…" : "Check for updates"}
                   </button>
                 )}
+              </div>
+            </Row>
+            <Row
+              label="Release stream"
+              hint="Test builds are release candidates - published to be tried and reported on, not relied upon. Switching here installs through the updater, which can replace a running gitc; downloading a candidate by hand cannot, and would leave you on the build you already had. Going back to Stable offers the newest published release, even though its number is lower."
+            >
+              <div className={s.choices}>
+                {UPDATE_CHANNELS.map((choice) => (
+                  <button
+                    key={choice.channel}
+                    className={choice.channel === updateChannel ? s.on : ""}
+                    onClick={() => setUpdateChannel(choice.channel)}
+                    title={choice.hint}
+                  >
+                    {choice.label}
+                  </button>
+                ))}
               </div>
             </Row>
             <Row

@@ -52,6 +52,7 @@ import {
   useHiddenCommands,
   useUpdateCheck,
   useRemoteHold,
+  useUpdateChannel,
   useUpdateLevel,
 } from "./settings";
 import { shouldPrompt } from "./version";
@@ -230,12 +231,14 @@ export function App() {
   const { onFocus: fetchOnFocus } = useFetchOnFocus();
   const { level: updateLevel } = useUpdateLevel();
   const { minutes: remoteHold } = useRemoteHold();
+  const { channel: updateChannel } = useUpdateChannel();
 
   // The engine holds the connections; this screen holds the preference, as it
   // does for every other setting. Told on arrival and whenever it changes.
   useEffect(() => {
     void api.setRemoteHold(remoteHold).catch(() => undefined);
   }, [remoteHold]);
+
   /**
    * When each repository was last fetched because it was arrived at, kept
    * outside the fetch effect because that effect is rebuilt on every tab
@@ -365,13 +368,29 @@ export function App() {
       .then(setUpdate)
       .catch((e: Error) => {
         if (manual) {
-          setUpdate({ current: VERSION, latest: "", available: false, page: "", error: e.message });
+          setUpdate({
+            current: VERSION,
+            latest: "",
+            available: false,
+            switching: false,
+            page: "",
+            error: e.message,
+          });
         }
       })
       .finally(() => {
         if (manual) setCheckingUpdate(false);
       });
   }, []);
+
+  // Told, then asked again. Changing stream is only meaningful if what is on
+  // offer changes with it, and the answer already held was for the old one.
+  useEffect(() => {
+    void api
+      .setUpdateChannel(updateChannel)
+      .then(() => checkUpdate(false))
+      .catch(() => undefined);
+  }, [updateChannel, checkUpdate]);
 
   /**
    * Follows the update while it runs.
@@ -1860,9 +1879,17 @@ export function App() {
                 className={s.update}
                 onClick={runUpdate}
                 disabled={updating}
-                title={`gitc ${update.latest} is available - you have ${update.current}`}
+                title={
+                  update.switching
+                    ? `Leave the test stream and go back to gitc ${update.latest}`
+                    : `gitc ${update.latest} is available - you have ${update.current}`
+                }
               >
-                {updating ? "Updating…" : `Update to ${update.latest}`}
+                {updating
+                  ? "Updating…"
+                  : update.switching
+                    ? `Switch to ${update.latest}`
+                    : `Update to ${update.latest}`}
               </button>
             )}
             <span className={s.version} title={`gitc ${VERSION}`}>

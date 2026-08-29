@@ -72,6 +72,7 @@ import {
   apply as applyUpdate,
   cleanupPrevious,
   updateProgress,
+  type Channel,
 } from "./engine/update.ts";
 import { NAME, VERSION } from "./generated/version.ts";
 import { loadSession, saveSession, touchRecent } from "./state.ts";
@@ -847,6 +848,13 @@ const connecting = new Map<string, Promise<Connection | { error: string }>>();
 let remoteHoldMinutes = 10;
 
 /**
+ * Which releases this gitc offers. Stable until the window says otherwise -
+ * the same default as the setting, so a check made before the window has
+ * spoken cannot surprise somebody onto a test build.
+ */
+let updateChannel: Channel = "stable";
+
+/**
  * Drops connections to machines nobody is looking at.
  *
  * A tunnel is a gitc process on somebody else's server. Holding every one ever
@@ -1409,9 +1417,18 @@ async function handleApi(
     return true;
   }
 
+  // Which releases to be offered. Sent by the window, which owns every other
+  // setting on that screen; the engine is the one that talks to GitHub.
+  if (path === "/api/update/channel") {
+    const body = JSON.parse(await readBody(req)) as { channel: string };
+    updateChannel = body.channel === "test" ? "test" : "stable";
+    sendJson(res, JSON.stringify({ ok: true }));
+    return true;
+  }
+
   if (path === "/api/update") {
     if (req.method === "POST") {
-      const result = await applyUpdate();
+      const result = await applyUpdate(updateChannel);
       sendJson(res, JSON.stringify(result));
       // Answer first, then go: the UI needs to hear that the update took
       // before this process disappears out from under it.
@@ -1420,7 +1437,7 @@ async function handleApi(
       }
       return true;
     }
-    sendJson(res, JSON.stringify(await checkUpdate()));
+    sendJson(res, JSON.stringify(await checkUpdate(updateChannel)));
     return true;
   }
 
