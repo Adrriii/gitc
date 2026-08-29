@@ -26,6 +26,7 @@ import { promisify } from "node:util";
 
 import { REPO, VERSION } from "../generated/version.ts";
 import { installedBinary } from "./install.ts";
+import { at, atOr } from "./safe.ts";
 
 const execFileAsync = promisify(execFile);
 const windows = process.platform === "win32";
@@ -49,10 +50,31 @@ export interface UpdateInfo {
  * endpoint must answer with a `tag_name`, and the download base must hold the
  * per-platform asset and optionally SHA256SUMS.
  */
+/** A version carrying a prerelease part, like 0.5.0-rc.1. */
+export function isPrerelease(version: string): boolean {
+  return version.includes("-");
+}
+
+/**
+ * Where to look for a newer version.
+ *
+ * The build you are running decides your channel, which is why there is no
+ * setting for this. A released gitc asks for /releases/latest, and GitHub
+ * defines that as the newest release that is neither a draft nor a
+ * prerelease - so a test build is invisible to everyone on a stable one,
+ * without any filtering here.
+ *
+ * A test build asks for the whole list instead, so it sees the next rc AND
+ * the stable release that eventually supersedes it. Otherwise installing an
+ * rc would be a one-way door: /releases/latest would keep answering with a
+ * version older than the one running, and the tester would sit on rc.1 for
+ * ever with nothing offering them rc.2.
+ */
 function apiUrl(): string {
   const custom = process.env["GITC_UPDATE_API"];
   if (custom !== undefined && custom.length > 0) return custom;
-  return "https://api.github.com/repos/" + REPO + "/releases/latest";
+  const base = "https://api.github.com/repos/" + REPO + "/releases";
+  return isPrerelease(VERSION) ? base + "?per_page=20" : base + "/latest";
 }
 
 function downloadBase(tag: string): string {
@@ -69,17 +91,90 @@ function assetName(): string {
 }
 
 /** Compares two dotted versions numerically. Returns >0 when a is newer. */
-function compare(a: string, b: string): number {
-  const left = a.split(".");
-  const right = b.split(".");
+/**
+ * Orders two versions, prereleases included.
+ *
+ * Splitting on "." and parseInt-ing was enough while every version was
+ * X.Y.Z: it read 0.5.0-rc.1 as 0.5.0, which is safe - nobody is offered a
+ * downgrade - but makes rc.1 and rc.2 and the final 0.5.0 all equal, so a
+ * tester is never offered any of them.
+ *
+ * Semver's rule: compare the numbers first, and when they tie, a version WITH
+ * a prerelease is older than the same one without. 0.5.0-rc.1 < 0.5.0-rc.2 <
+ * 0.5.0.
+ */
+export function compare(a: string, b: string): number {
+  const [an, ap] = splitVersion(a);
+  const [bn, bp] = splitVersion(b);
+
   for (let i = 0; i < 3; i++) {
-    const l = parseInt(left[i] ?? "0", 10);
-    const r = parseInt(right[i] ?? "0", 10);
-    const lv = isNaN(l) ? 0 : l;
-    const rv = isNaN(r) ? 0 : r;
-    if (lv !== rv) return lv - rv;
+    const l = atOr(an, i, 0);
+    const r = atOr(bn, i, 0);
+    if (l !== r) return l - r;
+  }
+
+  // A release beats its own prereleases; two releases are equal.
+  if (ap.length === 0 && bp.length === 0) return 0;
+  if (ap.length === 0) return 1;
+  if (bp.length === 0) return -1;
+  return comparePre(ap, bp);
+}
+
+/** "0.5.0-rc.1" into [0,5,0] and ["rc","1"]. */
+function splitVersion(v: string): [number[], string[]] {
+  const dash = v.indexOf("-");
+  const head = dash === -1 ? v : v.substring(0, dash);
+  const tail = dash === -1 ? "" : v.substring(dash + 1);
+  const nums: number[] = [];
+  for (const piece of head.split(".")) {
+    const n = parseInt(piece, 10);
+    nums.push(isNaN(n) ? 0 : n);
+  }
+  return [nums, tail.length === 0 ? [] : tail.split(".")];
+}
+
+/**
+ * Dot-separated prerelease identifiers, semver's way: numbers order
+ * numerically so rc.9 comes before rc.10, and a shorter run of equal
+ * identifiers is the older one.
+ */
+function comparePre(a: string[], b: string[]): number {
+  const len = a.length > b.length ? a.length : b.length;
+  for (let i = 0; i < len; i++) {
+    const l = at(a, i);
+    const r = at(b, i);
+    if (l === undefined) return -1;
+    if (r === undefined) return 1;
+    const ln = parseInt(l, 10);
+    const rn = parseInt(r, 10);
+    const lNum = !isNaN(ln) && String(ln) === l;
+    const rNum = !isNaN(rn) && String(rn) === r;
+    if (lNum && rNum) {
+      if (ln !== rn) return ln - rn;
+      continue;
+    }
+    // Numeric identifiers always rank below alphanumeric ones.
+    if (lNum !== rNum) return lNum ? -1 : 1;
+    if (l !== r) return l < r ? -1 : 1;
   }
   return 0;
+}
+
+/** Every tag_name in the answer - one release, or a list of them. */
+function tagNames(json: string): string[] {
+  const out: string[] = [];
+  const needle = '"tag_name":"';
+  let from = 0;
+  while (true) {
+    const at = json.indexOf(needle, from);
+    if (at === -1) break;
+    const start = at + needle.length;
+    const end = json.indexOf('"', start);
+    if (end === -1) break;
+    out.push(json.substring(start, end));
+    from = end;
+  }
+  return out;
 }
 
 /**
@@ -217,13 +312,22 @@ export async function check(): Promise<UpdateInfo> {
     return info;
   }
 
-  const tag = field(body, "tag_name");
-  if (tag.length === 0) {
+  // The highest, not the first. A list comes back newest-first by DATE, and a
+  // stable hotfix published after an rc would otherwise be the only candidate
+  // considered - hiding the rc that is actually newer.
+  const tags = tagNames(body);
+  if (tags.length === 0) {
     info.error = "the release could not be read";
     return info;
   }
 
-  info.latest = tag.startsWith("v") ? tag.substring(1) : tag;
+  let best = "";
+  for (const tag of tags) {
+    const version = tag.startsWith("v") ? tag.substring(1) : tag;
+    if (best.length === 0 || compare(version, best) > 0) best = version;
+  }
+
+  info.latest = best;
   info.available = compare(info.latest, VERSION) > 0;
   return info;
 }

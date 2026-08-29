@@ -5,7 +5,12 @@
 // be deleted, a published binary that does not start has to be pulled. So
 // they live here rather than in somebody's memory.
 //
-//   node scripts/release.mjs <version|patch|minor|major> [options]
+//   node scripts/release.mjs <version|patch|minor|major|rc|minor-rc> [options]
+//
+//   `rc` cuts a test build - 0.4.5-rc.1, then rc.2, and so on - published as a
+//   GitHub prerelease. /releases/latest skips those, so nobody on a released
+//   gitc is offered one, while a tester already on an rc is offered each next
+//   one and, eventually, the stable release that supersedes them.
 //
 //     -m <text>        commit message for the release commit
 //     -F <file>        ... or read it from a file
@@ -132,14 +137,47 @@ const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
 if (pkg.name !== "gitc") die(`this is not the gitc package (found "${pkg.name}")`);
 
 function bumped(current, kind) {
-  const [major, minor, patch] = current.split(".").map(Number);
+  // The numbers only: a current version of 0.5.0-rc.2 bumps from 0.5.0.
+  const [major, minor, patch] = current.split("-")[0].split(".").map(Number);
   if (kind === "major") return `${major + 1}.0.0`;
   if (kind === "minor") return `${major}.${minor + 1}.0`;
   return `${major}.${minor}.${patch + 1}`;
 }
 
-const version = ["major", "minor", "patch"].includes(target) ? bumped(pkg.version, target) : target;
-if (!/^\d+\.\d+\.\d+$/.test(version)) die(`"${version}" is not a version like 1.2.3`);
+/**
+ * The next release candidate.
+ *
+ * On an rc already, this continues the run - 0.5.0-rc.1 to 0.5.0-rc.2 - so a
+ * tester's own gitc offers them each build in turn. On a released version it
+ * starts a run for the next patch, and `minor-rc` chooses a bigger target when
+ * the branch is heading somewhere larger.
+ */
+function nextRc(current, base) {
+  // A candidate is for the version NEXT, never the one already out: 0.4.4-rc.1
+  // sorts BELOW 0.4.4, so a tester on it would be offered the release it was
+  // meant to precede, as though the test build were the newer thing.
+  const target = base ?? (current.includes("-") ? current.split("-")[0] : bumped(current, "patch"));
+  const prefix = `${target}-rc.`;
+  if (!current.startsWith(prefix)) return `${target}-rc.1`;
+  const n = Number(current.slice(prefix.length));
+  return `${target}-rc.${Number.isFinite(n) ? n + 1 : 1}`;
+}
+
+let version;
+if (target === "rc") version = nextRc(pkg.version, null);
+else if (["major", "minor", "patch"].includes(target)) version = bumped(pkg.version, target);
+else if (["major-rc", "minor-rc", "patch-rc"].includes(target)) {
+  version = nextRc(pkg.version, bumped(pkg.version, target.slice(0, -3)));
+} else version = target;
+
+// A prerelease part is allowed, and is what keeps a test build out of the main
+// update stream: the workflow publishes any tag containing "-" as a GitHub
+// prerelease, and /releases/latest - which every released gitc asks for - is
+// defined to skip those.
+if (!/^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$/.test(version)) {
+  die(`"${version}" is not a version like 1.2.3 or 1.2.3-rc.1`);
+}
+const prerelease = version.includes("-");
 
 const tag = `v${version}`;
 const binary = join(root, "dist", windows ? "gitc.exe" : "gitc");
@@ -151,7 +189,13 @@ console.log(`releasing gitc ${version}${dryRun ? "  (dry run)" : ""}`);
 step("Checking the ground");
 
 const branch = flag("--branch") ?? git("rev-parse", "--abbrev-ref", "HEAD").out;
-info(`branch ${branch}`);
+info(`branch ${branch}${prerelease ? "  (prerelease)" : ""}`);
+
+// A release candidate is for a branch. Cutting one from master would put a
+// version nobody is offered on the branch everybody builds from.
+if (prerelease && branch === "master") {
+  die("a release candidate is for a branch - pass --branch, or release a plain version");
+}
 
 if (!run("gh", ["auth", "status"], { allowFail: true, shell: windows }).ok) {
   die("gh is not authenticated - run `gh auth login`");

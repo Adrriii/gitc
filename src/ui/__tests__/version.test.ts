@@ -45,6 +45,18 @@ eq("features threshold stays quiet on a patch", shouldPrompt("0.4.3", "0.4.4", "
 eq("features threshold speaks up on a minor", shouldPrompt("0.4.3", "0.5.0", "minor"), true);
 eq("nothing newer, nothing to say", shouldPrompt("0.4.3", "0.4.3", "patch"), false);
 
+// A test build hears about the next one whatever the threshold says: rc.1 to
+// rc.2 has no bump level to measure, and running an rc is already a choice to
+// be interrupted.
+eq(
+  "rc to rc prompts even on the strictest threshold",
+  shouldPrompt("0.5.0-rc.1", "0.5.0-rc.2", "major"),
+  true,
+);
+eq("rc to its release prompts", shouldPrompt("0.5.0-rc.2", "0.5.0", "major"), true);
+eq("the same rc does not", shouldPrompt("0.5.0-rc.1", "0.5.0-rc.1", "patch"), false);
+eq("a stable user is unaffected by the rule", shouldPrompt("0.4.3", "0.4.4", "minor"), false);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 // exitCode, not exit(): exit() can abort a queued stdout write on Windows.
 process.exitCode = fail === 0 ? 0 : 1;
