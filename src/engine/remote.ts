@@ -494,13 +494,27 @@ export async function connect(host: string, bin: string): Promise<Connection> {
     });
   }
 
+  // Distinguishes the two ways a tunnel ends. "We closed it" is ordinary -
+  // a swept idle host, a closed tab, gitc exiting. Anything else is the
+  // tunnel failing underneath us, and only that needs explaining.
+  let closedHere = false;
   const close = () => {
+    closedHere = true;
     try {
       child.kill();
     } catch {
       // Already gone, which is the state we wanted.
     }
   };
+
+  child.on("exit", (code: number | null) => {
+    if (closedHere) return;
+    const why = stderr.trim();
+    console.log(
+      "[tunnel] " + host + " ended on its own, code " + String(code) +
+        (why.length > 0 ? ": " + why : " (ssh said nothing)"),
+    );
+  });
 
   const started = Date.now();
   while (Date.now() - started < CONNECT_TIMEOUT_MS) {
