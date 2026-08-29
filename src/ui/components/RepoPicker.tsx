@@ -19,7 +19,14 @@ import s from "./RepoPicker.module.scss";
  * It starts at the home directory. There is no placeholder path, because any
  * example is wrong on somebody's machine.
  */
-export function RepoPicker({ onOpen }: { onOpen: (path: string) => void }) {
+export function RepoPicker({
+  onOpen,
+  host,
+}: {
+  onOpen: (path: string) => void;
+  /** Browse this machine instead of the local one. */
+  host?: string;
+}) {
   const [value, setValue] = useState("");
   const [listing, setListing] = useState<Listing | null>(null);
   const [active, setActive] = useState(0);
@@ -30,11 +37,12 @@ export function RepoPicker({ onOpen }: { onOpen: (path: string) => void }) {
   // when one directory is slow and the next keystroke's is not.
   const request = useRef(0);
 
-  const load = useCallback(async (path: string) => {
+  const load = useCallback(
+    async (path: string) => {
     const id = ++request.current;
     setLoading(true);
     try {
-      const r = await api.ls(path);
+      const r = await api.ls(path, host);
       if (request.current !== id) return;
       setListing(r);
       setActive(0);
@@ -46,9 +54,18 @@ export function RepoPicker({ onOpen }: { onOpen: (path: string) => void }) {
     } finally {
       if (request.current === id) setLoading(false);
     }
-  }, []);
+    },
+    // Changing machine re-lists from scratch: the previous listing is another
+    // filesystem's, and its paths mean nothing here.
+    [host],
+  );
 
   useEffect(() => {
+    // Cleared first, so the seeding in load() takes. A path typed for one
+    // machine is meaningless on another, and a Windows path left in the box
+    // while listing a Linux server is worse than meaningless.
+    setValue("");
+    setListing(null);
     void load("");
     input.current?.focus();
   }, [load]);

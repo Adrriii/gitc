@@ -1,6 +1,8 @@
-import { useState } from "react";
-import type { Session } from "../types";
+import { useEffect, useState } from "react";
+import type { Session, SshHost } from "../types";
+import { api } from "../api";
 import { RepoPicker } from "./RepoPicker";
+import { Icon } from "./Icon";
 import s from "./Welcome.module.scss";
 
 export function Welcome({
@@ -9,18 +11,70 @@ export function Welcome({
   error,
 }: {
   session: Session;
-  onOpen: (path: string) => void;
+  /**
+   * Returns when the attempt is over, so a failed one can be recovered from.
+   * Opening a remote repository can fail - host unreachable, path gone - and
+   * App turns that into an error message rather than a rejection, so this
+   * settling is the only signal Welcome gets.
+   */
+  onOpen: (path: string, host?: string) => Promise<void>;
   error: string | null;
 }) {
   const [search, setSearch] = useState("");
+  const [hosts, setHosts] = useState<SshHost[]>([]);
+  /** The host being opened on, or null while the choice is this machine. */
+  const [host, setHost] = useState<SshHost | null>(null);
+  /** Connecting is slow enough to need saying so: install, then a tunnel. */
+  const [connecting, setConnecting] = useState(false);
+  /**
+   * The recent being opened.
+   *
+   * A remote one takes seconds to connect, and until the tab appears nothing
+   * on screen changed - which reads as the click not having registered, and
+   * is what made people click again and open it twice.
+   */
+  const [opening, setOpening] = useState<string | null>(null);
+
+  // A host added to ~/.ssh/config a minute ago is exactly the one somebody is
+  // trying to reach, so this is read on arrival rather than cached.
+  useEffect(() => {
+    let live = true;
+    api
+      .hosts()
+      .then((h) => live && setHosts(h))
+      .catch(() => live && setHosts([]));
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  /**
+   * How a remote recent is labelled: the resolved destination when the alias
+   * is still in ~/.ssh/config, and the alias itself when it is not.
+   *
+   * "server" says nothing about which machine that was six months later, and
+   * the same path exists on several of them.
+   */
+  const where = (host: string): string => {
+    const known = hosts.find((h) => h.alias === host);
+    if (known === undefined) return host;
+    const user = known.user === null ? "" : known.user + "@";
+    return user + (known.hostName ?? known.alias);
+  };
 
   const f = search.trim().toLowerCase();
   const recents = session.recents.filter(
-    (r) => f === "" || r.name.toLowerCase().includes(f) || r.path.toLowerCase().includes(f),
+    (r) =>
+      f === "" ||
+      r.name.toLowerCase().includes(f) ||
+      r.path.toLowerCase().includes(f) ||
+      // Findable by machine too: "which repositories were on the build box?"
+      (r.host !== null && where(r.host).toLowerCase().includes(f)),
   );
 
   return (
     <div className={s.wrap}>
+      <div className={s.columns}>
       <div className={s.main}>
         <h1>Repositories</h1>
 
@@ -41,11 +95,89 @@ export function Welcome({
         <div className={s.recentLabel}>Recent</div>
         {recents.length === 0 && <div className={s.none}>No repositories yet.</div>}
         {recents.map((r) => (
-          <div key={r.path} className={s.row} onClick={() => onOpen(r.path)}>
+          // Keyed by host and path: the same path on two machines is two
+          // different repositories.
+          <div
+            key={(r.host ?? "") + r.path}
+            className={`${s.row} ${opening !== null ? s.rowBusy : ""}`}
+            // Reopened on the machine it came from. Without the host this
+            // asked the local filesystem for a path that only exists on a
+            // server, and failed in a way that looked like the repository had
+            // been deleted.
+            onClick={() => {
+              if (opening !== null) return;
+              setOpening((r.host ?? "") + r.path);
+              // Cleared however it ends. On success this screen is replaced by
+              // the tab, so the reset is invisible; on failure it is the only
+              // thing that lets the list be clicked again. Without it one
+              // unreachable host left every row inert until gitc restarted.
+              void onOpen(r.path, r.host ?? undefined).finally(() => setOpening(null));
+            }}
+          >
             <span className={s.name}>{r.name}</span>
+            {r.host !== null && (
+              <span className={s.rowHost} title={"On " + where(r.host)}>
+                <Icon name="repo" size={11} />
+                {where(r.host)}
+              </span>
+            )}
             <span className={s.path}>{r.path}</span>
+            {opening === (r.host ?? "") + r.path && (
+              <span className={s.opening}>Opening...</span>
+            )}
           </div>
         ))}
+      </div>
+
+      {hosts.length > 0 && (
+        <div className={`${s.aside} ${s.remote}`}>
+          <h2>On another machine</h2>
+          {host === null ? (
+            <div className={s.hosts}>
+              {hosts.map((h) => (
+                <button key={h.alias} className={s.host} onClick={() => setHost(h)}>
+                  <Icon name="repo" size={13} />
+                  <span className={s.hostAlias}>{h.alias}</span>
+                  <span className={s.hostWhere}>
+                    {h.user === null ? "" : h.user + "@"}
+                    {h.hostName ?? h.alias}
+                    {h.port === null ? "" : ":" + String(h.port)}
+                  </span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className={s.remoteOpen}>
+              <div className={s.remoteHost}>
+                <Icon name="repo" size={13} />
+                <span className={s.hostAlias}>{host.alias}</span>
+                <button className={s.change} onClick={() => setHost(null)} disabled={connecting}>
+                  Change
+                </button>
+              </div>
+              {/* The same picker as the local one, browsing that machine.
+                  The first listing is slow - it installs gitc there and opens
+                  the tunnel - and every one after it is down the same tunnel. */}
+              <RepoPicker
+                host={host.alias}
+                onOpen={(path) => {
+                  setConnecting(true);
+                  // Same reason as the recents: a directory that is not a
+                  // repository, or a host that refuses, otherwise leaves this
+                  // true for ever - and Change is disabled while it is, so
+                  // there was no way back to the host list or the local picker.
+                  void onOpen(path, host.alias).finally(() => setConnecting(false));
+                }}
+              />
+              {connecting && (
+                <div className={s.connecting}>
+                  Opening {host.alias}...
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
       </div>
     </div>
   );

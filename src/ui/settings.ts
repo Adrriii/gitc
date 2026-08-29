@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { UPDATE_LEVELS, type Bump } from "./version";
+import { VERSION } from "../generated/version";
 
 export { commandType } from "./gitCommand";
 
@@ -282,6 +283,84 @@ function parseUpdateCheck(raw: string): number | null {
 export function useUpdateCheck() {
   const [minutes, set] = useStored<number>(UPDATE_KEY, 0, parseUpdateCheck);
   return { minutes, set };
+}
+
+// --- how long a remote connection is kept ------------------------------------
+
+/** Minutes to hold a tunnel to a host you are not looking at. 0 = forever. */
+export const REMOTE_HOLDS = [
+  { minutes: 1, label: "1 min" },
+  { minutes: 10, label: "10 min" },
+  { minutes: 60, label: "1 hour" },
+  { minutes: 0, label: "Always" },
+];
+
+const REMOTE_HOLD_KEY = "gitc.remoteHoldMinutes";
+
+function parseRemoteHold(raw: string): number | null {
+  const n = Number(raw);
+  for (const choice of REMOTE_HOLDS) {
+    if (choice.minutes === n) return n;
+  }
+  return null;
+}
+
+/**
+ * How long a connection to another machine is kept after you leave its tab.
+ *
+ * A tunnel is a gitc process running on somebody else's server, so holding
+ * every one you have ever opened until gitc quits is not a neutral default -
+ * it is a handful of idle processes on other people's machines. Ten minutes
+ * covers going away to read something and coming back; longer is for a server
+ * you are working on all day, where reconnecting is the annoyance.
+ *
+ * Dropping one costs nothing but time: tabbing back into a remote repository
+ * reconnects on the first request. The tab you are looking at is never
+ * dropped, whatever this says.
+ */
+export function useRemoteHold() {
+  const [minutes, set] = useStored<number>(REMOTE_HOLD_KEY, 10, parseRemoteHold);
+  return { minutes, set };
+}
+
+export const UPDATE_CHANNELS = [
+  { channel: "stable", label: "Stable", hint: "Published releases" },
+  { channel: "test", label: "Test builds", hint: "Release candidates, before they are everyone's" },
+];
+
+const UPDATE_CHANNEL_KEY = "gitc.updateChannel";
+
+function parseChannel(raw: string): string | null {
+  for (const c of UPDATE_CHANNELS) {
+    if (c.channel === raw) return c.channel;
+  }
+  return null;
+}
+
+/**
+ * Which releases gitc offers.
+ *
+ * Stable is every published release. Test adds the candidates that come
+ * before them - builds meant to be tried and reported on, not relied upon.
+ *
+ * Choosing it here rather than by which binary you happen to have means
+ * switching goes through the updater, which knows how to replace a running
+ * gitc. Downloading a candidate by hand does not: Windows will not overwrite
+ * a running executable, so the installer keeps the copy that is there and
+ * hands off to it, and you would be told nothing and still be on the old
+ * build.
+ *
+ * Defaults from the running version, so somebody who did install a candidate
+ * by hand is on the stream that matches it rather than being offered a
+ * silent trip backwards.
+ */
+export function useUpdateChannel() {
+  const [channel, set] = useStored<string>(
+    UPDATE_CHANNEL_KEY,
+    VERSION.includes("-") ? "test" : "stable",
+    parseChannel,
+  );
+  return { channel, set };
 }
 
 const UPDATE_LEVEL_KEY = "gitc.updateLevel";

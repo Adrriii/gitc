@@ -9,7 +9,17 @@ import { join } from "node:path";
 export interface Tab {
   id: string;
   name: string;
+  /** The repository's path ON THE MACHINE THAT HOLDS IT - remote or not. */
   path: string;
+  /**
+   * The ssh destination this repository lives on, or null for this machine.
+   *
+   * A remote tab is served by a gitc running over there; everything the window
+   * asks about it is answered by that engine and passed through this one. The
+   * id is deliberately the SAME on both sides - see openRepo - so nothing has
+   * to be rewritten in transit.
+   */
+  host: string | null;
 }
 
 export interface Session {
@@ -36,6 +46,25 @@ function empty(): Session {
   return { tabs: [], activeId: null, recents: [] };
 }
 
+/**
+ * A tab as it may appear in a file written by an older gitc.
+ *
+ * `host` is optional here and not in Tab: every session saved before remote
+ * tabs existed has entries without it, and this is the one place that has to
+ * cope with their absence.
+ */
+interface StoredTab {
+  id: string;
+  name: string;
+  path: string;
+  host?: string | null;
+}
+
+/** Fills in what an older file does not carry, so the rest can assume it. */
+function restore(t: StoredTab): Tab {
+  return { id: t.id, name: t.name, path: t.path, host: t.host ?? null };
+}
+
 /** Reads the saved session, falling back to an empty one on any problem. */
 export function loadSession(): Session {
   const path = statePath();
@@ -43,11 +72,15 @@ export function loadSession(): Session {
   try {
     // JSON.parse is typed as unknown here - the checked cast validates the
     // shape at runtime and throws if the file was hand-edited into nonsense.
-    const parsed = JSON.parse(readFileSync(path, "utf8")) as Session;
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as {
+      tabs: StoredTab[];
+      activeId: string | null;
+      recents: StoredTab[];
+    };
     return {
-      tabs: parsed.tabs,
+      tabs: parsed.tabs.map(restore),
       activeId: parsed.activeId,
-      recents: parsed.recents,
+      recents: parsed.recents.map(restore),
     };
   } catch {
     return empty();
@@ -64,7 +97,12 @@ export function saveSession(session: Session): void {
 export function touchRecent(session: Session, tab: Tab): void {
   const kept: Tab[] = [];
   for (const r of session.recents) {
-    if (r.path !== tab.path) kept.push(r);
+    // Host as well as path. The same path on two machines is two different
+    // repositories - which the Recent list and its keys already assume - and
+    // matching on path alone silently evicted the remote entry the moment the
+    // same path was opened locally, with no way back to it but retyping the
+    // host and browsing again.
+    if (r.path !== tab.path || r.host !== tab.host) kept.push(r);
   }
   kept.unshift(tab);
   session.recents = kept.slice(0, MAX_RECENTS);

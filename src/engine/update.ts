@@ -26,12 +26,21 @@ import { promisify } from "node:util";
 
 import { REPO, VERSION } from "../generated/version.ts";
 import { installedBinary } from "./install.ts";
+import { compare, isPrerelease } from "./semver.ts";
 
 const execFileAsync = promisify(execFile);
 const windows = process.platform === "win32";
 
 export interface UpdateInfo {
   current: string;
+  /**
+   * True when taking this means leaving the build stream behind rather than
+   * moving forward in it - going back to stable from a release candidate.
+   *
+   * It is the same install either way; the UI says "switch" rather than
+   * "update" so that a version number going DOWN is not read as a mistake.
+   */
+  switching: boolean;
   /** The newest released version, or "" when it could not be determined. */
   latest: string;
   available: boolean;
@@ -41,20 +50,41 @@ export interface UpdateInfo {
   error: string;
 }
 
+/** Which releases a person wants to be offered. */
+export type Channel = "stable" | "test";
+
 /**
- * Where releases are published.
+ * Where to look for a newer version.
  *
- * GitHub by default, overridable so a fork or a self-hosted build can point
- * somewhere else - the same reason automouse publishes to its own CDN. The API
- * endpoint must answer with a `tag_name`, and the download base must hold the
- * per-platform asset and optionally SHA256SUMS.
+ * The build you are running decides your channel, which is why there is no
+ * setting for this. A released gitc asks for /releases/latest, and GitHub
+ * defines that as the newest release that is neither a draft nor a
+ * prerelease - so a test build is invisible to everyone on a stable one,
+ * without any filtering here.
+ *
+ * A test build asks for the whole list instead, so it sees the next rc AND
+ * the stable release that eventually supersedes it. Otherwise installing an
+ * rc would be a one-way door: /releases/latest would keep answering with a
+ * version older than the one running, and the tester would sit on rc.1 for
+ * ever with nothing offering them rc.2.
  */
-function apiUrl(): string {
+function apiUrl(channel: Channel): string {
   const custom = process.env["GITC_UPDATE_API"];
   if (custom !== undefined && custom.length > 0) return custom;
-  return "https://api.github.com/repos/" + REPO + "/releases/latest";
+  const base = "https://api.github.com/repos/" + REPO + "/releases";
+  // /releases/latest is defined as the newest release that is neither draft
+  // nor prerelease, so the stable stream needs no filtering of its own. The
+  // test stream asks for the list, which is the only way to see a prerelease
+  // at all - and it still sees stable releases, since they are in the list too.
+  return channel === "test" ? base + "?per_page=20" : base + "/latest";
 }
 
+/**
+ * Where the assets themselves come from.
+ *
+ * GitHub by default, overridable along with the API endpoint so a fork or a
+ * self-hosted build can publish somewhere else.
+ */
 function downloadBase(tag: string): string {
   const custom = process.env["GITC_UPDATE_BASE"];
   if (custom !== undefined && custom.length > 0) {
@@ -68,18 +98,21 @@ function assetName(): string {
   return windows ? "gitc.exe" : "gitc";
 }
 
-/** Compares two dotted versions numerically. Returns >0 when a is newer. */
-function compare(a: string, b: string): number {
-  const left = a.split(".");
-  const right = b.split(".");
-  for (let i = 0; i < 3; i++) {
-    const l = parseInt(left[i] ?? "0", 10);
-    const r = parseInt(right[i] ?? "0", 10);
-    const lv = isNaN(l) ? 0 : l;
-    const rv = isNaN(r) ? 0 : r;
-    if (lv !== rv) return lv - rv;
+/** Every tag_name in the answer - one release, or a list of them. */
+function tagNames(json: string): string[] {
+  const out: string[] = [];
+  const needle = '"tag_name":"';
+  let from = 0;
+  while (true) {
+    const at = json.indexOf(needle, from);
+    if (at === -1) break;
+    const start = at + needle.length;
+    const end = json.indexOf('"', start);
+    if (end === -1) break;
+    out.push(json.substring(start, end));
+    from = end;
   }
-  return 0;
+  return out;
 }
 
 /**
@@ -182,10 +215,11 @@ function field(json: string, key: string): string {
   return json.substring(start, end);
 }
 
-export async function check(): Promise<UpdateInfo> {
+export async function check(channel: Channel = "stable"): Promise<UpdateInfo> {
   const info: UpdateInfo = {
     current: VERSION,
     latest: "",
+    switching: false,
     available: false,
     page: REPO.length > 0 ? "https://github.com/" + REPO + "/releases/latest" : "",
     error: "",
@@ -207,7 +241,7 @@ export async function check(): Promise<UpdateInfo> {
     "accept: application/vnd.github+json",
     "-H",
     "user-agent: gitc/" + VERSION,
-    apiUrl(),
+    apiUrl(channel),
   ]);
 
   if (body === null) {
@@ -217,14 +251,32 @@ export async function check(): Promise<UpdateInfo> {
     return info;
   }
 
-  const tag = field(body, "tag_name");
-  if (tag.length === 0) {
+  // The highest, not the first. A list comes back newest-first by DATE, and a
+  // stable hotfix published after an rc would otherwise be the only candidate
+  // considered - hiding the rc that is actually newer.
+  const tags = tagNames(body);
+  if (tags.length === 0) {
     info.error = "the release could not be read";
     return info;
   }
 
-  info.latest = tag.startsWith("v") ? tag.substring(1) : tag;
-  info.available = compare(info.latest, VERSION) > 0;
+  let best = "";
+  for (const tag of tags) {
+    const version = tag.startsWith("v") ? tag.substring(1) : tag;
+    if (best.length === 0 || compare(version, best) > 0) best = version;
+  }
+
+  info.latest = best;
+
+  // Ordinarily, newer. But somebody on a release candidate who asks for the
+  // stable stream is asking to go BACK to the newest stable, which compares
+  // lower than what they are running - so "is it newer" would answer no and
+  // strand them on a test build with no way out but a manual download. Leaving
+  // the stream is a move they asked for, so it is offered like any other.
+  const newer = compare(info.latest, VERSION) > 0;
+  const leavingTest = channel === "stable" && isPrerelease(VERSION);
+  info.switching = leavingTest && !newer && info.latest !== VERSION;
+  info.available = newer || info.switching;
   return info;
 }
 
@@ -383,16 +435,18 @@ async function contentLength(url: string): Promise<number> {
  * one takes its name, and the leftover is deleted on the next start. On POSIX
  * replacing the file outright is fine.
  */
-export async function apply(): Promise<UpdateResult> {
+export async function apply(channel: Channel = "stable"): Promise<UpdateResult> {
   progress = { phase: "checking", received: 0, total: 0, message: "Checking for the latest release" };
 
-  const info = await check();
+  // The same stream the check offered from, or pressing the button would look
+  // for something the window never mentioned.
+  const info = await check(channel);
   if (info.error.length > 0) {
     setPhase("failed", info.error);
     return { ok: false, message: info.error, restarting: false };
   }
   if (!info.available) {
-    const message = "gitc " + VERSION + " is already the newest version";
+    const message = "gitc " + VERSION + " is already the newest version on this stream";
     setPhase("failed", message);
     return { ok: false, message, restarting: false };
   }

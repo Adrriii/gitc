@@ -5,8 +5,28 @@
   background: var(--bg-0);
 }
 
+// Local on the left, other machines on the right.
+//
+// Side by side rather than stacked: the host list is a peer of the picker, not
+// a footnote to it, and stacked it sat below the recents where you had to
+// scroll past everything on this machine to find out another one existed.
+.columns {
+  display: flex;
+  align-items: flex-start;
+  gap: 40px;
+}
+
 .main {
+  flex: 1;
+  min-width: 0;
   max-width: 1000px;
+}
+
+// Wide enough for "waza-boitech  waza@boitech.dev" without wrapping, and
+// fixed so the local column does not move when the host list changes length.
+.aside {
+  flex: none;
+  width: 300px;
 }
 
 h1 {
@@ -111,4 +131,124 @@ h1 {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+// Opening a repository that lives somewhere else.
+//
+// Below the local picker rather than beside it: most repositories are on this
+// machine, and a list of servers competing with the path field for attention
+// would make the ordinary case look like the unusual one.
+.remote {
+  // Aligns with the picker rather than the heading above it.
+  margin-top: 47px;
+
+  h2 {
+    margin: 0 0 10px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--fg-dim);
+  }
+}
+
+.hosts {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.host {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: var(--radius);
+  color: var(--fg-dim);
+  cursor: pointer;
+  text-align: left;
+
+  &:hover {
+    background: var(--bg-3);
+    color: var(--fg);
+  }
+}
+
+.hostAlias {
+  font-weight: 600;
+  color: var(--fg);
+}
+
+// The resolved destination, so two aliases pointing at one box are tellable
+// apart without opening the config.
+.hostWhere {
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+
+.remoteOpen {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.remoteHost {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--fg-dim);
+}
+
+.change {
+  margin-left: 4px;
+  padding: 2px 8px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line-strong);
+  background: var(--bg-2);
+  color: var(--fg-dim);
+  font-size: 11px;
+
+  &:hover {
+    background: var(--bg-3);
+    color: var(--fg);
+  }
+}
+
+.connecting {
+  color: var(--fg-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+// Which machine a recent repository was on. Between the name and the path,
+// because the path alone is ambiguous - /srv/app exists on every server - and
+// reading it after the path would be finding out too late.
+.rowHost {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  padding: 1px 7px;
+  border-radius: var(--radius);
+  background: var(--bg-2);
+  color: var(--fg-dim);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+// Said the moment a recent is clicked. Opening a remote repository takes
+// seconds - install, tunnel, first read - and until the tab appears nothing
+// else on this screen changes, which reads as the click having missed.
+.opening {
+  margin-left: auto;
+  flex: none;
+  color: var(--accent);
+  font-size: 11px;
+}
+
+// While one is opening, the rest stop offering themselves.
+.rowBusy {
+  pointer-events: none;
+
+  &:not(:hover) {
+    opacity: 0.5;
+  }
 }

@@ -144,6 +144,12 @@ jobs:
         with:
           files: release/*
           generate_release_notes: true
+          # Any tag carrying a prerelease part is a test build. GitHub's
+          # /releases/latest - which every released gitc asks for - is defined
+          # as the newest release that is neither draft nor prerelease, so
+          # this one line is what keeps a test build out of the update stream
+          # everybody else is on. No client-side filtering, no second channel.
+          prerelease: ${{ contains(github.ref_name, '-') }}
           body: |
             Download the file for your system and run it. It installs gitc and
             starts it - there is nothing else to do, and nothing to uninstall

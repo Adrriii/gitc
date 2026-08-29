@@ -4,7 +4,7 @@
 // which gives a chromeless window without needing a GUI toolkit - see
 // docs/toolchain.md for why that is the shape of this program.
 
-import { createServer } from "node:http";
+import { createServer, request } from "node:http";
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join, basename, resolve } from "node:path";
@@ -59,10 +59,20 @@ import { rewriteTodo, writeMessage } from "./engine/rebaseHelper.ts";
 import { running, handOff, probe, quitOther } from "./engine/instance.ts";
 import { raiseWindow, confirmTakeOver } from "./engine/quirks.ts";
 import {
+  connect,
+  ensureRemote,
+  detectRemote,
+  isSafeDestination,
+  tunnelRequest,
+  type Connection,
+} from "./engine/remote.ts";
+import { readSshHosts } from "./engine/sshConfig.ts";
+import {
   check as checkUpdate,
   apply as applyUpdate,
   cleanupPrevious,
   updateProgress,
+  type Channel,
 } from "./engine/update.ts";
 import { NAME, VERSION } from "./generated/version.ts";
 import { loadSession, saveSession, touchRecent } from "./state.ts";
@@ -116,6 +126,8 @@ const INSTANCE = String(process.pid) + "-" + String(Date.now());
 // disappearing while someone is using it. Ten seconds was short enough that a
 // single long layout pass could trigger it.
 const MAIN_WINDOW_SIZE = "1600,1000";
+/** How long a --serve engine waits for a request before deciding it is alone. */
+const SERVE_IDLE_MS = 15 * 60 * 1000;
 const PING_TIMEOUT_MS = 60000;
 const HANDOFF_GRACE_MS = 3000;
 // How long to wait after the window says goodbye before believing it.
@@ -489,6 +501,175 @@ function sendJson(res: import("node:http").ServerResponse, body: string): void {
   send(res, 200, "application/json; charset=utf-8", body);
 }
 
+/**
+ * Hands one request to the engine at the far end of a tunnel and streams the
+ * answer back.
+ *
+ * Bytes in, bytes out. The body is not parsed and the response is not decoded:
+ * paths arrive as the operating system's raw bytes and have to leave the same
+ * way (see the note on jsonBytes in api.ts), and anything this re-encoded on
+ * the way past would be a name broken by the trip rather than by git.
+ */
+/**
+ * Sends one request to a host's engine and streams the answer back, opening a
+ * tunnel if there is not one and trying again if the one there is has died.
+ *
+ * The retry is the point. A tunnel can stop working at any moment - swept for
+ * being idle, a laptop that slept, a network that dropped, a server that was
+ * rebooted - and the first this side hears of it is a socket error on a
+ * request somebody is waiting for. Reconnecting only when a request fails is
+ * also the only honest test of whether a connection is alive: asking first
+ * would be a second round trip that can itself be stale by the time the real
+ * one goes out.
+ *
+ * The body is read before any of this rather than piped through, so there is
+ * something to send twice. It is also simpler: the previous version attached
+ * its listeners after an await, which worked only because an unread request
+ * stream stays paused.
+ */
+async function proxyToHost(
+  host: string,
+  path: string,
+  method: string,
+  contentType: string | undefined,
+  body: string,
+  res: import("node:http").ServerResponse,
+): Promise<void> {
+  // A read can be repeated; a write cannot. `git commit` that ran on the far
+  // side and lost its answer to a dying tunnel would be committed twice by a
+  // blind retry, and the same goes for push, stash and rebase --continue.
+  const repeatable = method === "GET" || method === "HEAD";
+
+  // Two attempts: the connection in hand, then a fresh one. A third would be
+  // waiting on something that is not coming back.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const conn = await connectionFor(host);
+    if ("error" in conn) {
+      send(res, 502, "application/json", JSON.stringify({ error: conn.error }));
+      return;
+    }
+    conn.usedAt = Date.now();
+
+    // A write gets its liveness checked BEFORE it is sent, which is the only
+    // moment a failure is free. Afterwards there is no way to tell a request
+    // that never arrived from one that ran and lost its answer, so afterwards
+    // it must not be repeated. A ping down an open tunnel is loopback and
+    // costs about a millisecond.
+    if (!repeatable && attempt === 0) {
+      conn.inFlight++;
+      const probe = await sendThrough(conn, "/api/ping", "GET", undefined, "");
+      conn.inFlight--;
+      if (!probe.ok) {
+        dropConnection(host, conn);
+        continue;
+      }
+    }
+
+    // Held for the duration, not merely timestamped at each end. Refreshing
+    // usedAt afterwards only ever helps the NEXT request: while this one runs,
+    // usedAt is its start time, and a push slower than the hold looked idle
+    // for its whole life. The in-front exemption hid most of it - but not a
+    // tab that stops being in front while its push runs, which is a normal
+    // thing to do.
+    conn.inFlight++;
+    const answer = await sendThrough(conn, path, method, contentType, body);
+    conn.inFlight--;
+    if (answer.ok) {
+      conn.usedAt = Date.now();
+      res.writeHead(answer.status, { "content-type": answer.type });
+      res.end(answer.body);
+      return;
+    }
+
+    // Dead tunnel. Drop it so the next call builds a new one rather than
+    // handing out the same corpse.
+    dropConnection(host, conn);
+    if (!repeatable || attempt === 1) {
+      send(res, 502, "application/json", JSON.stringify({ error: host + ": " + answer.error }));
+      return;
+    }
+  }
+}
+
+/**
+ * Removes a connection, but only if it is still the one on offer.
+ *
+ * Two tabs on one host hitting a dead tunnel at once: the first fails,
+ * reconnects and publishes a fresh tunnel; the second then errors on the OLD
+ * socket and, without this check, closes and deletes the new one - killing the
+ * remote engine and whatever git it was running, and sending the first tab
+ * round again. A reconnect loop built out of two requests.
+ */
+function dropConnection(host: string, used: Connection): void {
+  if (connections.get(host) !== used) return;
+  used.close();
+  connections.delete(host);
+}
+
+interface Relayed {
+  ok: boolean;
+  status: number;
+  type: string;
+  body: Buffer;
+  error: string;
+}
+
+/**
+ * One request down a tunnel, with the answer kept as bytes.
+ *
+ * Not decoded on the way past: paths arrive as the operating system's raw
+ * bytes and have to leave the same way (see jsonBytes in api.ts), so anything
+ * re-encoded here is a name broken by the trip rather than by git.
+ */
+function sendThrough(
+  conn: Connection,
+  path: string,
+  method: string,
+  contentType: string | undefined,
+  body: string,
+): Promise<Relayed> {
+  return new Promise((resolve) => {
+    const headers: Record<string, string> = {};
+    if (contentType !== undefined) headers["content-type"] = contentType;
+    if (body.length > 0) headers["content-length"] = String(Buffer.byteLength(body));
+
+    const outbound = request(
+      {
+        hostname: "127.0.0.1",
+        port: conn.port,
+        path: path,
+        method: method,
+        headers: headers,
+        timeout: 120000,
+      },
+      (answer) => {
+        const chunks: Uint8Array[] = [];
+        answer.on("data", (c: Buffer) => chunks.push(c));
+        answer.on("end", () =>
+          resolve({
+            ok: true,
+            status: answer.statusCode ?? 502,
+            type: answer.headers["content-type"] ?? "application/json",
+            body: Buffer.concat(chunks),
+            error: "",
+          }),
+        );
+      },
+    );
+
+    outbound.on("error", (e: Error) => {
+      resolve({ ok: false, status: 502, type: "", body: Buffer.alloc(0), error: e.message });
+    });
+    outbound.on("timeout", () => {
+      outbound.destroy();
+      resolve({ ok: false, status: 504, type: "", body: Buffer.alloc(0), error: "no answer" });
+    });
+
+    if (body.length > 0) outbound.write(body);
+    outbound.end();
+  });
+}
+
 function readBody(req: import("node:http").IncomingMessage): Promise<string> {
   return new Promise((resolve) => {
     let data = "";
@@ -501,6 +682,13 @@ function readBody(req: import("node:http").IncomingMessage): Promise<string> {
 
 interface OpenRequest {
   path: string;
+  /** An ssh destination, when the repository is on another machine. */
+  host?: string;
+  /**
+   * The id this tab must have. Sent by a gitc acting as somebody's client, so
+   * that the tab is the same id at both ends of the tunnel.
+   */
+  id?: string;
 }
 interface PathsRequest {
   id: string;
@@ -565,25 +753,436 @@ function makeId(): string {
   return id;
 }
 
-async function openRepo(path: string): Promise<Tab | null> {
+/**
+ * @param wantId The id the tab must have, when somebody else has already
+ *   chosen it. A remote engine is told the id its caller is using, so a tab is
+ *   the same id on both sides and a proxied request needs no rewriting.
+ */
+async function openRepo(path: string, wantId?: string): Promise<Tab | null> {
   if (!(await isRepo(path))) return null;
   const root = await repoRoot(path);
   const resolved = root === null ? path : root;
   for (const t of session.tabs) {
     if (t.path !== resolved) continue;
-    // Already open: focus it rather than silently doing nothing. Opening a
-    // repo should always end with that repo in front.
+
+    // Already open under a different name. A remote engine keeps its own
+    // session across connections, so the second time a client opens a
+    // repository it finds one here already - and returning THIS id while the
+    // client goes on using the one it asked for is how every later request
+    // became "no such tab". The id the caller chose wins.
+    if (wantId !== undefined && t.id !== wantId) {
+      // Anything else already holding that id has to go, or two tabs answer
+      // to one name.
+      session.tabs = session.tabs.filter((o) => o.path === resolved || o.id !== wantId);
+      t.id = wantId;
+    }
+
+    // Focus it rather than silently doing nothing. Opening a repo should
+    // always end with that repo in front.
     session.activeId = t.id;
     touchRecent(session, t);
     saveSession(session);
     return t;
   }
-  const tab: Tab = { id: makeId(), name: basename(resolved), path: resolved };
+  const tab: Tab = {
+    id: wantId === undefined ? makeId() : wantId,
+    name: basename(resolved),
+    path: resolved,
+    host: null,
+  };
   session.tabs.push(tab);
   session.activeId = tab.id;
   touchRecent(session, tab);
   saveSession(session);
   return tab;
+}
+
+/**
+ * Live tunnels, by the HOST they reach.
+ *
+ * One engine per machine, not per tab. The remote engine binds a fixed port
+ * over there, so a second tunnel to the same host would start a gitc that
+ * finds one already running, hands over to it and exits - taking its own
+ * tunnel with it and leaving that tab dead. Sharing is also simply right:
+ * three repositories on one server are three tabs of one gitc, exactly as
+ * they would be locally.
+ *
+ * Browsing uses this too, before any tab exists.
+ */
+const connections = new Map<string, Connection>();
+
+/**
+ * The tunnel to a host, opening one if this is the first thing to need it.
+ *
+ * Installing and connecting are slow enough to be worth not repeating: the
+ * picker asks for a directory listing on every keystroke.
+ */
+async function connectionFor(host: string): Promise<Connection | { error: string }> {
+  const open = connections.get(host);
+  if (open !== undefined) return open;
+
+  // Joining an attempt already under way rather than starting a second.
+  // Switching to a remote tab fires a handful of requests at once - graph,
+  // status, submodules, the watcher - and each one arriving to find no
+  // connection would otherwise start its own install and its own tunnel.
+  const pending = connecting.get(host);
+  if (pending !== undefined) return await pending;
+
+  const attempt = openConnection(host);
+  connecting.set(host, attempt);
+  try {
+    return await attempt;
+  } finally {
+    connecting.delete(host);
+  }
+}
+
+/** In-flight connection attempts, so several callers share one. */
+const connecting = new Map<string, Promise<Connection | { error: string }>>();
+
+/**
+ * Minutes to hold a tunnel to a host whose tab is not in front, 0 for
+ * forever. The window owns the preference and sends it; this is the default
+ * until it does, and matches the one in settings.ts.
+ */
+let remoteHoldMinutes = 10;
+
+/**
+ * Which releases this gitc offers. Stable until the window says otherwise -
+ * the same default as the setting, so a check made before the window has
+ * spoken cannot surprise somebody onto a test build.
+ */
+let updateChannel: Channel = "stable";
+
+/**
+ * Drops connections to machines nobody is looking at.
+ *
+ * A tunnel is a gitc process on somebody else's server. Holding every one ever
+ * opened until this process quits leaves idle processes on other people's
+ * machines, which is not a neutral default for a tool that connects to them.
+ *
+ * Costs nothing but time: a request for a remote tab with no tunnel reconnects
+ * before answering, so tabbing back just takes a moment. The host of the tab
+ * in front is never dropped - that is the one being used, whether or not it
+ * happened to send a request in the last few minutes.
+ */
+function sweepIdleConnections(): void {
+  if (remoteHoldMinutes === 0) return;
+  const hold = remoteHoldMinutes * 60 * 1000;
+  const now = Date.now();
+
+  const active = session.tabs.find((t) => t.id === session.activeId);
+  const inFront = active === undefined ? null : active.host;
+
+  // Keys, then get - not a destructured entries() pair. The destructured form
+  // is the natural way to write this and it left the map holding connections
+  // it had just closed: the router then found a dead tunnel, proxied to it,
+  // and the tab failed with ECONNRESET while nothing ever tried to reconnect.
+  for (const host of [...connections.keys()]) {
+    const conn = connections.get(host);
+    if (conn === undefined) continue;
+    if (host === inFront) {
+      conn.usedAt = now;
+      continue;
+    }
+    // Busy is not idle, whatever the clock says.
+    if (conn.inFlight > 0) continue;
+    if (now - conn.usedAt < hold) continue;
+    conn.close();
+    connections.delete(host);
+    console.log(
+      "[sweep] closed " + host + " after " + String(now - conn.usedAt) + "ms idle",
+    );
+  }
+}
+
+async function openConnection(host: string): Promise<Connection | { error: string }> {
+  // Checked here, before anything runs ssh, so the refusal reads as itself.
+  // Left to the first sshRun it came back wrapped as "unrecognised remote
+  // platform", which describes the symptom of refusing rather than the reason.
+  if (!isSafeDestination(host)) {
+    return { error: '"' + host + '" is not a usable ssh destination' };
+  }
+
+  const kind = await detectRemote(host);
+  if (kind.refusal !== null) return { error: kind.refusal };
+
+  const install = await ensureRemote(host);
+  if (!install.ok) return { error: install.error };
+
+  const bin = kind.binPath === null ? "~/.local/bin/gitc" : kind.binPath;
+  try {
+    // The map must stop offering a tunnel that ended by itself, or the LED
+    // stays green for a host that is gone and the next request proxies into a
+    // dead socket. `made` is set below, so this only ever removes a connection
+    // that reached the map in the first place.
+    let made: Connection | null = null;
+    // onEnded fires once, and during registerTabs the connection is not in the
+    // map yet - so it would find nothing to remove and be spent. Publishing
+    // afterwards would then leave a tunnel whose ssh is gone with nothing left
+    // to take it out again: a green LED for a dead host, which is the case
+    // onEnded exists for.
+    let diedDuringSetup = false;
+    const conn = await connect(host, bin, () => {
+      // Latched, not conditional. Written as `made === null` this was false in
+      // the one window it exists for: during registerTabs `made` is already
+      // the connection, so the flag said "did not die" while the map lookup
+      // below found nothing to remove - and a tunnel that ended just as
+      // registerTabs succeeded was published anyway.
+      //
+      // The two halves cover different moments: the flag catches an end
+      // BEFORE publication, the delete catches one after.
+      diedDuringSetup = true;
+      if (made !== null && connections.get(host) === made) connections.delete(host);
+    });
+    made = conn;
+    // A fresh engine over there knows nothing about the tabs this side is
+    // already showing. Without this, every request after a reconnect asks
+    // about a tab that engine has never heard of - which is what "no such
+    // tab" was, after a restart or after an idle connection was dropped.
+    await registerTabs(host, conn);
+    if (diedDuringSetup) {
+      conn.close();
+      return { error: "the connection to " + host + " dropped while it was being set up" };
+    }
+    // Published only once it can actually answer. Registered last on purpose:
+    // anything reading `connections` mid-setup would proxy to an engine that
+    // does not know the tab yet, and callers waiting on this attempt get a
+    // connection that is ready rather than one that merely exists.
+    conn.usedAt = Date.now();
+    connections.set(host, conn);
+    return conn;
+  } catch (e) {
+    return { error: "could not reach " + host + ": " + (e as Error).message };
+  }
+}
+
+/** The connection a tab's requests belong on, or null when it is local. */
+function connectionForTab(id: string): Connection | null {
+  const tab = session.tabs.find((t) => t.id === id);
+  if (tab === undefined || tab.host === null) return null;
+  return connections.get(tab.host) ?? null;
+}
+
+/** Endpoints that are about this gitc rather than about a repository. */
+const LOCAL_ONLY = [
+  "/api/ping",
+  "/api/bye",
+  "/api/quit",
+  "/api/window",
+  "/api/session",
+  "/api/open",
+  "/api/close",
+  "/api/activate",
+  "/api/reorder",
+  "/api/hosts",
+  "/api/remote",
+  "/api/update",
+];
+
+function isLocalOnly(path: string): boolean {
+  for (const p of LOCAL_ONLY) {
+    // Sub-paths too, or an entry covers less than it appears to: /api/update
+    // did not cover /api/update/progress, nor /api/remote its /hold. Nothing
+    // routes those today - neither carries an id, so no header is sent - but
+    // the failure would be the silent kind this list exists to prevent, with
+    // /api/update on a remote tab asking the OTHER machine to update itself
+    // and answering plausibly.
+    if (path === p || path.startsWith(p + "?") || path.startsWith(p + "/")) return true;
+  }
+  return false;
+}
+
+/**
+ * Opens a repository that lives on another machine.
+ *
+ * The remote engine is told the id to use, so both sides agree from the first
+ * moment. Anything that fails here fails before a tab exists, which is the
+ * point: a tab that cannot be served is worse than no tab.
+ */
+/**
+ * Opens under way, so a double click is one tab.
+ *
+ * Keyed by host AND path: the same path on two machines is two repositories,
+ * and deduplicating across hosts would refuse to open the second of them.
+ *
+ * Needed as well as the check below, because connecting takes seconds - a
+ * second click lands long before the first has a tab to be found.
+ */
+const openingRemote = new Map<string, Promise<{ tab: Tab } | { error: string }>>();
+
+async function openRemoteRepo(
+  host: string,
+  path: string,
+): Promise<{ tab: Tab } | { error: string }> {
+  // The same repository on the same machine is one tab, as it is locally.
+  // Two would mean two ids for one thing, and the far end can only call it
+  // one of them.
+  for (const t of session.tabs) {
+    if (t.host !== host || t.path !== path) continue;
+    session.activeId = t.id;
+    touchRecent(session, t);
+    saveSession(session);
+    return { tab: t };
+  }
+
+  const key = host + "\n" + path;
+  const already = openingRemote.get(key);
+  if (already !== undefined) return await already;
+
+  const attempt = openRemoteRepoOnce(host, path);
+  openingRemote.set(key, attempt);
+  try {
+    return await attempt;
+  } finally {
+    openingRemote.delete(key);
+  }
+}
+
+async function openRemoteRepoOnce(
+  host: string,
+  path: string,
+): Promise<{ tab: Tab } | { error: string }> {
+  const conn = await connectionFor(host);
+  if ("error" in conn) return { error: conn.error };
+
+  const wanted = makeId();
+
+  // Clear any tab the far end already has for this path.
+  //
+  // A remote engine keeps its own session between connections, so a repository
+  // opened on a previous run is still a tab over there - under a name chosen
+  // then, which has nothing to do with the one being used now. Asked to open
+  // it again, that engine returns its own id rather than taking ours, and
+  // every later request arrives about a tab it has never heard of: "no such
+  // tab", for a repository plainly sitting in the list.
+  //
+  // Closing it first means the open below genuinely creates one, with the id
+  // this side chose. It costs a round trip and it works against engines older
+  // than this change, which the version check cannot help with - an out of
+  // date remote is exactly the one that needs it.
+  await closeStaleRemoteTab(conn.port, path, wanted);
+
+  const answer = await tunnelRequest(
+    conn.port,
+    "/api/open",
+    "POST",
+    JSON.stringify({ path, id: wanted }),
+  );
+  if (answer.status !== 200) {
+    // The tunnel stays: it may already be serving other tabs, and a host that
+    // refused one path is not a host that has gone away.
+    const why = answer.text.length > 0 ? answer.text : "no answer";
+    return { error: host + " would not open " + path + ": " + why };
+  }
+
+  // Take the id the far end actually used, which is not always the one asked
+  // for. A remote engine keeps its own session between connections, so a
+  // repository opened before is already a tab over there under an older name -
+  // and an engine older than this one returns that name rather than adopting
+  // ours. Insisting on the id we chose is what made every later request "no
+  // such tab": the local tab was t3 and the remote had only ever called it t2.
+  //
+  // Its own id is used only when nothing here has it; otherwise two tabs would
+  // answer to one name locally, and the newer remote has adopted ours anyway.
+  const theirs = readOpenedId(answer.text);
+  const taken = theirs === null || session.tabs.some((t) => t.id === theirs);
+  const id = taken ? wanted : theirs;
+
+  const tab: Tab = { id, name: basename(path), path, host };
+  session.tabs.push(tab);
+  session.activeId = id;
+  touchRecent(session, tab);
+  saveSession(session);
+  return { tab };
+}
+
+/**
+ * Tells a freshly connected engine about every tab this side has on it.
+ *
+ * The tunnel is not the state: the engine at the far end is started fresh, or
+ * restored from a session of its own that was written for somebody else's
+ * ids. Either way the tabs already open here have to be re-established under
+ * the ids this side uses, or the first request about one is about a tab that
+ * does not exist there.
+ *
+ * Best effort per tab. A repository that has been deleted or renamed on the
+ * remote should not stop the others from working.
+ */
+async function registerTabs(host: string, conn: Connection): Promise<void> {
+  for (const tab of session.tabs) {
+    if (tab.host !== host) continue;
+    await closeStaleRemoteTab(conn.port, tab.path, tab.id);
+    await tunnelRequest(
+      conn.port,
+      "/api/open",
+      "POST",
+      JSON.stringify({ path: tab.path, id: tab.id }),
+    );
+  }
+}
+
+/**
+ * Closes a tab the remote already holds for this path, unless it is already
+ * the one we are about to use.
+ *
+ * Best effort throughout: this is the far end's own bookkeeping, and failing
+ * to tidy it is not a reason to refuse to open a repository.
+ */
+async function closeStaleRemoteTab(port: number, path: string, wanted: string): Promise<void> {
+  const got = await tunnelRequest(port, "/api/session", "GET", null);
+  if (got.status !== 200) return;
+
+  let theirs: { tabs: { id: string; path: string }[] };
+  try {
+    theirs = JSON.parse(got.text) as { tabs: { id: string; path: string }[] };
+  } catch {
+    return;
+  }
+
+  for (const t of theirs.tabs) {
+    if (t.path !== path || t.id === wanted) continue;
+    await tunnelRequest(port, "/api/close", "POST", JSON.stringify({ id: t.id }));
+  }
+}
+
+/** The tab id out of a remote engine's answer to /api/open. */
+function readOpenedId(text: string): string | null {
+  try {
+    const parsed = JSON.parse(text) as { tab: { id: string } };
+    const id = parsed.tab.id;
+    return id.length > 0 ? id : null;
+  } catch {
+    // An answer we cannot read is not an answer to trust an id from.
+    return null;
+  }
+}
+
+/** Closes the tunnel to a host once no tab is left using it. */
+function releaseHost(host: string): void {
+  for (const t of session.tabs) {
+    if (t.host === host) return;
+  }
+  const conn = connections.get(host);
+  if (conn === undefined) return;
+  conn.close();
+  connections.delete(host);
+}
+
+/**
+ * Records that the window is still there.
+ *
+ * Three statements, and every caller needs all three: the first two say "it is
+ * alive", and the third says "so it is not leaving" - a pending goodbye has to
+ * be cancelled or the watchdog shuts down under a window that is plainly
+ * talking to us. They live together because the proxy branch copied two of
+ * them and not the third, and the next statement added here would have been
+ * missed the same way.
+ */
+function markWindowAlive(): void {
+  lastPing = Date.now();
+  sawFirstPing = true;
+  byeAt = 0;
 }
 
 async function handleApi(
@@ -599,14 +1198,7 @@ async function handleApi(
   // asking ABOUT the window; treating its probe as a heartbeat resets the
   // clock it is reading and revives an engine that was on its way out.
   const fromLauncher = req.headers["x-gitc-launcher"] !== undefined;
-  if (!fromLauncher) {
-    lastPing = Date.now();
-    sawFirstPing = true;
-    // Any request from the window means it is still there, which cancels a
-    // pending goodbye - this is what makes a reload survive. /api/bye sets it
-    // again after this runs.
-    byeAt = 0;
-  }
+  if (!fromLauncher) markWindowAlive();
 
   // Local avatar overrides: drop <something>.png into %APPDATA%/gitc/avatars
   // and it wins over any remote lookup. This is how you give an identity a
@@ -696,9 +1288,33 @@ async function handleApi(
     // timestamps would miss the case that actually hurts: closing gitc and
     // starting it again straight away.
     const gone = byeAt !== 0 || (sawFirstPing && Date.now() - lastPing > WINDOW_DEAD_MS);
+
+    // What each machine a tab lives on is currently doing. Carried on the
+    // heartbeat the window already sends rather than on a poll of its own:
+    // this changes exactly when the connection does, and the window is asking
+    // every two seconds anyway.
+    const remotes: { host: string; state: string }[] = [];
+    for (const tab of session.tabs) {
+      const host = tab.host;
+      if (host === null) continue;
+      if (remotes.some((r) => r.host === host)) continue;
+      const state = connections.has(host)
+        ? "online"
+        : connecting.has(host)
+          ? "connecting"
+          : "offline";
+      remotes.push({ host, state });
+    }
+
     sendJson(
       res,
-      JSON.stringify({ ok: true, instance: INSTANCE, windowGone: gone, quitting: quitting }),
+      JSON.stringify({
+        ok: true,
+        instance: INSTANCE,
+        windowGone: gone,
+        quitting: quitting,
+        remotes,
+      }),
     );
     return true;
   }
@@ -726,7 +1342,7 @@ async function handleApi(
   if (path === "/api/quit") {
     quitting = true;
     sendJson(res, JSON.stringify({ ok: true }));
-    setTimeout(() => process.exit(0), QUIT_GRACE_MS);
+    setTimeout(() => shutdown(), QUIT_GRACE_MS);
     return true;
   }
 
@@ -737,7 +1353,19 @@ async function handleApi(
 
   if (path === "/api/open") {
     const body = JSON.parse(await readBody(req)) as OpenRequest;
-    const tab = await openRepo(body.path);
+
+    const host = body.host;
+    if (host !== undefined && host.length > 0) {
+      const opened = await openRemoteRepo(host, body.path);
+      if ("error" in opened) {
+        send(res, 400, "application/json", JSON.stringify({ error: opened.error }));
+        return true;
+      }
+      sendJson(res, JSON.stringify({ tab: opened.tab, session }));
+      return true;
+    }
+
+    const tab = await openRepo(body.path, body.id);
     if (tab === null) {
       send(res, 400, "application/json", JSON.stringify({ error: "not a git repository" }));
       return true;
@@ -746,9 +1374,32 @@ async function handleApi(
     return true;
   }
 
+  // How long to hold a connection to a machine that is not in front. Sent by
+  // the window, which owns the preference; the engine owns the connections.
+  if (path === "/api/remote/hold") {
+    const body = JSON.parse(await readBody(req)) as { minutes: number };
+    if (body.minutes >= 0) remoteHoldMinutes = body.minutes;
+    sendJson(res, JSON.stringify({ ok: true }));
+    return true;
+  }
+
+  // The hosts a remote tab could be opened on. Read fresh rather than cached:
+  // ~/.ssh/config is edited by hand, and a host added a minute ago is exactly
+  // the one somebody is trying to reach.
+  if (path === "/api/hosts") {
+    sendJson(res, JSON.stringify({ hosts: readSshHosts() }));
+    return true;
+  }
+
   if (path === "/api/close") {
     const body = JSON.parse(await readBody(req)) as IdRequest;
+    // Which machine this tab was on, before it stops being in the list.
+    const closing = session.tabs.find((t) => t.id === body.id);
+    const wasOn = closing === undefined ? null : closing.host;
     session.tabs = session.tabs.filter((t) => t.id !== body.id);
+    // A tunnel outliving every tab that used it is a process on somebody's
+    // server that nothing here still refers to.
+    if (wasOn !== null) releaseHost(wasOn);
     if (session.activeId === body.id) {
       const head = at(session.tabs, 0);
       session.activeId = head === undefined ? null : head.id;
@@ -766,18 +1417,27 @@ async function handleApi(
     return true;
   }
 
+  // Which releases to be offered. Sent by the window, which owns every other
+  // setting on that screen; the engine is the one that talks to GitHub.
+  if (path === "/api/update/channel") {
+    const body = JSON.parse(await readBody(req)) as { channel: string };
+    updateChannel = body.channel === "test" ? "test" : "stable";
+    sendJson(res, JSON.stringify({ ok: true }));
+    return true;
+  }
+
   if (path === "/api/update") {
     if (req.method === "POST") {
-      const result = await applyUpdate();
+      const result = await applyUpdate(updateChannel);
       sendJson(res, JSON.stringify(result));
       // Answer first, then go: the UI needs to hear that the update took
       // before this process disappears out from under it.
       if (result.restarting) {
-        setTimeout(() => process.exit(0), 400);
+        setTimeout(() => shutdown(), 400);
       }
       return true;
     }
-    sendJson(res, JSON.stringify(await checkUpdate()));
+    sendJson(res, JSON.stringify(await checkUpdate(updateChannel)));
     return true;
   }
 
@@ -832,11 +1492,32 @@ async function handleApi(
     const q = path.indexOf("?");
     const params = q === -1 ? "" : path.substring(q + 1);
     let dir = "";
+    let host = "";
     for (const pair of params.split("&")) {
       const eq = pair.indexOf("=");
       if (eq === -1) continue;
-      if (pair.substring(0, eq) === "path") dir = decodeURIComponent(pair.substring(eq + 1));
+      const key = pair.substring(0, eq);
+      if (key === "path") dir = decodeURIComponent(pair.substring(eq + 1));
+      if (key === "host") host = decodeURIComponent(pair.substring(eq + 1));
     }
+
+    // Browsing a machine you have not opened anything on yet. This is the one
+    // repository call that cannot route by tab, because its whole job is to
+    // find the repository a tab would be made from - so it names the host
+    // itself, and opens the tunnel that the eventual tab will go on sharing.
+    if (host.length > 0) {
+      // Through the same relay as every other remote call, which buys three
+      // things this branch used to lack: the answer stays bytes, so a
+      // directory named in Latin-1 survives the trip - api.ts decodes it, and
+      // decoding it here would hand back U+FFFD for every such byte and make
+      // the directory unopenable; a dead tunnel is retried rather than
+      // returning 502 for ever; and the connection's clock is refreshed, so
+      // the sweeper cannot close a tunnel out from under someone who is
+      // browsing, which has no tab to mark it as the one in front.
+      await proxyToHost(host, "/api/ls?path=" + encodeURIComponent(dir), "GET", undefined, "", res);
+      return true;
+    }
+
     sendJson(res, JSON.stringify(listDir(dir)));
     return true;
   }
@@ -1229,6 +1910,13 @@ function findBrowser(): string | null {
 
 /** Shuts the whole app down - called when the window goes away. */
 function shutdown(): void {
+  // Take every tunnel down first. The ssh children are spawned detached, so
+  // they outlive this process rather than dying with it - which would leave a
+  // gitc running on each connected host with nothing left here that refers to
+  // it. This covers every orderly exit; a hard kill still cannot, and the
+  // answer for that has to live on the remote side.
+  for (const conn of connections.values()) conn.close();
+  connections.clear();
   process.exit(0);
 }
 
@@ -1329,11 +2017,22 @@ async function main(): Promise<void> {
   // which proxies /api here - so the UI hot-reloads against a live engine
   // instead of needing the binary rebuilt for every style tweak.
   let headless = process.env["GITC_NO_WINDOW"] === "1";
+  /** True only for --serve: an engine running for somebody else, over ssh. */
+  let serving = false;
   let portable = false;
   for (let i = 0; i < process.argv.length; i++) {
     const arg = at(process.argv, i);
     if (arg === undefined) continue;
-    if (arg === "--no-window") headless = true;
+    // Two spellings, one behaviour, because they are two different jobs and
+    // the next person to change one should know which they are changing.
+    //
+    // --no-window is the dev loop: `npm run dev` pairs it with Vite on 5173.
+    // --serve is production - the engine a remote tab talks to, started over
+    // ssh by another gitc. Sharing a flag meant the remote path was steered
+    // by a comment about a development server, and a change made for the dev
+    // loop would have altered how gitc behaves on somebody's server.
+    if (arg === "--no-window" || arg === "--serve") headless = true;
+    if (arg === "--serve") serving = true;
     if (arg === "--portable") portable = true;
 
     // Editor modes for interactive rebase. git appends the file it wants
@@ -1457,7 +2156,17 @@ async function main(): Promise<void> {
   // One probe, taken before anything else talks to that instance: handing a
   // repository over is itself a request, and every request resets the engine's
   // idle clock, so asking afterwards would only measure our own traffic.
-  const other = await probe(port);
+  //
+  // Skipped entirely when headless, because a headless gitc is a server, not
+  // an application: it binds its port or it fails. Handing over is right for
+  // a window - a second launch should reach the one already on screen - and
+  // wrong here, where it caused the bug this comment exists for. A remote
+  // engine dies with its tunnel, but not instantly; open a new tunnel to that
+  // host and the dying engine still holds the port, still answers the
+  // readiness ping, and the engine just started hands over to it and exits.
+  // The tunnel then dies with the corpse, and coming back to a remote tab
+  // failed with ECONNRESET.
+  const other = headless ? null : await probe(port);
   if (other !== null) {
     const windowGone = other.windowGone === true;
 
@@ -1517,6 +2226,40 @@ async function main(): Promise<void> {
     const path = url === "/" ? "/index.html" : url;
 
     if (path.startsWith("/api/")) {
+      // A request about a repository on another machine is answered by the
+      // gitc over there. It goes through untouched - same path, same body -
+      // because both sides call that tab by the same id.
+      //
+      // Routed on a header rather than by digging the id out of the body: the
+      // id is in the query for some calls and the body for others, and a
+      // proxy that has to parse a body to decide where to send it is a proxy
+      // that can send an operation to the wrong repository.
+      const tabHeader = req.headers["x-gitc-tab"];
+      if (tabHeader !== undefined && !isLocalOnly(path)) {
+        const tab = session.tabs.find((t) => t.id === tabHeader);
+        const on = tab === undefined ? null : tab.host;
+        if (on !== null) {
+          // One path whether or not a tunnel exists. Connecting, reusing and
+          // recovering from a dead tunnel are the same operation as far as
+          // this is concerned, and the alternative - deciding here which of
+          // them applies - is what left a swept connection being handed out
+          // and every request failing with nothing trying to reconnect.
+          // Proof the window is alive, exactly as handleApi treats any
+          // request - the same call, not a copy of part of it. Skipping it
+          // because the request is proxied reinstated the bug that signal
+          // exists for: with a remote tab in front every repository call goes
+          // down this branch, so a renderer whose 2s heartbeat stalls on a
+          // large diff would have the engine shut down underneath it.
+          markWindowAlive();
+
+          const type = req.headers["content-type"];
+          void readBody(req).then((body) =>
+            proxyToHost(on, path, req.method === undefined ? "GET" : req.method, type, body, res),
+          );
+          return;
+        }
+      }
+
       handleApi(path, req, res)
         .then((handled) => {
           if (!handled) send(res, 404, "text/plain", "not found");
@@ -1540,6 +2283,39 @@ async function main(): Promise<void> {
   // Once the UI has checked in at least once, silence means it is gone.
   // Headless dev servers stay up regardless: reloading the Vite page would
   // otherwise look like the window closing and take the engine down with it.
+  /**
+   * An engine serving somebody else gives up when nobody is asking.
+   *
+   * The tunnel normally dies with the client and takes this with it, but not
+   * if that client was killed outright - a crash, a task manager, a machine
+   * that lost power. Then this process would sit on somebody's server for
+   * ever, which is the one thing a tool that connects to other people's
+   * machines must not do.
+   *
+   * Longer than the client's own hold, deliberately. That side drops an idle
+   * connection after ten minutes by default, so a live client either keeps
+   * this busy or lets go of it first; reaching this timeout means there is no
+   * live client left. Nothing is lost either way, because a request arriving
+   * for a tab whose tunnel has gone reconnects before answering.
+   *
+   * Only for --serve. The dev loop is also windowless and should sit idle for
+   * as long as somebody leaves it running.
+   */
+  if (serving) {
+    setInterval(() => {
+      if (!sawFirstPing) return;
+      if (Date.now() - lastPing > SERVE_IDLE_MS) shutdown();
+    }, 30000);
+  }
+
+  // Outside the headless guard below: connections to other machines are held
+  // by every kind of gitc, and a headless one holding them for ever is worse,
+  // not better - it is the shape that runs unattended.
+  //
+  // Often enough that "1 minute" means about a minute, cheap enough that it
+  // does not matter: it compares two numbers per open connection.
+  setInterval(() => sweepIdleConnections(), 15000);
+
   if (!headless) {
     setInterval(() => {
       if (!sawFirstPing) return;
@@ -1573,7 +2349,7 @@ async function main(): Promise<void> {
     const url = "http://127.0.0.1:" + port + "/";
     console.log("gitc serving " + url);
     if (headless) {
-      console.log("--no-window: API only (pair with `npm run dev:ui` on 5173)");
+      console.log("engine only, no window");
       return;
     }
 

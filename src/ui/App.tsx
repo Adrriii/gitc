@@ -51,6 +51,8 @@ import {
   useFetchOnFocus,
   useHiddenCommands,
   useUpdateCheck,
+  useRemoteHold,
+  useUpdateChannel,
   useUpdateLevel,
 } from "./settings";
 import { shouldPrompt } from "./version";
@@ -166,9 +168,24 @@ function validateRemoteUrl(value: string): string | null {
 }
 
 export function App() {
-  const dead = useHeartbeat();
+  const { dead, remotes } = useHeartbeat();
   const [session, setSession] = useState<Session | null>(null);
-  const [data, setData] = useState<GraphPayload | null>(null);
+  const [liveData, setData] = useState<GraphPayload | null>(null);
+  /**
+   * The last repository this window actually drew.
+   *
+   * Kept so that loading something new does not blank the screen. Switching
+   * tabs clears `liveData` deliberately - the old graph must not be mistaken
+   * for the new one - but showing nothing at all for the seconds a remote
+   * repository takes to arrive is its own kind of wrong. What is drawn during
+   * that wait is the previous view, dimmed and inert, under an overlay that
+   * names what is being loaded.
+   */
+  const lastDrawn = useRef<GraphPayload | null>(null);
+  if (liveData !== null) lastDrawn.current = liveData;
+  const data = liveData ?? lastDrawn.current;
+  /** True while what is on screen is the previous repository, not this one. */
+  const stale = liveData === null && data !== null;
   const [selected, setSelected] = useState<string[]>([]);
   const [anchor, setAnchor] = useState<string | null>(null);
   const [openFile, setOpenFile] = useState<{
@@ -202,12 +219,26 @@ export function App() {
   /** Set when a push came back refused, and the user has to decide what to do. */
   const [pushRefusal, setPushRefusal] = useState<PushRefusal | null>(null);
   const { colors: themeColors } = useTheme();
-  const { calls: gitCalls, clear: clearGitLog } = useGitLog();
+  // session, not the activeId derived further down: this runs before that is
+  // in scope, and it is the same value.
+  const { calls: gitCalls, clear: clearGitLog } = useGitLog(
+    session?.activeId ?? null,
+    session?.tabs.find((t) => t.id === session.activeId)?.host ?? null,
+  );
   const { hidden: hiddenCommands, hide: hideCommand } = useHiddenCommands();
   const [logOpen, setLogOpen] = useState(false);
   const { minutes: fetchMinutes } = useFetchInterval();
   const { onFocus: fetchOnFocus } = useFetchOnFocus();
   const { level: updateLevel } = useUpdateLevel();
+  const { minutes: remoteHold } = useRemoteHold();
+  const { channel: updateChannel } = useUpdateChannel();
+
+  // The engine holds the connections; this screen holds the preference, as it
+  // does for every other setting. Told on arrival and whenever it changes.
+  useEffect(() => {
+    void api.setRemoteHold(remoteHold).catch(() => undefined);
+  }, [remoteHold]);
+
   /**
    * When each repository was last fetched because it was arrived at, kept
    * outside the fetch effect because that effect is rebuilt on every tab
@@ -337,13 +368,29 @@ export function App() {
       .then(setUpdate)
       .catch((e: Error) => {
         if (manual) {
-          setUpdate({ current: VERSION, latest: "", available: false, page: "", error: e.message });
+          setUpdate({
+            current: VERSION,
+            latest: "",
+            available: false,
+            switching: false,
+            page: "",
+            error: e.message,
+          });
         }
       })
       .finally(() => {
         if (manual) setCheckingUpdate(false);
       });
   }, []);
+
+  // Told, then asked again. Changing stream is only meaningful if what is on
+  // offer changes with it, and the answer already held was for the old one.
+  useEffect(() => {
+    void api
+      .setUpdateChannel(updateChannel)
+      .then(() => checkUpdate(false))
+      .catch(() => undefined);
+  }, [updateChannel, checkUpdate]);
 
   /**
    * Follows the update while it runs.
@@ -756,9 +803,9 @@ export function App() {
     [activeTab, refresh],
   );
 
-  const open = useCallback(async (path: string) => {
+  const open = useCallback(async (path: string, host?: string) => {
     try {
-      const r = await api.open(path);
+      const r = await api.open(path, host);
       setSession(r.session);
       setError(null);
     } catch (e) {
@@ -1593,6 +1640,7 @@ export function App() {
     <div className={s.root}>
       <TabBar
         session={session}
+        remotes={remotes}
         onActivate={(id) => api.activate(id).then(setSession)}
         onClose={(id) => api.close(id).then(setSession)}
         onNew={() => setSession({ ...session, activeId: null })}
@@ -1630,7 +1678,13 @@ export function App() {
         */
         <Loading name={activeTab.name} error={error} />
       ) : (
-        <div className={s.app}>
+        <div className={`${s.app} ${stale ? s.stale : ""}`}>
+          {/* Named so the wait says which repository, not just "loading". */}
+          {stale && (
+            <div className={s.staleOverlay}>
+              <Loading name={activeTab.name} error={error} />
+            </div>
+          )}
           <Toolbar
             repo={activeTab.name}
             branch={data.head.branch ?? "detached"}
@@ -1825,9 +1879,17 @@ export function App() {
                 className={s.update}
                 onClick={runUpdate}
                 disabled={updating}
-                title={`gitc ${update.latest} is available - you have ${update.current}`}
+                title={
+                  update.switching
+                    ? `Leave the test stream and go back to gitc ${update.latest}`
+                    : `gitc ${update.latest} is available - you have ${update.current}`
+                }
               >
-                {updating ? "Updating…" : `Update to ${update.latest}`}
+                {updating
+                  ? "Updating…"
+                  : update.switching
+                    ? `Switch to ${update.latest}`
+                    : `Update to ${update.latest}`}
               </button>
             )}
             <span className={s.version} title={`gitc ${VERSION}`}>

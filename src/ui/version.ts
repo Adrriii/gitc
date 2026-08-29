@@ -61,6 +61,17 @@ export function meets(size: Bump, threshold: Bump): boolean {
 
 /** The whole question in one call: should this update interrupt the user? */
 export function shouldPrompt(current: string, latest: string, threshold: Bump): boolean {
+  // A test build is opt-in, and the whole point of being on one is hearing
+  // about the next. The threshold is about how much churn a normal user wants
+  // interrupting them; someone running an rc has already answered that
+  // question differently, and rc.1 to rc.2 carries no bump level to measure
+  // anyway - the numbers are identical and only the prerelease part moves.
+  //
+  // Whether `latest` is actually newer is the engine's judgement, made by the
+  // full semver comparison in update.ts; this only decides whether to speak up
+  // about something it has already called an update.
+  if (current.includes("-") || latest.includes("-")) return current !== latest;
+
   const size = bump(current, latest);
   return size !== null && meets(size, threshold);
 }

@@ -3,13 +3,17 @@ import { api } from "../api";
 import type { UpdateInfo } from "../types";
 import {
   FETCH_INTERVALS,
+  REMOTE_HOLDS,
   TAB_SIZES,
+  UPDATE_CHANNELS,
   UPDATE_CHECKS,
   useDiffWrap,
   useFetchInterval,
   useHiddenCommands,
   useFetchOnFocus,
+  useRemoteHold,
   useTabSize,
+  useUpdateChannel,
   useUpdateCheck,
   useUpdateLevel,
 } from "../settings";
@@ -101,7 +105,9 @@ export function Preferences({
   } = useHiddenCommands();
   const { minutes: updateMinutes, set: setUpdateMinutes } = useUpdateCheck();
   const { level: updateLevel, set: setUpdateLevel } = useUpdateLevel();
+  const { channel: updateChannel, set: setUpdateChannel } = useUpdateChannel();
   const { onFocus: fetchOnFocus, set: setFetchOnFocus } = useFetchOnFocus();
+  const { minutes: remoteHold, set: setRemoteHold } = useRemoteHold();
 
   return (
     <div className={s.screen}>
@@ -258,6 +264,22 @@ export function Preferences({
               </div>
             </Row>
             <Row
+              label="Hold remote connections"
+              hint="A repository on another machine is served by a gitc running over there, reached through an SSH tunnel. This is how long that is kept after you leave its tab - the tab you are looking at is never dropped, and tabbing back reconnects."
+            >
+              <div className={s.choices}>
+                {REMOTE_HOLDS.map((choice) => (
+                  <button
+                    key={choice.minutes}
+                    className={choice.minutes === remoteHold ? s.on : ""}
+                    onClick={() => setRemoteHold(choice.minutes)}
+                  >
+                    {choice.label}
+                  </button>
+                ))}
+              </div>
+            </Row>
+            <Row
               label="Fetch on focus"
               hint="Fetch when you come back to the window, or switch to this repository's tab, rather than waiting for the interval. Works with the interval Off. Repeats within a few seconds are skipped, so flipping between tabs does not fetch every time."
             >
@@ -339,6 +361,23 @@ export function Preferences({
                     {checking ? "Checking…" : "Check for updates"}
                   </button>
                 )}
+              </div>
+            </Row>
+            <Row
+              label="Release stream"
+              hint="Test builds are release candidates - published to be tried and reported on, not relied upon. Switching here installs through the updater, which can replace a running gitc; downloading a candidate by hand cannot, and would leave you on the build you already had. Going back to Stable offers the newest published release, even though its number is lower."
+            >
+              <div className={s.choices}>
+                {UPDATE_CHANNELS.map((choice) => (
+                  <button
+                    key={choice.channel}
+                    className={choice.channel === updateChannel ? s.on : ""}
+                    onClick={() => setUpdateChannel(choice.channel)}
+                    title={choice.hint}
+                  >
+                    {choice.label}
+                  </button>
+                ))}
               </div>
             </Row>
             <Row

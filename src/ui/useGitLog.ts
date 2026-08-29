@@ -23,17 +23,34 @@ const INTERVAL_MS = 350;
  * twice: once as it starts, so it can be shown while it runs, and once when
  * it ends, carrying how long it took.
  */
-export function useGitLog(): { calls: GitCall[]; clear: () => void } {
+export function useGitLog(
+  tabId: string | null,
+  /** The machine whose log this is - null for this one. */
+  host: string | null,
+): { calls: GitCall[]; clear: () => void } {
   const [calls, setCalls] = useState<GitCall[]>([]);
   const seen = useRef(0);
+  const engine = useRef<string | null>(null);
 
   useEffect(() => {
     let stopped = false;
+    // Reset when the MACHINE changes, not the tab. Sequence numbers are per
+    // engine, so carrying one across would skip everything below it - but
+    // /api/gitlog is per engine too, and resetting on every tab change undid
+    // Clear, which deliberately leaves `seen` alone so the next poll resumes
+    // instead of replaying. Clear the log, switch tabs and back, and
+    // everything cleared came straight back.
+    if (engine.current !== host) {
+      engine.current = host;
+      seen.current = 0;
+      setCalls([]);
+    }
+    if (tabId === null) return;
 
     const tick = async () => {
       if (stopped || document.hidden) return;
       try {
-        const fresh = await api.gitLog(seen.current);
+        const fresh = await api.gitLog(tabId, seen.current);
         if (stopped || fresh.length === 0) return;
 
         // The highest sequence in the batch, not the last one in it: an entry
@@ -75,7 +92,7 @@ export function useGitLog(): { calls: GitCall[]; clear: () => void } {
       stopped = true;
       window.clearInterval(id);
     };
-  }, []);
+  }, [tabId, host]);
 
   // Clears the view, not the engine's record: the next poll resumes from
   // where it left off rather than replaying everything.

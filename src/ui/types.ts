@@ -5,7 +5,38 @@
 export interface Tab {
   id: string;
   name: string;
+  /** The repository's path ON THE MACHINE THAT HOLDS IT - remote or not. */
   path: string;
+  /**
+   * The ssh destination this repository lives on, or null for this machine.
+   *
+   * A remote tab is served by a gitc running over there; everything the window
+   * asks about it is answered by that engine and passed through this one. The
+   * id is deliberately the SAME on both sides - see openRepo - so nothing has
+   * to be rewritten in transit.
+   */
+  host: string | null;
+}
+
+/**
+ * What a machine a tab lives on is doing.
+ *
+ * "connecting" covers installing, tunnelling and re-registering tabs - every
+ * part of reaching a host that is not yet answering. "offline" is a host that
+ * has a tab and no connection, which after this session's work means one that
+ * failed rather than one nobody has asked for yet.
+ */
+export interface RemoteState {
+  host: string;
+  state: "online" | "connecting" | "offline";
+}
+
+/** A host offered by ~/.ssh/config. */
+export interface SshHost {
+  alias: string;
+  hostName: string | null;
+  user: string | null;
+  port: number | null;
 }
 
 export interface Session {
@@ -87,6 +118,8 @@ export interface UpdateProgress {
 
 export interface UpdateInfo {
   current: string;
+  /** True when taking this leaves the stream rather than moving along it. */
+  switching: boolean;
   latest: string;
   available: boolean;
   page: string;
