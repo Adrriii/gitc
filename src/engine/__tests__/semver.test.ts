@@ -1,4 +1,4 @@
-import { compare, isPrerelease } from "../update.ts";
+import { compare, isPrerelease } from "../semver.ts";
 
 let pass = 0;
 let fail = 0;
