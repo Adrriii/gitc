@@ -220,7 +220,10 @@ export function App() {
   const { colors: themeColors } = useTheme();
   // session, not the activeId derived further down: this runs before that is
   // in scope, and it is the same value.
-  const { calls: gitCalls, clear: clearGitLog } = useGitLog(session?.activeId ?? null);
+  const { calls: gitCalls, clear: clearGitLog } = useGitLog(
+    session?.activeId ?? null,
+    session?.tabs.find((t) => t.id === session.activeId)?.host ?? null,
+  );
   const { hidden: hiddenCommands, hide: hideCommand } = useHiddenCommands();
   const [logOpen, setLogOpen] = useState(false);
   const { minutes: fetchMinutes } = useFetchInterval();

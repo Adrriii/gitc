@@ -396,6 +396,15 @@ export interface Connection {
    * age of the tunnel it replaced and was swept moments after being made.
    */
   usedAt: number;
+  /**
+   * Requests currently in flight on this tunnel.
+   *
+   * `usedAt` says "recently finished", which is a different question. A push
+   * slower than the hold is idle by that measure for its whole duration, and
+   * the sweeper would close the tunnel - killing the remote engine and the
+   * git under it - while the request it belongs to is still running.
+   */
+  inFlight: number;
   /** Ends the tunnel and, with it, the remote engine. */
   close: () => void;
 }
@@ -582,7 +591,9 @@ export async function connect(
 
   const started = Date.now();
   while (Date.now() - started < CONNECT_TIMEOUT_MS) {
-    if (await answering(port)) return { host, port, usedAt: Date.now(), close };
+    if (await answering(port)) {
+      return { host, port, usedAt: Date.now(), inFlight: 0, close };
+    }
     // ssh has already gone: a refused key under BatchMode, a forward that
     // could not bind, an engine that exited on a taken port. Waiting out the
     // remaining thirty seconds to say "no answer" tells the user nothing and

@@ -110,6 +110,10 @@ eq("a dot is a dot, not any character", matches("configXd", "config.d"), false);
 eq("an exact name still matches", matches("config.d", "config.d"), true);
 eq("no accidental substring match", matches("myconfig", "config"), false);
 
+eq("a wildcard does not match a dotfile", matches(".config.swp", "*"), false);
+eq("nor a prefixed one", matches(".bak", "conf*"), false);
+eq("unless the pattern is explicit about it", matches(".keep", ".*"), true);
+
 // The ssh destination reaches the engine from a POST any page in the browser
 // can make, and goes straight into ssh's argv, where there is no quoting to
 // hide behind.

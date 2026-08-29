@@ -183,6 +183,12 @@ function expand(pattern: string): string[] {
 
 /** Glob matching for one path segment: `*` for any run, `?` for one. */
 export function matches(name: string, pattern: string): boolean {
+  // glob(3) will not let a wildcard match a leading period, and ssh uses
+  // glob(3). Without this, `Include conf.d/*` reads the editor swap file and
+  // the .bak beside a real config, and a half-written Host block there offers
+  // an alias ssh itself would never resolve.
+  if (name.startsWith(".") && !pattern.startsWith(".")) return false;
+
   // Built rather than regex-escaped in one go, so a dot in a filename stays a
   // dot: `config.d` must not match `configXd`.
   //
@@ -242,8 +248,14 @@ export function readSshHosts(): SshHost[] {
       if (out.find((h) => h.alias === host.alias) === undefined) out.push(host);
     }
     for (const inc of parsed.includes) {
+      // "~/" first: it is neither absolute nor relative-to-~/.ssh, and
+      // joining it under ~/.ssh produced a path with a literal ~ segment
+      // that existsSync then dropped in silence - the same disappearance as
+      // before, one function further along. `Include ~/.ssh/config.d/*` is
+      // the form this whole expansion exists for.
+      const tilde = inc.startsWith("~/") ? join(homedir(), inc.substring(2)) : inc;
       // ssh resolves a relative Include against ~/.ssh, not the cwd.
-      const full = isAbsolute(inc) ? inc : join(dirname(sshConfigPath()), inc);
+      const full = isAbsolute(tilde) ? tilde : join(dirname(sshConfigPath()), tilde);
       for (const match of expand(full)) queue.push(match);
     }
   }

@@ -555,18 +555,25 @@ async function proxyToHost(
     // it must not be repeated. A ping down an open tunnel is loopback and
     // costs about a millisecond.
     if (!repeatable && attempt === 0) {
+      conn.inFlight++;
       const probe = await sendThrough(conn, "/api/ping", "GET", undefined, "");
+      conn.inFlight--;
       if (!probe.ok) {
         dropConnection(host, conn);
         continue;
       }
     }
 
+    // Held for the duration, not merely timestamped at each end. Refreshing
+    // usedAt afterwards only ever helps the NEXT request: while this one runs,
+    // usedAt is its start time, and a push slower than the hold looked idle
+    // for its whole life. The in-front exemption hid most of it - but not a
+    // tab that stops being in front while its push runs, which is a normal
+    // thing to do.
+    conn.inFlight++;
     const answer = await sendThrough(conn, path, method, contentType, body);
+    conn.inFlight--;
     if (answer.ok) {
-      // Refreshed on the way out too: a push can take longer than the hold,
-      // and a connection judged idle by when its request STARTED is torn down
-      // mid-flight by the sweeper.
       conn.usedAt = Date.now();
       res.writeHead(answer.status, { "content-type": answer.type });
       res.end(answer.body);
@@ -870,6 +877,8 @@ function sweepIdleConnections(): void {
       conn.usedAt = now;
       continue;
     }
+    // Busy is not idle, whatever the clock says.
+    if (conn.inFlight > 0) continue;
     if (now - conn.usedAt < hold) continue;
     conn.close();
     connections.delete(host);
@@ -900,7 +909,14 @@ async function openConnection(host: string): Promise<Connection | { error: strin
     // dead socket. `made` is set below, so this only ever removes a connection
     // that reached the map in the first place.
     let made: Connection | null = null;
+    // onEnded fires once, and during registerTabs the connection is not in the
+    // map yet - so it would find nothing to remove and be spent. Publishing
+    // afterwards would then leave a tunnel whose ssh is gone with nothing left
+    // to take it out again: a green LED for a dead host, which is the case
+    // onEnded exists for.
+    let diedDuringSetup = false;
     const conn = await connect(host, bin, () => {
+      diedDuringSetup = made === null;
       if (made !== null && connections.get(host) === made) connections.delete(host);
     });
     made = conn;
@@ -909,6 +925,10 @@ async function openConnection(host: string): Promise<Connection | { error: strin
     // about a tab that engine has never heard of - which is what "no such
     // tab" was, after a restart or after an idle connection was dropped.
     await registerTabs(host, conn);
+    if (diedDuringSetup) {
+      conn.close();
+      return { error: "the connection to " + host + " dropped while it was being set up" };
+    }
     // Published only once it can actually answer. Registered last on purpose:
     // anything reading `connections` mid-setup would proxy to an engine that
     // does not know the tab yet, and callers waiting on this attempt get a
@@ -1127,6 +1147,22 @@ function releaseHost(host: string): void {
   connections.delete(host);
 }
 
+/**
+ * Records that the window is still there.
+ *
+ * Three statements, and every caller needs all three: the first two say "it is
+ * alive", and the third says "so it is not leaving" - a pending goodbye has to
+ * be cancelled or the watchdog shuts down under a window that is plainly
+ * talking to us. They live together because the proxy branch copied two of
+ * them and not the third, and the next statement added here would have been
+ * missed the same way.
+ */
+function markWindowAlive(): void {
+  lastPing = Date.now();
+  sawFirstPing = true;
+  byeAt = 0;
+}
+
 async function handleApi(
   path: string,
   req: import("node:http").IncomingMessage,
@@ -1140,14 +1176,7 @@ async function handleApi(
   // asking ABOUT the window; treating its probe as a heartbeat resets the
   // clock it is reading and revives an engine that was on its way out.
   const fromLauncher = req.headers["x-gitc-launcher"] !== undefined;
-  if (!fromLauncher) {
-    lastPing = Date.now();
-    sawFirstPing = true;
-    // Any request from the window means it is still there, which cancels a
-    // pending goodbye - this is what makes a reload survive. /api/bye sets it
-    // again after this runs.
-    byeAt = 0;
-  }
+  if (!fromLauncher) markWindowAlive();
 
   // Local avatar overrides: drop <something>.png into %APPDATA%/gitc/avatars
   // and it wins over any remote lookup. This is how you give an identity a
@@ -2185,13 +2214,12 @@ async function main(): Promise<void> {
           // them applies - is what left a swept connection being handed out
           // and every request failing with nothing trying to reconnect.
           // Proof the window is alive, exactly as handleApi treats any
-          // request. Skipping it because the request is proxied reinstated the
-          // bug that signal exists for: with a remote tab in front every
-          // repository call goes down this branch, so a renderer whose 2s
-          // heartbeat stalls on a large diff would have the engine shut down
-          // underneath it after sixty seconds.
-          lastPing = Date.now();
-          sawFirstPing = true;
+          // request - the same call, not a copy of part of it. Skipping it
+          // because the request is proxied reinstated the bug that signal
+          // exists for: with a remote tab in front every repository call goes
+          // down this branch, so a renderer whose 2s heartbeat stalls on a
+          // large diff would have the engine shut down underneath it.
+          markWindowAlive();
 
           const type = req.headers["content-type"];
           void readBody(req).then((body) =>
