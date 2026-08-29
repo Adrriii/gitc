@@ -118,6 +118,8 @@ const INSTANCE = String(process.pid) + "-" + String(Date.now());
 // disappearing while someone is using it. Ten seconds was short enough that a
 // single long layout pass could trigger it.
 const MAIN_WINDOW_SIZE = "1600,1000";
+/** How long a --serve engine waits for a request before deciding it is alone. */
+const SERVE_IDLE_MS = 15 * 60 * 1000;
 const PING_TIMEOUT_MS = 60000;
 const HANDOFF_GRACE_MS = 3000;
 // How long to wait after the window says goodbye before believing it.
@@ -1903,6 +1905,8 @@ async function main(): Promise<void> {
   // which proxies /api here - so the UI hot-reloads against a live engine
   // instead of needing the binary rebuilt for every style tweak.
   let headless = process.env["GITC_NO_WINDOW"] === "1";
+  /** True only for --serve: an engine running for somebody else, over ssh. */
+  let serving = false;
   let portable = false;
   for (let i = 0; i < process.argv.length; i++) {
     const arg = at(process.argv, i);
@@ -1916,6 +1920,7 @@ async function main(): Promise<void> {
     // by a comment about a development server, and a change made for the dev
     // loop would have altered how gitc behaves on somebody's server.
     if (arg === "--no-window" || arg === "--serve") headless = true;
+    if (arg === "--serve") serving = true;
     if (arg === "--portable") portable = true;
 
     // Editor modes for interactive rebase. git appends the file it wants
@@ -2158,6 +2163,31 @@ async function main(): Promise<void> {
   // Once the UI has checked in at least once, silence means it is gone.
   // Headless dev servers stay up regardless: reloading the Vite page would
   // otherwise look like the window closing and take the engine down with it.
+  /**
+   * An engine serving somebody else gives up when nobody is asking.
+   *
+   * The tunnel normally dies with the client and takes this with it, but not
+   * if that client was killed outright - a crash, a task manager, a machine
+   * that lost power. Then this process would sit on somebody's server for
+   * ever, which is the one thing a tool that connects to other people's
+   * machines must not do.
+   *
+   * Longer than the client's own hold, deliberately. That side drops an idle
+   * connection after ten minutes by default, so a live client either keeps
+   * this busy or lets go of it first; reaching this timeout means there is no
+   * live client left. Nothing is lost either way, because a request arriving
+   * for a tab whose tunnel has gone reconnects before answering.
+   *
+   * Only for --serve. The dev loop is also windowless and should sit idle for
+   * as long as somebody leaves it running.
+   */
+  if (serving) {
+    setInterval(() => {
+      if (!sawFirstPing) return;
+      if (Date.now() - lastPing > SERVE_IDLE_MS) shutdown();
+    }, 30000);
+  }
+
   // Outside the headless guard below: connections to other machines are held
   // by every kind of gitc, and a headless one holding them for ever is worse,
   // not better - it is the shape that runs unattended.
