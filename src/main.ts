@@ -916,7 +916,15 @@ async function openConnection(host: string): Promise<Connection | { error: strin
     // onEnded exists for.
     let diedDuringSetup = false;
     const conn = await connect(host, bin, () => {
-      diedDuringSetup = made === null;
+      // Latched, not conditional. Written as `made === null` this was false in
+      // the one window it exists for: during registerTabs `made` is already
+      // the connection, so the flag said "did not die" while the map lookup
+      // below found nothing to remove - and a tunnel that ended just as
+      // registerTabs succeeded was published anyway.
+      //
+      // The two halves cover different moments: the flag catches an end
+      // BEFORE publication, the delete catches one after.
+      diedDuringSetup = true;
       if (made !== null && connections.get(host) === made) connections.delete(host);
     });
     made = conn;
@@ -966,7 +974,13 @@ const LOCAL_ONLY = [
 
 function isLocalOnly(path: string): boolean {
   for (const p of LOCAL_ONLY) {
-    if (path === p || path.startsWith(p + "?")) return true;
+    // Sub-paths too, or an entry covers less than it appears to: /api/update
+    // did not cover /api/update/progress, nor /api/remote its /hold. Nothing
+    // routes those today - neither carries an id, so no header is sent - but
+    // the failure would be the silent kind this list exists to prevent, with
+    // /api/update on a remote tab asking the OTHER machine to update itself
+    // and answering plausibly.
+    if (path === p || path.startsWith(p + "?") || path.startsWith(p + "/")) return true;
   }
   return false;
 }

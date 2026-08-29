@@ -500,7 +500,34 @@ export async function connect(
 ): Promise<Connection> {
   if (!isSafeDestination(host)) throw new Error("refusing an unsafe ssh destination");
   const port = await freePort();
-  const forward = String(port) + ":127.0.0.1:" + String(REMOTE_PORT);
+  // The bind address is written out, not left to GatewayPorts.
+  //
+  // Without it ssh binds the local end "in accordance with the GatewayPorts
+  // setting" - a setting gitc neither controls nor reads, which somebody may
+  // have turned on years ago under a Host * block for a different tool. With
+  // it on, this listener is on every interface of this machine, and what
+  // answers on it is an engine with no authentication of any kind: the remote
+  // filesystem through /api/ls, every repository that user can read, and
+  // /api/op, /api/discard and /api/commit running as them.
+  //
+  // Same argument as the three -o flags below, which already decline to trust
+  // ambient config for BatchMode, ConnectTimeout and ExitOnForwardFailure.
+  const forward = "127.0.0.1:" + String(port) + ":127.0.0.1:" + String(REMOTE_PORT);
+  // The engine over there listens on the remote's loopback with nothing in
+  // front of it, which is the right bind and is NOT a trust boundary on the
+  // machines this feature is for. A build box or jump host usually has other
+  // accounts, and any of them can reach 127.0.0.1:7893 for as long as a tab is
+  // open - the port is fixed, so there is nothing to discover - and get the
+  // filesystem through /api/ls plus the whole mutating surface, as the
+  // connecting user. Documented rather than fixed: this branch is not the
+  // place to grow an authentication scheme.
+  //
+  // When one is added, the secret cannot travel on this command line. `ps` is
+  // world-readable on exactly the hosts where this matters, so argv is the one
+  // channel that leaks it to the accounts it is meant to keep out; an
+  // environment variable sent through ssh, or a mode-600 file written by the
+  // same session, both work.
+  //
   // --port= with the equals sign: the space form is ignored, and the engine
   // would then find the default port, hand off to whatever holds it and exit.
   // --serve, not --no-window: the same behaviour, but the production spelling.
