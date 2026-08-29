@@ -25,6 +25,14 @@ const FAILURES_BEFORE_DEAD = 5;
  * Chromium --app window. If a browser refuses it, the caller renders a
  * "disconnected" overlay instead of pretending everything is fine.
  */
+function sameRemotes(a: RemoteState[], b: RemoteState[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].host !== b[i].host || a[i].state !== b[i].state) return false;
+  }
+  return true;
+}
+
 export function useHeartbeat(): { dead: boolean; remotes: RemoteState[] } {
   const [dead, setDead] = useState(false);
   /** What each machine a tab lives on is doing, straight off the heartbeat. */
@@ -47,7 +55,12 @@ export function useHeartbeat(): { dead: boolean; remotes: RemoteState[] } {
           quitting?: boolean;
           remotes?: RemoteState[];
         };
-        setRemotes(body.remotes ?? []);
+        // Only when it actually differs. A fresh array is never Object.is
+        // equal to the last one, so setting it every two seconds re-rendered
+        // the whole tree - graph, sidebar, diff panes - twice a minute, on
+        // purely local repositories too. Nothing under src/ui is memoised.
+        const fresh = body.remotes ?? [];
+        setRemotes((prev) => (sameRemotes(prev, fresh) ? prev : fresh));
 
         // This engine is handing over to a replacement that is about to take
         // the port. Close now: staying would mean reattaching to the new

@@ -218,7 +218,9 @@ export function App() {
   /** Set when a push came back refused, and the user has to decide what to do. */
   const [pushRefusal, setPushRefusal] = useState<PushRefusal | null>(null);
   const { colors: themeColors } = useTheme();
-  const { calls: gitCalls, clear: clearGitLog } = useGitLog();
+  // session, not the activeId derived further down: this runs before that is
+  // in scope, and it is the same value.
+  const { calls: gitCalls, clear: clearGitLog } = useGitLog(session?.activeId ?? null);
   const { hidden: hiddenCommands, hide: hideCommand } = useHiddenCommands();
   const [logOpen, setLogOpen] = useState(false);
   const { minutes: fetchMinutes } = useFetchInterval();

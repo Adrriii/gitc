@@ -97,7 +97,12 @@ export function saveSession(session: Session): void {
 export function touchRecent(session: Session, tab: Tab): void {
   const kept: Tab[] = [];
   for (const r of session.recents) {
-    if (r.path !== tab.path) kept.push(r);
+    // Host as well as path. The same path on two machines is two different
+    // repositories - which the Recent list and its keys already assume - and
+    // matching on path alone silently evicted the remote entry the moment the
+    // same path was opened locally, with no way back to it but retyping the
+    // host and browsing again.
+    if (r.path !== tab.path || r.host !== tab.host) kept.push(r);
   }
   kept.unshift(tab);
   session.recents = kept.slice(0, MAX_RECENTS);

@@ -11,7 +11,13 @@ export function Welcome({
   error,
 }: {
   session: Session;
-  onOpen: (path: string, host?: string) => void;
+  /**
+   * Returns when the attempt is over, so a failed one can be recovered from.
+   * Opening a remote repository can fail - host unreachable, path gone - and
+   * App turns that into an error message rather than a rejection, so this
+   * settling is the only signal Welcome gets.
+   */
+  onOpen: (path: string, host?: string) => Promise<void>;
   error: string | null;
 }) {
   const [search, setSearch] = useState("");
@@ -101,7 +107,11 @@ export function Welcome({
             onClick={() => {
               if (opening !== null) return;
               setOpening((r.host ?? "") + r.path);
-              onOpen(r.path, r.host ?? undefined);
+              // Cleared however it ends. On success this screen is replaced by
+              // the tab, so the reset is invisible; on failure it is the only
+              // thing that lets the list be clicked again. Without it one
+              // unreachable host left every row inert until gitc restarted.
+              void onOpen(r.path, r.host ?? undefined).finally(() => setOpening(null));
             }}
           >
             <span className={s.name}>{r.name}</span>
@@ -152,7 +162,11 @@ export function Welcome({
                 host={host.alias}
                 onOpen={(path) => {
                   setConnecting(true);
-                  onOpen(path, host.alias);
+                  // Same reason as the recents: a directory that is not a
+                  // repository, or a host that refuses, otherwise leaves this
+                  // true for ever - and Change is disabled while it is, so
+                  // there was no way back to the host list or the local picker.
+                  void onOpen(path, host.alias).finally(() => setConnecting(false));
                 }}
               />
               {connecting && (

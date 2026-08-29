@@ -9,9 +9,9 @@
 // So the job is narrow: find the aliases a person could sensibly pick, and
 // enough of HostName/User/Port to label them in a list.
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, isAbsolute, dirname } from "node:path";
+import { join, isAbsolute, dirname, basename } from "node:path";
 
 import { at } from "./safe.ts";
 
@@ -143,6 +143,65 @@ export function parseSshConfig(text: string): SshConfig {
   return { hosts, includes };
 }
 
+/**
+ * The files an Include argument names, expanding a wildcard in its last part.
+ *
+ * `Include ~/.ssh/config.d/*` is the standard idiom - it is what 1Password and
+ * most managed configs write - and treating it as a literal filename found
+ * nothing, silently. A user whose hosts all live behind one of those saw an
+ * empty list and no reason, and the whole "On another machine" panel is hidden
+ * when the list is empty, so the feature simply was not there.
+ *
+ * Only the last segment is expanded. ssh permits more, but a wildcard
+ * directory in an ssh config is rare enough not to be worth walking a tree
+ * for, and a pattern that matches nothing is not an error in either case.
+ */
+function expand(pattern: string): string[] {
+  if (!pattern.includes("*") && !pattern.includes("?")) return [pattern];
+
+  const dir = dirname(pattern);
+  const name = basename(pattern);
+  if (dir.includes("*") || dir.includes("?")) return [];
+  if (!existsSync(dir)) return [];
+
+  let entries: string[] = [];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return [];
+  }
+
+  const out: string[] = [];
+  for (const entry of entries) {
+    if (matches(entry, name)) out.push(join(dir, entry));
+  }
+  // Stable order, so two runs read the same files in the same order and
+  // "first value wins" means the same thing each time.
+  out.sort();
+  return out;
+}
+
+/** Glob matching for one path segment: `*` for any run, `?` for one. */
+export function matches(name: string, pattern: string): boolean {
+  // Built rather than regex-escaped in one go, so a dot in a filename stays a
+  // dot: `config.d` must not match `configXd`.
+  //
+  // The classes exclude "/" only. These are single names out of readdir, which
+  // cannot contain a separator, and putting a backslash in the class as well
+  // needs escaping that is easy to get wrong - the first attempt emitted
+  // `[^/\]`, where the backslash escapes the bracket and the class never
+  // closes.
+  let rx = "^";
+  for (const ch of pattern) {
+    if (ch === "*") rx += "[^/]*";
+    else if (ch === "?") rx += "[^/]";
+    else if ("^$.|+()[]{}".includes(ch)) rx += "\\" + ch;
+    else rx += ch;
+  }
+  rx += "$";
+  return new RegExp(rx).test(name);
+}
+
 /** Where ssh keeps the user's own config. */
 export function sshConfigPath(): string {
   return join(homedir(), ".ssh", "config");
@@ -184,7 +243,8 @@ export function readSshHosts(): SshHost[] {
     }
     for (const inc of parsed.includes) {
       // ssh resolves a relative Include against ~/.ssh, not the cwd.
-      queue.push(isAbsolute(inc) ? inc : join(dirname(sshConfigPath()), inc));
+      const full = isAbsolute(inc) ? inc : join(dirname(sshConfigPath()), inc);
+      for (const match of expand(full)) queue.push(match);
     }
   }
 

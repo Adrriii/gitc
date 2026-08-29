@@ -147,9 +147,18 @@ export const api = {
     return json<FileDiff>(`/api/diff?${q.toString()}`);
   },
 
-  /** The git commands run since `after`. Pass 0 for everything held. */
-  gitLog: (after: number) =>
-    json<{ calls: GitCall[] }>(`/api/gitlog?after=${after}`).then((r) => r.calls),
+  /**
+   * The git commands run since `after`. Pass 0 for everything held.
+   *
+   * Takes the tab so it is answered by the machine that ran them. Without it
+   * the URL carries no id, so nothing routes it, and a remote tab's ticker
+   * showed this machine's commands - which for a remote repository is an empty
+   * log, or worse, another repository's.
+   */
+  gitLog: (id: string, after: number) =>
+    json<{ calls: GitCall[] }>(
+      `/api/gitlog?id=${encodeURIComponent(id)}&after=${after}`,
+    ).then((r) => r.calls),
 
   /** Asks whether a newer gitc has been released. */
   checkUpdate: () => json<UpdateInfo>("/api/update"),

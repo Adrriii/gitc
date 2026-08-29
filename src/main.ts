@@ -58,7 +58,14 @@ import { install, uninstall, installedBinary, runningFromInstall } from "./engin
 import { rewriteTodo, writeMessage } from "./engine/rebaseHelper.ts";
 import { running, handOff, probe, quitOther } from "./engine/instance.ts";
 import { raiseWindow, confirmTakeOver } from "./engine/quirks.ts";
-import { connect, ensureRemote, detectRemote, tunnelRequest, type Connection } from "./engine/remote.ts";
+import {
+  connect,
+  ensureRemote,
+  detectRemote,
+  isSafeDestination,
+  tunnelRequest,
+  type Connection,
+} from "./engine/remote.ts";
 import { readSshHosts } from "./engine/sshConfig.ts";
 import {
   check as checkUpdate,
@@ -527,6 +534,11 @@ async function proxyToHost(
   body: string,
   res: import("node:http").ServerResponse,
 ): Promise<void> {
+  // A read can be repeated; a write cannot. `git commit` that ran on the far
+  // side and lost its answer to a dying tunnel would be committed twice by a
+  // blind retry, and the same goes for push, stash and rebase --continue.
+  const repeatable = method === "GET" || method === "HEAD";
+
   // Two attempts: the connection in hand, then a fresh one. A third would be
   // waiting on something that is not coming back.
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -537,25 +549,53 @@ async function proxyToHost(
     }
     conn.usedAt = Date.now();
 
+    // A write gets its liveness checked BEFORE it is sent, which is the only
+    // moment a failure is free. Afterwards there is no way to tell a request
+    // that never arrived from one that ran and lost its answer, so afterwards
+    // it must not be repeated. A ping down an open tunnel is loopback and
+    // costs about a millisecond.
+    if (!repeatable && attempt === 0) {
+      const probe = await sendThrough(conn, "/api/ping", "GET", undefined, "");
+      if (!probe.ok) {
+        dropConnection(host, conn);
+        continue;
+      }
+    }
+
     const answer = await sendThrough(conn, path, method, contentType, body);
     if (answer.ok) {
+      // Refreshed on the way out too: a push can take longer than the hold,
+      // and a connection judged idle by when its request STARTED is torn down
+      // mid-flight by the sweeper.
+      conn.usedAt = Date.now();
       res.writeHead(answer.status, { "content-type": answer.type });
       res.end(answer.body);
       return;
     }
 
     // Dead tunnel. Drop it so the next call builds a new one rather than
-    // handing out the same corpse, and go round once.
-    const held = connections.get(host);
-    if (held !== undefined) {
-      held.close();
-      connections.delete(host);
-    }
-    if (attempt === 1) {
+    // handing out the same corpse.
+    dropConnection(host, conn);
+    if (!repeatable || attempt === 1) {
       send(res, 502, "application/json", JSON.stringify({ error: host + ": " + answer.error }));
       return;
     }
   }
+}
+
+/**
+ * Removes a connection, but only if it is still the one on offer.
+ *
+ * Two tabs on one host hitting a dead tunnel at once: the first fails,
+ * reconnects and publishes a fresh tunnel; the second then errors on the OLD
+ * socket and, without this check, closes and deletes the new one - killing the
+ * remote engine and whatever git it was running, and sending the first tab
+ * round again. A reconnect loop built out of two requests.
+ */
+function dropConnection(host: string, used: Connection): void {
+  if (connections.get(host) !== used) return;
+  used.close();
+  connections.delete(host);
 }
 
 interface Relayed {
@@ -840,6 +880,13 @@ function sweepIdleConnections(): void {
 }
 
 async function openConnection(host: string): Promise<Connection | { error: string }> {
+  // Checked here, before anything runs ssh, so the refusal reads as itself.
+  // Left to the first sshRun it came back wrapped as "unrecognised remote
+  // platform", which describes the symptom of refusing rather than the reason.
+  if (!isSafeDestination(host)) {
+    return { error: '"' + host + '" is not a usable ssh destination' };
+  }
+
   const kind = await detectRemote(host);
   if (kind.refusal !== null) return { error: kind.refusal };
 
@@ -848,7 +895,15 @@ async function openConnection(host: string): Promise<Connection | { error: strin
 
   const bin = kind.binPath === null ? "~/.local/bin/gitc" : kind.binPath;
   try {
-    const conn = await connect(host, bin);
+    // The map must stop offering a tunnel that ended by itself, or the LED
+    // stays green for a host that is gone and the next request proxies into a
+    // dead socket. `made` is set below, so this only ever removes a connection
+    // that reached the map in the first place.
+    let made: Connection | null = null;
+    const conn = await connect(host, bin, () => {
+      if (made !== null && connections.get(host) === made) connections.delete(host);
+    });
+    made = conn;
     // A fresh engine over there knows nothing about the tabs this side is
     // already showing. Without this, every request after a reconnect asks
     // about a tab that engine has never heard of - which is what "no such
@@ -1391,18 +1446,15 @@ async function handleApi(
     // find the repository a tab would be made from - so it names the host
     // itself, and opens the tunnel that the eventual tab will go on sharing.
     if (host.length > 0) {
-      const conn = await connectionFor(host);
-      if ("error" in conn) {
-        send(res, 502, "application/json", JSON.stringify({ error: conn.error }));
-        return true;
-      }
-      const answer = await tunnelRequest(
-        conn.port,
-        "/api/ls?path=" + encodeURIComponent(dir),
-        "GET",
-        null,
-      );
-      send(res, answer.status === 0 ? 502 : answer.status, "application/json", answer.text);
+      // Through the same relay as every other remote call, which buys three
+      // things this branch used to lack: the answer stays bytes, so a
+      // directory named in Latin-1 survives the trip - api.ts decodes it, and
+      // decoding it here would hand back U+FFFD for every such byte and make
+      // the directory unopenable; a dead tunnel is retried rather than
+      // returning 502 for ever; and the connection's clock is refreshed, so
+      // the sweeper cannot close a tunnel out from under someone who is
+      // browsing, which has no tab to mark it as the one in front.
+      await proxyToHost(host, "/api/ls?path=" + encodeURIComponent(dir), "GET", undefined, "", res);
       return true;
     }
 
@@ -2132,6 +2184,15 @@ async function main(): Promise<void> {
           // this is concerned, and the alternative - deciding here which of
           // them applies - is what left a swept connection being handed out
           // and every request failing with nothing trying to reconnect.
+          // Proof the window is alive, exactly as handleApi treats any
+          // request. Skipping it because the request is proxied reinstated the
+          // bug that signal exists for: with a remote tab in front every
+          // repository call goes down this branch, so a renderer whose 2s
+          // heartbeat stalls on a large diff would have the engine shut down
+          // underneath it after sixty seconds.
+          lastPing = Date.now();
+          sawFirstPing = true;
+
           const type = req.headers["content-type"];
           void readBody(req).then((body) =>
             proxyToHost(on, path, req.method === undefined ? "GET" : req.method, type, body, res),
