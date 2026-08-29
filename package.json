@@ -34,7 +34,7 @@
     "@vitejs/plugin-react": "^6.0.5",
     "concurrently": "^10.0.5",
     "sass": "^1.102.0",
-    "scriptc": "^0.0.33",
+    "scriptc": "^0.0.35",
     "typescript": "^5.7.0",
     "vite": "^8.2.1"
   },
