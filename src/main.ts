@@ -500,51 +500,124 @@ function sendJson(res: import("node:http").ServerResponse, body: string): void {
  * way (see the note on jsonBytes in api.ts), and anything this re-encoded on
  * the way past would be a name broken by the trip rather than by git.
  */
-function proxyToRemote(
+/**
+ * Sends one request to a host's engine and streams the answer back, opening a
+ * tunnel if there is not one and trying again if the one there is has died.
+ *
+ * The retry is the point. A tunnel can stop working at any moment - swept for
+ * being idle, a laptop that slept, a network that dropped, a server that was
+ * rebooted - and the first this side hears of it is a socket error on a
+ * request somebody is waiting for. Reconnecting only when a request fails is
+ * also the only honest test of whether a connection is alive: asking first
+ * would be a second round trip that can itself be stale by the time the real
+ * one goes out.
+ *
+ * The body is read before any of this rather than piped through, so there is
+ * something to send twice. It is also simpler: the previous version attached
+ * its listeners after an await, which worked only because an unread request
+ * stream stays paused.
+ */
+async function proxyToHost(
+  host: string,
+  path: string,
+  method: string,
+  contentType: string | undefined,
+  body: string,
+  res: import("node:http").ServerResponse,
+): Promise<void> {
+  // Two attempts: the connection in hand, then a fresh one. A third would be
+  // waiting on something that is not coming back.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const conn = await connectionFor(host);
+    if ("error" in conn) {
+      send(res, 502, "application/json", JSON.stringify({ error: conn.error }));
+      return;
+    }
+    conn.usedAt = Date.now();
+
+    const answer = await sendThrough(conn, path, method, contentType, body);
+    if (answer.ok) {
+      res.writeHead(answer.status, { "content-type": answer.type });
+      res.end(answer.body);
+      return;
+    }
+
+    // Dead tunnel. Drop it so the next call builds a new one rather than
+    // handing out the same corpse, and go round once.
+    const held = connections.get(host);
+    if (held !== undefined) {
+      held.close();
+      connections.delete(host);
+    }
+    if (attempt === 1) {
+      send(res, 502, "application/json", JSON.stringify({ error: host + ": " + answer.error }));
+      return;
+    }
+  }
+}
+
+interface Relayed {
+  ok: boolean;
+  status: number;
+  type: string;
+  body: Buffer;
+  error: string;
+}
+
+/**
+ * One request down a tunnel, with the answer kept as bytes.
+ *
+ * Not decoded on the way past: paths arrive as the operating system's raw
+ * bytes and have to leave the same way (see jsonBytes in api.ts), so anything
+ * re-encoded here is a name broken by the trip rather than by git.
+ */
+function sendThrough(
   conn: Connection,
   path: string,
-  req: import("node:http").IncomingMessage,
-  res: import("node:http").ServerResponse,
-): void {
-  conn.usedAt = Date.now();
-  const headers: Record<string, string> = {};
-  const type = req.headers["content-type"];
-  if (type !== undefined) headers["content-type"] = type;
-  const length = req.headers["content-length"];
-  if (length !== undefined) headers["content-length"] = length;
+  method: string,
+  contentType: string | undefined,
+  body: string,
+): Promise<Relayed> {
+  return new Promise((resolve) => {
+    const headers: Record<string, string> = {};
+    if (contentType !== undefined) headers["content-type"] = contentType;
+    if (body.length > 0) headers["content-length"] = String(Buffer.byteLength(body));
 
-  const outbound = request(
-    {
-      hostname: "127.0.0.1",
-      port: conn.port,
-      path: path,
-      method: req.method === undefined ? "GET" : req.method,
-      headers: headers,
-      timeout: 120000,
-    },
-    (answer) => {
-      const back: Record<string, string> = {};
-      const ct = answer.headers["content-type"];
-      back["content-type"] = ct === undefined ? "application/json" : ct;
-      res.writeHead(answer.statusCode ?? 502, back);
-      answer.on("data", (chunk: Buffer) => res.write(chunk));
-      answer.on("end", () => res.end());
-    },
-  );
+    const outbound = request(
+      {
+        hostname: "127.0.0.1",
+        port: conn.port,
+        path: path,
+        method: method,
+        headers: headers,
+        timeout: 120000,
+      },
+      (answer) => {
+        const chunks: Uint8Array[] = [];
+        answer.on("data", (c: Buffer) => chunks.push(c));
+        answer.on("end", () =>
+          resolve({
+            ok: true,
+            status: answer.statusCode ?? 502,
+            type: answer.headers["content-type"] ?? "application/json",
+            body: Buffer.concat(chunks),
+            error: "",
+          }),
+        );
+      },
+    );
 
-  outbound.on("error", (e: Error) => {
-    // The tunnel died under us - the host went away, the network dropped, ssh
-    // was killed. Say so as an error the window can show rather than leaving
-    // the request hanging until something times out.
-    send(res, 502, "application/json", JSON.stringify({ error: conn.host + ": " + e.message }));
+    outbound.on("error", (e: Error) => {
+      resolve({ ok: false, status: 502, type: "", body: Buffer.alloc(0), error: e.message });
+    });
+    outbound.on("timeout", () => {
+      outbound.destroy();
+      resolve({ ok: false, status: 504, type: "", body: Buffer.alloc(0), error: "no answer" });
+    });
+
+    if (body.length > 0) outbound.write(body);
+    outbound.end();
   });
-  outbound.on("timeout", () => {
-    outbound.destroy();
-    send(res, 504, "application/json", JSON.stringify({ error: conn.host + " did not answer" }));
-  });
-
-  req.on("data", (chunk: Buffer) => outbound.write(chunk));
-  req.on("end", () => outbound.end());
 }
 
 function readBody(req: import("node:http").IncomingMessage): Promise<string> {
@@ -721,11 +794,8 @@ const connecting = new Map<string, Promise<Connection | { error: string }>>();
  * Minutes to hold a tunnel to a host whose tab is not in front, 0 for
  * forever. The window owns the preference and sends it; this is the default
  * until it does, and matches the one in settings.ts.
- *
- * Forever for now: dropping a connection is only safe if coming back
- * reconnects, and that path is not yet reliable.
  */
-let remoteHoldMinutes = 0;
+let remoteHoldMinutes = 10;
 
 /**
  * Drops connections to machines nobody is looking at.
@@ -2052,26 +2122,15 @@ async function main(): Promise<void> {
         const tab = session.tabs.find((t) => t.id === tabHeader);
         const on = tab === undefined ? null : tab.host;
         if (on !== null) {
-          const conn = connections.get(on);
-          if (conn !== undefined) {
-            proxyToRemote(conn, path, req, res);
-            return;
-          }
-
-          // A remote tab with no tunnel: gitc has restarted with it in the
-          // session, or the connection dropped. Reconnect and then answer,
-          // rather than falling through and asking THIS machine for a path
-          // that only exists on that one.
-          //
-          // Attaching the body listeners after the await is safe: the request
-          // stream stays paused until something reads it.
-          void connectionFor(on).then((made) => {
-            if ("error" in made) {
-              send(res, 502, "application/json", JSON.stringify({ error: made.error }));
-              return;
-            }
-            proxyToRemote(made, path, req, res);
-          });
+          // One path whether or not a tunnel exists. Connecting, reusing and
+          // recovering from a dead tunnel are the same operation as far as
+          // this is concerned, and the alternative - deciding here which of
+          // them applies - is what left a swept connection being handed out
+          // and every request failing with nothing trying to reconnect.
+          const type = req.headers["content-type"];
+          void readBody(req).then((body) =>
+            proxyToHost(on, path, req.method === undefined ? "GET" : req.method, type, body, res),
+          );
           return;
         }
       }

@@ -318,10 +318,7 @@ function parseRemoteHold(raw: string): number | null {
  * dropped, whatever this says.
  */
 export function useRemoteHold() {
-  // Defaults to Always, NOT to ten minutes, until reconnecting after a drop is
-  // reliable - it is not yet, so a shorter hold would break a tab you came
-  // back to. The choice is offered; the default is the one that cannot bite.
-  const [minutes, set] = useStored<number>(REMOTE_HOLD_KEY, 0, parseRemoteHold);
+  const [minutes, set] = useStored<number>(REMOTE_HOLD_KEY, 10, parseRemoteHold);
   return { minutes, set };
 }
 
