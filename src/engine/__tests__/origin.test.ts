@@ -15,8 +15,8 @@ function eq(label: string, got: unknown, want: unknown) {
 const PORT = 7893;
 
 /** Just enough of an IncomingMessage for the guard to read. */
-function req(headers: Record<string, string>, method = "GET") {
-  return { headers, method } as unknown as import("node:http").IncomingMessage;
+function req(headers: Record<string, string>, method = "GET", url = "/api/op") {
+  return { headers, method, url } as unknown as import("node:http").IncomingMessage;
 }
 
 // --- Host: the DNS rebinding defence --------------------------------------
@@ -137,6 +137,32 @@ eq(
   allowedRequest(req({ host: "127.0.0.1:7893", origin: "null" }), PORT, false),
   false,
 );
+
+// --- the one hole in the content-type gate --------------------------------
+//
+// When neither Origin nor Sec-Fetch-Site is present, the content type is the
+// whole of what stops a cross-site write, and /api/bye is the single path let
+// past it - because sendBeacon cannot choose a content type, and the window
+// has to be able to say goodbye while it is being torn down.
+//
+// So the shape of that carve-out is worth pinning. Until these existed, req()
+// set no url at all, exemptFromContentType saw undefined on every call, and
+// widening the exemption to a prefix match would not have failed one
+// assertion.
+
+/** A beacon: POST, no Origin, no Sec-Fetch-Site, the type sendBeacon sends. */
+const beacon = (url: string) =>
+  allowedRequest(
+    req({ host: "127.0.0.1:7893", "content-type": "text/plain" }, "POST", url),
+    PORT,
+    false,
+  );
+
+eq("/api/bye is exempt", beacon("/api/bye"), true);
+eq("a query string does not change that", beacon("/api/bye?x=1"), true);
+eq("the exemption is not a prefix", beacon("/api/byefoo"), false);
+eq("nothing traverses out of it", beacon("/api/bye/../op"), false);
+eq("and nothing else is exempt", beacon("/api/op"), false);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);
