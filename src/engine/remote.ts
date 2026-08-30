@@ -538,15 +538,43 @@ export function tunnelRequest(
 }
 
 /**
- * Is the tunnel carrying a live gitc yet?
+ * Is the tunnel carrying OUR engine yet?
  *
- * Asked WITH the token, so a 200 means more than "something is listening": it
- * means the engine that printed that token is the thing on the other end of
- * this forward. A stranger holding the port answers 403 and the wait
- * continues, which is the right answer to "is my engine ready".
+ * Two questions, in this order, and the order is the point.
+ *
+ * First: does whatever holds this port refuse a request with no token? An
+ * earlier version asked only "does it answer 200 with the token", which any
+ * HTTP server on that port satisfies - it does not have to demand the token,
+ * merely tolerate an unknown header. So a process already sitting on the
+ * remote's 7893, which on a shared box is the premise of this whole feature,
+ * answered the ping and was then handed the token and every request after it.
+ *
+ * Asking without the token first costs nothing and is asked before anything
+ * is revealed: a stranger that answers 200 to an unauthenticated ping is not
+ * a gitc engine of ours, and we stop there having told it nothing.
+ *
+ * Second: does it accept OUR token? Only an engine that printed it can.
  */
 function answering(port: number, token: string): Promise<boolean> {
   return new Promise((resolve) => {
+    void ping(port, null).then((unauthenticated) => {
+      // Not 403 means it does not demand a token. Either something else holds
+      // the port, or it is a gitc too old to have this - and neither is a
+      // thing to hand a secret to.
+      if (unauthenticated !== 403) {
+        resolve(false);
+        return;
+      }
+      void ping(port, token).then((authenticated) => resolve(authenticated === 200));
+    });
+  });
+}
+
+/** One /api/ping, answering with the status code or 0 if nothing replied. */
+function ping(port: number, token: string | null): Promise<number> {
+  return new Promise((resolve) => {
+    const headers: Record<string, string> = {};
+    if (token !== null) headers["x-gitc-token"] = token;
     const req = request(
       {
         // Spelled out rather than shorthand: the compiler asks for it here.
@@ -554,13 +582,13 @@ function answering(port: number, token: string): Promise<boolean> {
         port: port,
         path: "/api/ping",
         method: "GET",
-        headers: { "x-gitc-token": token },
+        headers: headers,
         timeout: 2000,
       },
-      (res) => resolve(res.statusCode === 200),
+      (res) => resolve(res.statusCode ?? 0),
     );
-    req.on("error", () => resolve(false));
-    req.on("timeout", () => resolve(false));
+    req.on("error", () => resolve(0));
+    req.on("timeout", () => resolve(0));
     req.end();
   });
 }
@@ -657,10 +685,38 @@ export async function connect(
   // child, which for a tunnel that is meant to live for hours is a hang
   // waiting to happen.
   let remoteSaid = "";
+  /**
+   * The token, taken off the stream as it arrives rather than out of the
+   * capped buffer above.
+   *
+   * The 4000-character cap was harmless when this stream only ever became an
+   * error message. It is not harmless now that the token arrives on it: -tt
+   * allocates a pty, sshd prints its banner and MOTD into one, and a host
+   * whose banner runs past 4000 characters would push the token line out of
+   * everything readToken can see - making that host permanently
+   * unconnectable, and reporting it as a timeout rather than as the cause.
+   *
+   * So the scan runs over a sliding tail of its own, which stops growing the
+   * moment the token is found. A tail is enough because the line is short:
+   * whatever chunk boundary it is delivered across, the whole of it is inside
+   * the window by the time it is complete.
+   */
+  let tokenTail = "";
+  let token: string | null = null;
+  const TAIL = 4096;
+
   const outStream = child.stdout;
   if (outStream !== null) {
     outStream.on("data", (c: Buffer) => {
-      if (remoteSaid.length < 4000) remoteSaid += c.toString("utf8");
+      const text = c.toString("utf8");
+      if (remoteSaid.length < 4000) remoteSaid += text;
+      if (token === null) {
+        tokenTail += text;
+        if (tokenTail.length > TAIL) tokenTail = tokenTail.substring(tokenTail.length - TAIL);
+        token = readToken(tokenTail);
+        // Nothing more to scan, and nothing to keep holding.
+        if (token !== null) tokenTail = "";
+      }
     });
   }
 
@@ -698,10 +754,9 @@ export async function connect(
 
   const started = Date.now();
   while (Date.now() - started < CONNECT_TIMEOUT_MS) {
-    // The token first, then readiness. Both come from the same stream and in
-    // that order - the engine prints its token before it starts listening -
-    // so there is nothing to probe with until this arrives.
-    const token = readToken(remoteSaid);
+    // The token first, then readiness. There is nothing to probe with until
+    // the engine has announced itself, and it only announces once it has the
+    // port - so this arriving is also the first evidence the far side is up.
     if (token !== null && (await answering(port, token))) {
       return { host, port, usedAt: Date.now(), inFlight: 0, token, close };
     }

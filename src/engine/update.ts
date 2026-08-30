@@ -20,8 +20,6 @@ import {
   writeFileSync,
   chmodSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { promisify } from "node:util";
 
 import { REPO, VERSION } from "../generated/version.ts";
@@ -109,11 +107,22 @@ function downloadBase(tag: string): string {
  * is not a network anyone else is on.
  */
 function secureUrl(value: string, name: string): string {
-  const lower = value.trim().toLowerCase();
-  if (lower.startsWith("https://")) return value.trim();
-  if (lower.startsWith("http://127.0.0.1") || lower.startsWith("http://localhost")) {
-    return value.trim();
+  const trimmed = value.trim();
+  const lower = trimmed.toLowerCase();
+  if (lower.startsWith("https://")) return trimmed;
+
+  // The loopback exemption compares the parsed host, not a prefix.
+  // startsWith("http://127.0.0.1") also accepts
+  // "http://127.0.0.1.evil.example/", which is a name anybody can register -
+  // and whoever set the variable serves both the binary and the checksums, so
+  // fail-closed verification would have passed them happily.
+  if (lower.startsWith("http://")) {
+    const rest = lower.substring("http://".length);
+    const cut = rest.search(/[/:?#]/);
+    const host = cut === -1 ? rest : rest.substring(0, cut);
+    if (host === "localhost" || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)) return trimmed;
   }
+
   throw new Error(name + " must be an https URL - refusing to update over " + value);
 }
 

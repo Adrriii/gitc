@@ -52,8 +52,16 @@ export function allowedRequest(
   const host = req.headers["host"];
   if (host !== undefined && !isLoopbackHost(host)) return false;
 
+  // A literal "null" origin is refused rather than waved through.
+  //
+  // It is what a sandboxed iframe sends, and what some redirects and
+  // file:// pages send. None of those is ever a gitc window - the window is
+  // an ordinary http page and sends its real origin - so the only thing the
+  // exemption did was hand back the hole this check exists to close. A
+  // non-browser client sends no Origin at all, which is a different case and
+  // still allowed.
   const origin = req.headers["origin"];
-  if (origin !== undefined && origin.length > 0 && origin !== "null") {
+  if (origin !== undefined && origin.length > 0) {
     if (!isLoopbackOrigin(origin, port, dev)) return false;
   }
 

@@ -38,7 +38,21 @@ eq("a dot segment resolves", inRepo(repo, "./src/../a.txt"), resolve(repo, "a.tx
 eq("climbing out", inRepo(repo, "../secret.txt"), null);
 eq("climbing far out", inRepo(repo, "../../../../etc/passwd"), null);
 eq("climbing out and back in is fine", inRepo(repo, "../repo/a.txt"), resolve(repo, "a.txt"));
-eq("a backslash climb", inRepo(repo, "..\\secret.txt"), null);
+// A backslash is a separator on Windows and an ordinary filename character
+// everywhere else, so this is two different assertions rather than one.
+// Asserting the Windows answer unconditionally made `npm test` fail on Linux
+// - and since `npm test` runs inside `npm run build`, which release.yml runs
+// on its ubuntu leg, that failure would have appeared half way through
+// cutting a release with the Windows leg green beside it.
+if (process.platform === "win32") {
+  eq("a backslash climb", inRepo(repo, "..\\secret.txt"), null);
+} else {
+  eq(
+    "a backslash is just a character here",
+    inRepo(repo, "..\\secret.txt"),
+    resolve(repo, "..\\secret.txt"),
+  );
+}
 eq("absolute posix", inRepo(repo, "/etc/passwd"), null);
 eq("a drive letter", inRepo(repo, "C:/Windows/win.ini"), null);
 eq("drive-relative", inRepo(repo, "C:secret.txt"), null);
@@ -73,6 +87,20 @@ eq("whitespace is trimmed", safeRemoteUrl("  https://x/y  "), "https://x/y");
 // fetch gitc runs straight afterwards executes that command; confirmed against
 // a running engine before this check existed.
 eq("ext transport", threw(() => safeRemoteUrl("ext::sh -c whoami")), true);
+
+// The allowlist has to actually be an allowlist. The scp-like fallback below
+// matches any bare "word:" prefix, so every one of these reached git until
+// unknown "<scheme>://" spellings were refused explicitly - and git resolves
+// a scheme it has no native support for to git-remote-<scheme> on PATH.
+eq("sftp", threw(() => safeRemoteUrl("sftp://evil.example/x")), true);
+eq("gcrypt", threw(() => safeRemoteUrl("gcrypt://h/x")), true);
+eq("hg", threw(() => safeRemoteUrl("hg://h/x")), true);
+eq("fd", threw(() => safeRemoteUrl("fd://x")), true);
+eq("an invented scheme", threw(() => safeRemoteUrl("helper://a")), true);
+// And the allowed ones still are.
+eq("http stays", safeRemoteUrl("http://h/x"), "http://h/x");
+eq("git stays", safeRemoteUrl("git://h/x"), "git://h/x");
+eq("file stays", safeRemoteUrl("file:///srv/x"), "file:///srv/x");
 eq("ext with a payload", threw(() => safeRemoteUrl("ext::sh -c touch% /tmp/x")), true);
 eq("any helper spelling", threw(() => safeRemoteUrl("weird::whatever")), true);
 eq("an option-shaped URL", threw(() => safeRemoteUrl("--upload-pack=sh")), true);

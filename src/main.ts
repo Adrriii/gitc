@@ -233,7 +233,12 @@ function findAvatarOverride(email: string): string | null {
   // The two spellings were there to make the file easy to name by hand, and
   // the sanitised one still is - an address with nothing unusual in it is
   // unchanged by this, which is nearly all of them.
-  const safe = lower.replace(/[^a-z0-9.@_-]/g, "_");
+  // "+" is in the set because plus addressing is ordinary, not unusual:
+  // dropping the raw spelling was right, but it meant an override named
+  // "adri+work@example.com.png" - which used to be found - suddenly was not,
+  // and the file would have had to be renamed. It is a safe filename
+  // character on every platform gitc runs on.
+  const safe = lower.replace(/[^a-z0-9.@+_-]/g, "_");
   if (safe.length === 0 || safe === "." || safe === "..") return null;
   const exts = [".png", ".jpg", ".jpeg", ".svg", ".gif", ".webp"];
 
@@ -2344,14 +2349,9 @@ async function main(): Promise<void> {
     }
   }
 
-  // A serving engine invents its secret before it binds anything, and says it
-  // on stdout - which, started over ssh, is a stream only the client that
-  // opened the tunnel can read. Printed before listen() so it cannot be
-  // raced by the client's first request.
-  if (serving) {
-    serveToken = randomBytes(32).toString("hex");
-    console.log(TOKEN_LINE + " " + serveToken);
-  }
+  // A serving engine invents its secret here, but does not say it until the
+  // port is actually bound - see the listen callback below.
+  if (serving) serveToken = randomBytes(32).toString("hex");
 
   if (wanted !== null) await openRepo(wanted);
   if (session.activeId === null) {
@@ -2518,6 +2518,21 @@ async function main(): Promise<void> {
 
   server.listen(port, "127.0.0.1", () => {
     const url = "http://127.0.0.1:" + port + "/";
+
+    // The token goes out only once this engine actually owns the port.
+    //
+    // Printed before the bind, it was announced even when the bind then
+    // failed - and --serve skips the probe-and-hand-off branch above
+    // entirely, so nothing had checked the port yet. A process already
+    // holding it, which on the shared boxes this feature is for is the whole
+    // premise, would have been handed a secret by an engine that then exited
+    // on EADDRINUSE. Saying it here means a token exists only where the
+    // engine that made it is listening.
+    //
+    // It cannot be raced by the client either: readToken gates answering(),
+    // so the client has nothing to send until this line has arrived.
+    if (serveToken.length > 0) console.log(TOKEN_LINE + " " + serveToken);
+
     console.log("gitc serving " + url);
     if (headless) {
       console.log("engine only, no window");

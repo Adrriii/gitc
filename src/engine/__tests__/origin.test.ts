@@ -112,5 +112,14 @@ eq(
   false,
 );
 
+// A sandboxed iframe sends this, and so do some redirects and file:// pages.
+// None of them is ever a gitc window, so the literal string is refused rather
+// than treated as "no origin" - which is what it used to be.
+eq(
+  "an origin of literally null",
+  allowedRequest(req({ host: "127.0.0.1:7893", origin: "null" }), PORT, false),
+  false,
+);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

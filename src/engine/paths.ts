@@ -198,6 +198,22 @@ export function safeRemoteUrl(url: string): string {
     );
   }
 
+  // Any OTHER "<scheme>://" spelling, which the scp-like shape below would
+  // otherwise wave through: it matches a bare "word:" prefix, so every
+  // scheme that is not in the list above was reaching git anyway and the
+  // allowlist only ever covered the "::" forms.
+  //
+  // git resolves a scheme it does not implement natively to
+  // `git-remote-<scheme>` on PATH, so this is the same mechanism as "ext::"
+  // one step removed - weaker only because it needs the helper installed,
+  // and git-remote-gcrypt and git-remote-hg are packaged nearly everywhere.
+  if (/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(value)) {
+    throw new Error(
+      "gitc will not add a remote using that transport - " +
+        "use an https, ssh, git or file URL",
+    );
+  }
+
   // A Windows path, "C:\src\repo" or "C:/src/repo". Checked before the
   // scp-like shape, which the colon would otherwise match.
   if (/^[A-Za-z]:[\\/]/.test(value)) return value;

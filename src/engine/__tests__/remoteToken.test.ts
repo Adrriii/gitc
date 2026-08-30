@@ -47,5 +47,23 @@ eq(
 eq("stripped text holds no token", withoutToken(said).includes(TOKEN), false);
 eq("nothing to strip", withoutToken("port 7893 is already in use"), "port 7893 is already in use");
 
+// A pty carries the host's banner and MOTD before anything gitc says, and a
+// long one used to push the token out of the 4000-character buffer the scan
+// read from - making that host permanently unconnectable, and reporting it as
+// a timeout rather than as the cause. The scan runs over a sliding tail of
+// its own now, so these are the cases that have to keep working.
+const TAIL = 4096;
+const tail = (text: string) => (text.length > TAIL ? text.substring(text.length - TAIL) : text);
+const banner = "x".repeat(9000) + LF;
+
+eq("behind a 9000-character banner", readToken(tail(banner + TOKEN_LINE + " " + TOKEN + LF)), TOKEN);
+
+// And the line split across chunk boundaries, which a pty does freely.
+let acc = "";
+for (const chunk of [banner, TOKEN_LINE + " " + TOKEN.substring(0, 10), TOKEN.substring(10) + LF]) {
+  acc = tail(acc + chunk);
+}
+eq("split across chunks", readToken(acc), TOKEN);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

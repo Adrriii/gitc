@@ -13,7 +13,6 @@
 // the line numbers are git's own.
 
 import { readFileSync, existsSync, statSync } from "node:fs";
-import { join } from "node:path";
 
 import { git, gitOrNull } from "./git.ts";
 import { inRepo } from "./paths.ts";
