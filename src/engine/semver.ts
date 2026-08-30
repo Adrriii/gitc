@@ -84,3 +84,35 @@ function comparePre(a: string[], b: string[]): number {
   }
   return 0;
 }
+
+/**
+ * The stream a prerelease belongs to, or null for a released version.
+ *
+ * gitc publishes more than one line of development at a time - a security
+ * branch and a feature branch can both have candidates out - and until this
+ * existed there was nothing in a version to tell them apart. The updater
+ * picked the numerically highest prerelease of any line, so tagging 0.5.1 on
+ * one branch pulled every tester on another branch's 0.4.5 onto work they had
+ * not asked for.
+ *
+ * Semver already has the field for it: the prerelease part. "0.5.1-security.1"
+ * is stream "security", "0.6.0-conflicts.2" is stream "conflicts", and the
+ * historical "0.4.5-rc.1" is stream "rc" - which keeps every tag published
+ * before this readable, rather than needing a special case.
+ *
+ * The first identifier that is not purely numeric is the name. A prerelease
+ * with only numeric identifiers has no stream anyone could have chosen, so it
+ * belongs to none.
+ */
+export function preStream(version: string): string | null {
+  const dash = version.indexOf("-");
+  if (dash === -1) return null;
+  const tail = version.substring(dash + 1);
+  if (tail.length === 0) return null;
+  for (const piece of tail.split(".")) {
+    if (piece.length === 0) continue;
+    const n = parseInt(piece, 10);
+    if (isNaN(n) || String(n) !== piece) return piece;
+  }
+  return null;
+}

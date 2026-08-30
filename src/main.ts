@@ -962,6 +962,14 @@ let remoteHoldMinutes = 10;
  * spoken cannot surprise somebody onto a test build.
  */
 let updateChannel: Channel = "stable";
+/**
+ * Which line of development to follow on the test channel, "" for none.
+ *
+ * Owned by the window, like the channel beside it, and sent on the same
+ * call. The engine is the one that talks to GitHub, so it is the one that has
+ * to know which candidates count.
+ */
+let updateStream = "";
 
 /**
  * Drops connections to machines nobody is looking at.
@@ -1536,15 +1544,18 @@ async function handleApi(
   // Which releases to be offered. Sent by the window, which owns every other
   // setting on that screen; the engine is the one that talks to GitHub.
   if (path === "/api/update/channel") {
-    const body = JSON.parse(await readBody(req)) as { channel: string };
+    const body = JSON.parse(await readBody(req)) as { channel: string; stream?: string };
     updateChannel = body.channel === "test" ? "test" : "stable";
+    // Absent leaves it alone, so a window that only means to change the
+    // channel does not silently clear the stream with it.
+    if (typeof body.stream === "string") updateStream = body.stream;
     sendJson(res, JSON.stringify({ ok: true }));
     return true;
   }
 
   if (path === "/api/update") {
     if (req.method === "POST") {
-      const result = await applyUpdate(updateChannel);
+      const result = await applyUpdate(updateChannel, updateStream);
       sendJson(res, JSON.stringify(result));
       // Answer first, then go: the UI needs to hear that the update took
       // before this process disappears out from under it.
@@ -1553,7 +1564,7 @@ async function handleApi(
       }
       return true;
     }
-    sendJson(res, JSON.stringify(await checkUpdate(updateChannel)));
+    sendJson(res, JSON.stringify(await checkUpdate(updateChannel, updateStream)));
     return true;
   }
 

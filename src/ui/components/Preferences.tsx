@@ -14,6 +14,7 @@ import {
   useRemoteHold,
   useTabSize,
   useUpdateChannel,
+  useUpdateStream,
   useUpdateCheck,
   useUpdateLevel,
 } from "../settings";
@@ -106,6 +107,7 @@ export function Preferences({
   const { minutes: updateMinutes, set: setUpdateMinutes } = useUpdateCheck();
   const { level: updateLevel, set: setUpdateLevel } = useUpdateLevel();
   const { channel: updateChannel, set: setUpdateChannel } = useUpdateChannel();
+  const { stream: updateStream, set: setUpdateStream } = useUpdateStream();
   const { onFocus: fetchOnFocus, set: setFetchOnFocus } = useFetchOnFocus();
   const { minutes: remoteHold, set: setRemoteHold } = useRemoteHold();
 
@@ -380,6 +382,28 @@ export function Preferences({
                 ))}
               </div>
             </Row>
+            {updateChannel === "test" ? (
+              <Row
+                label="Which test builds"
+                hint="More than one branch can have candidates published at once. Following one means the others are not offered to you, however high their version numbers go - and an ordinary release is always offered, which is how you leave a stream when its work ships."
+              >
+                <div className={s.choices}>
+                  {(update?.streams ?? []).map((name) => (
+                    <button
+                      key={name}
+                      className={name === updateStream ? s.on : ""}
+                      onClick={() => setUpdateStream(name)}
+                      title={"Follow the " + name + " line of development"}
+                    >
+                      {name}
+                    </button>
+                  ))}
+                  {(update?.streams ?? []).length === 0 ? (
+                    <span className={s.hint}>no test builds are published</span>
+                  ) : null}
+                </div>
+              </Row>
+            ) : null}
             <Row
               label="Check for updates"
               hint="An interval checks at launch as well. The check is one request to the releases page and reports nothing unless there is something newer."

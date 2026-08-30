@@ -124,6 +124,10 @@ export interface UpdateInfo {
   available: boolean;
   page: string;
   error: string;
+  /** The line of development being followed, "" for none. */
+  stream: string;
+  /** Every stream with candidates published, newest first. */
+  streams: string[];
 }
 
 export interface UpdateResult {

@@ -20,7 +20,7 @@
     "dev:engine": "node scripts/version.mjs && node scripts/dev-engine.mjs",
     "dev:ui": "vite",
     "typecheck": "tsc -p src/ui/tsconfig.json --noEmit",
-    "test": "node src/ui/__tests__/selection.test.ts && node src/ui/__tests__/pathTree.test.ts && node src/ui/__tests__/gitCommand.test.ts && node src/ui/__tests__/patch.test.ts && node src/ui/__tests__/staging.test.ts && node src/engine/__tests__/graph.test.ts && node src/ui/__tests__/wordDiff.test.ts && node src/ui/__tests__/version.test.ts && node src/engine/__tests__/sshConfig.test.ts && node src/engine/__tests__/semver.test.ts && node src/engine/__tests__/paths.test.ts && node src/engine/__tests__/origin.test.ts && node src/engine/__tests__/remoteToken.test.ts",
+    "test": "node src/ui/__tests__/selection.test.ts && node src/ui/__tests__/pathTree.test.ts && node src/ui/__tests__/gitCommand.test.ts && node src/ui/__tests__/patch.test.ts && node src/ui/__tests__/staging.test.ts && node src/engine/__tests__/graph.test.ts && node src/ui/__tests__/wordDiff.test.ts && node src/ui/__tests__/version.test.ts && node src/engine/__tests__/sshConfig.test.ts && node src/engine/__tests__/semver.test.ts && node src/engine/__tests__/paths.test.ts && node src/engine/__tests__/origin.test.ts && node src/engine/__tests__/remoteToken.test.ts && node src/engine/__tests__/streams.test.ts",
     "build:ui": "vite build",
     "embed": "node scripts/embed.mjs && node scripts/embed-icons.mjs",
     "build": "npm run version:sync && npm run typecheck && npm run test && npm run build:ui && npm run embed && node scripts/build.mjs",

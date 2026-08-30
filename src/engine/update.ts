@@ -25,7 +25,7 @@ import { promisify } from "node:util";
 import { REPO, VERSION } from "../generated/version.ts";
 import { installedBinary } from "./install.ts";
 import { tempFile } from "./paths.ts";
-import { compare, isPrerelease } from "./semver.ts";
+import { compare, isPrerelease, preStream } from "./semver.ts";
 
 const execFileAsync = promisify(execFile);
 const windows = process.platform === "win32";
@@ -47,6 +47,18 @@ export interface UpdateInfo {
   page: string;
   /** Empty unless something went wrong, in which case it says what. */
   error: string;
+  /**
+   * The line of development being followed, "" for none.
+   *
+   * More than one branch can have candidates published at once, and before
+   * this the updater compared numbers alone - so tagging a candidate on one
+   * branch offered it to every tester on another, whose build had nothing to
+   * do with it. A stream is chosen, and only that stream's candidates and
+   * ordinary releases are offered.
+   */
+  stream: string;
+  /** Every stream with candidates published, newest first. For the picker. */
+  streams: string[];
 }
 
 /** Which releases a person wants to be offered. */
@@ -261,7 +273,49 @@ function field(json: string, key: string): string {
   return json.substring(start, end);
 }
 
-export async function check(channel: Channel = "stable"): Promise<UpdateInfo> {
+/**
+ * Every stream with a candidate published, newest first.
+ *
+ * The window shows these as the choice, so a name only appears once somebody
+ * has actually published under it - there is no list to maintain anywhere,
+ * and a stream that is finished with stops being offered as soon as its
+ * candidates fall out of the page fetched.
+ */
+function streamsIn(versions: string[]): string[] {
+  const newest = new Map<string, string>();
+  for (const version of versions) {
+    const stream = preStream(version);
+    if (stream === null) continue;
+    const held = newest.get(stream);
+    if (held === undefined || compare(version, held) > 0) newest.set(stream, version);
+  }
+  const names = [...newest.keys()];
+  names.sort((a, b) => {
+    const av = newest.get(a) ?? "";
+    const bv = newest.get(b) ?? "";
+    return compare(bv, av);
+  });
+  return names;
+}
+
+/**
+ * The stream to follow, given what the user chose and what this build is.
+ *
+ * A chosen stream wins. With none chosen, a build that is itself a candidate
+ * follows its own line - which is what somebody handed a test build expects,
+ * and it means an existing tester is never silently moved onto another
+ * branch's work. A released build has no line of its own, so it follows none
+ * until one is picked.
+ */
+function effectiveStream(chosen: string): string {
+  if (chosen.length > 0) return chosen;
+  return preStream(VERSION) ?? "";
+}
+
+export async function check(
+  channel: Channel = "stable",
+  chosenStream = "",
+): Promise<UpdateInfo> {
   const info: UpdateInfo = {
     current: VERSION,
     latest: "",
@@ -269,6 +323,8 @@ export async function check(channel: Channel = "stable"): Promise<UpdateInfo> {
     available: false,
     page: REPO.length > 0 ? "https://github.com/" + REPO + "/releases/latest" : "",
     error: "",
+    stream: channel === "test" ? effectiveStream(chosenStream) : "",
+    streams: [],
   };
 
   if (REPO.length === 0) {
@@ -316,9 +372,27 @@ export async function check(channel: Channel = "stable"): Promise<UpdateInfo> {
     return info;
   }
 
+  const versions: string[] = [];
+  for (const tag of tags) versions.push(tag.startsWith("v") ? tag.substring(1) : tag);
+
+  // Every stream with something published, so the window can offer the choice
+  // rather than making the user guess a name. Newest first, which puts the
+  // line being worked on now at the top.
+  info.streams = streamsIn(versions);
+
+  // What this build is willing to be offered.
+  //
+  // An ordinary release always counts: a tester has to be able to leave a
+  // stream by taking the release that supersedes it, and that is the only way
+  // off one. A candidate counts only when it belongs to the stream being
+  // followed - which is the whole of the fix, since comparing numbers alone
+  // is what marched a tester from one branch onto another.
   let best = "";
-  for (const tag of tags) {
-    const version = tag.startsWith("v") ? tag.substring(1) : tag;
+  for (const version of versions) {
+    const stream = preStream(version);
+    if (stream !== null) {
+      if (info.stream.length === 0 || stream !== info.stream) continue;
+    }
     if (best.length === 0 || compare(version, best) > 0) best = version;
   }
 
@@ -491,12 +565,16 @@ async function contentLength(url: string): Promise<number> {
  * one takes its name, and the leftover is deleted on the next start. On POSIX
  * replacing the file outright is fine.
  */
-export async function apply(channel: Channel = "stable"): Promise<UpdateResult> {
+export async function apply(
+  channel: Channel = "stable",
+  chosenStream = "",
+): Promise<UpdateResult> {
   progress = { phase: "checking", received: 0, total: 0, message: "Checking for the latest release" };
 
-  // The same stream the check offered from, or pressing the button would look
-  // for something the window never mentioned.
-  const info = await check(channel);
+  // The same channel AND the same stream the check offered from, or pressing
+  // the button would install something the window never mentioned - which
+  // with more than one line of development published is not a hypothetical.
+  const info = await check(channel, chosenStream);
   if (info.error.length > 0) {
     setPhase("failed", info.error);
     return { ok: false, message: info.error, restarting: false };

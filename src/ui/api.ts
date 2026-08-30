@@ -161,8 +161,8 @@ export const api = {
     ).then((r) => r.calls),
 
   /** Which releases to be offered. The engine is what talks to GitHub. */
-  setUpdateChannel: (channel: string) =>
-    post<{ ok: boolean }>("/api/update/channel", { channel }),
+  setUpdateChannel: (channel: string, stream?: string) =>
+    post<{ ok: boolean }>("/api/update/channel", { channel, stream }),
 
   /** Asks whether a newer gitc has been released. */
   checkUpdate: () => json<UpdateInfo>("/api/update"),
