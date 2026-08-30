@@ -621,20 +621,17 @@ export async function connect(
   // Same argument as the three -o flags below, which already decline to trust
   // ambient config for BatchMode, ConnectTimeout and ExitOnForwardFailure.
   const forward = "127.0.0.1:" + String(port) + ":127.0.0.1:" + String(REMOTE_PORT);
-  // The engine over there listens on the remote's loopback with nothing in
-  // front of it, which is the right bind and is NOT a trust boundary on the
-  // machines this feature is for. A build box or jump host usually has other
-  // accounts, and any of them can reach 127.0.0.1:7893 for as long as a tab is
-  // open - the port is fixed, so there is nothing to discover - and get the
-  // filesystem through /api/ls plus the whole mutating surface, as the
-  // connecting user. Documented rather than fixed: this branch is not the
-  // place to grow an authentication scheme.
+  // The engine over there listens on the remote's loopback, which is the
+  // right bind and is NOT on its own a trust boundary on the machines this
+  // feature is for: a build box or a jump host usually has other accounts,
+  // and any of them can reach 127.0.0.1:7893 on a port fixed enough that
+  // there is nothing to discover. What stops them is the token that engine
+  // demands - see Connection.token, and the announcement in main.ts.
   //
-  // When one is added, the secret cannot travel on this command line. `ps` is
-  // world-readable on exactly the hosts where this matters, so argv is the one
-  // channel that leaks it to the accounts it is meant to keep out; an
-  // environment variable sent through ssh, or a mode-600 file written by the
-  // same session, both work.
+  // The token travels on the remote's stdout, which arrives here inside the
+  // ssh channel. Not on this command line: `ps` is world-readable on exactly
+  // the hosts where this matters, so argv is the one channel that would hand
+  // the secret to the accounts it is meant to keep out.
   //
   // --port= with the equals sign: the space form is ignored, and the engine
   // would then find the default port, hand off to whatever holds it and exit.
@@ -711,11 +708,16 @@ export async function connect(
       const text = c.toString("utf8");
       if (remoteSaid.length < 4000) remoteSaid += text;
       if (token === null) {
+        // Scanned BEFORE the tail is trimmed, so a chunk that carries the
+        // whole line and then a great deal more cannot lose it between the
+        // two steps. Trimming first made that ordering matter; this way it
+        // does not.
         tokenTail += text;
-        if (tokenTail.length > TAIL) tokenTail = tokenTail.substring(tokenTail.length - TAIL);
         token = readToken(tokenTail);
-        // Nothing more to scan, and nothing to keep holding.
         if (token !== null) tokenTail = "";
+        else if (tokenTail.length > TAIL) {
+          tokenTail = tokenTail.substring(tokenTail.length - TAIL);
+        }
       }
     });
   }
@@ -752,13 +754,36 @@ export async function connect(
     onEnded();
   });
 
+  /**
+   * Something is on that port and it does not want a token.
+   *
+   * Which is not a mystery to time out over: an engine of ours always refuses
+   * an unauthenticated ping, before and after it has said anything, so a 200
+   * is proof that whatever answered is not one. In practice it is a gitc from
+   * before the token existed, still running from an earlier session - the
+   * binary gets brought up to date by ensureRemote, but a process already
+   * holding 7893 does not, and the new one exits on EADDRINUSE without ever
+   * printing a token.
+   *
+   * Worth telling apart because the alternative is the worst kind of error:
+   * thirty seconds of "Opening...", then failureReason handing back the old
+   * engine's own cheerful stdout - "gitc serving http://127.0.0.1:7893/" -
+   * as the explanation for a failure.
+   */
+  let unauthenticated = false;
+
   const started = Date.now();
   while (Date.now() - started < CONNECT_TIMEOUT_MS) {
     // The token first, then readiness. There is nothing to probe with until
     // the engine has announced itself, and it only announces once it has the
     // port - so this arriving is also the first evidence the far side is up.
-    if (token !== null && (await answering(port, token))) {
-      return { host, port, usedAt: Date.now(), inFlight: 0, token, close };
+    if (token !== null) {
+      if (await answering(port, token)) {
+        return { host, port, usedAt: Date.now(), inFlight: 0, token, close };
+      }
+    } else if ((await ping(port, null)) === 200) {
+      unauthenticated = true;
+      break;
     }
     // ssh has already gone: a refused key under BatchMode, a forward that
     // could not bind, an engine that exited on a taken port. Waiting out the
@@ -769,6 +794,26 @@ export async function connect(
   }
 
   close();
+
+  if (unauthenticated) {
+    // Two causes, and the message names both because the remedies differ.
+    //
+    // A leftover engine: the binary was brought up to date by ensureRemote,
+    // but a process already holding the port was not, and the new one exited
+    // on EADDRINUSE without printing a token.
+    //
+    // Or an older gitc that ensureRemote had no reason to replace. Version
+    // parity is an exact string match, so a remote running a release with the
+    // same version number as this build - which is every 0.5.0 remote until
+    // this change ships under a new number - is left exactly as it is.
+    throw new Error(
+      "the gitc answering on " + host + " port " + String(REMOTE_PORT) +
+        " is older than this one and does not support the connection token." +
+        " If it is left over from an earlier session, stop it there and try" +
+        " again; otherwise update gitc on " + host + ".",
+    );
+  }
+
   // withoutToken: this text reaches the UI, and a secret in an error message
   // is a secret in a screenshot.
   throw new Error(failureReason(stderr, withoutToken(remoteSaid)));
