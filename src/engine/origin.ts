@@ -1,21 +1,20 @@
 // Who is allowed to talk to the engine.
 //
-// gitc binds loopback and has no authentication of any kind: whatever reaches
-// the port gets the filesystem through /api/ls and /api/diff, and every
-// mutating operation through /api/op, as the user running gitc. Loopback was
-// the whole of the boundary, and a browser walks through it two ways - so
-// these are the checks that put it back.
+// Loopback used to be the whole of the boundary, and a browser walks through
+// it two ways - so these are the checks that put it back. A desktop engine
+// has nothing else in front of it; an engine started with --serve also
+// demands a token, which is a different question answered in main.ts.
 //
 // Kept out of main.ts so they can be tested without starting a server.
 
 /**
  * Whether a request may be answered at all.
  *
- * The engine binds loopback and has no authentication of any kind: whatever
- * reaches it gets the filesystem through /api/ls and /api/diff, and every
- * mutating operation through /api/op, as the user running gitc. Loopback is
- * the whole of the boundary, and a browser punches straight through it in two
- * different ways.
+ * What these guard is worth stating plainly: whatever reaches this engine gets
+ * the filesystem through /api/ls and /api/diff, and every mutating operation
+ * through /api/op, as the user running gitc. Before these checks existed,
+ * loopback was the only thing in the way, and a browser punches straight
+ * through it in two different ways.
  *
  * A page on any website can POST here. It cannot READ the answer without CORS
  * - which is never sent - but it does not need to: adding a remote, checking
@@ -114,10 +113,15 @@ function exemptFromContentType(url: string | undefined): boolean {
 /**
  * Whether a Host header names this engine on loopback.
  *
- * By address only. "localhost" is accepted because Chromium uses it for
- * nothing here but a person might type it, and it cannot be pointed
- * elsewhere by DNS in any browser that implements the modern rules - but any
- * other name is refused, which is what stops a rebound domain.
+ * By address, plus "localhost" - which gitc never puts in a URL itself, but a
+ * person typing one will. Any other name is refused, and that is what stops a
+ * rebound domain: the attacker's page reaches this engine under the name they
+ * control, and the name is what arrives here.
+ *
+ * The server binds 127.0.0.1 and nothing else, so every request that gets this
+ * far already arrived over loopback. This check is not about where the packet
+ * came from; it is about what the browser believes it is talking to, which is
+ * the only thing that decides whether it will hand over the answers.
  */
 export function isLoopbackHost(header: string): boolean {
   let value = header.trim().toLowerCase();
@@ -145,8 +149,7 @@ export function isLoopbackHost(header: string): boolean {
   if (colon !== -1) value = value.substring(0, colon);
 
   if (value === "localhost") return true;
-  // Every address in 127.0.0.0/8 is loopback, and Chromium does use more than
-  // .1 in some configurations.
+  // The whole of 127.0.0.0/8 is loopback (RFC 1122), not just 127.0.0.1.
   return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(value);
 }
 
@@ -192,7 +195,10 @@ export function isLoopbackOrigin(origin: string, port: number, dev: boolean): bo
     if (name !== "localhost" && !/^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(name)) return false;
   }
 
-  // An http origin with no port is port 80, which this engine never binds.
+  // An origin with no port means the scheme's default. Compared against the
+  // port this engine actually bound rather than assumed to be wrong: gitc
+  // takes --port, so somebody running it on 80 is unusual but not impossible,
+  // and the comparison below is what decides either way.
   const number = given.length === 0 ? (value.startsWith("https://") ? 443 : 80) : parseInt(given, 10);
   if (isNaN(number)) return false;
   if (number === port) return true;

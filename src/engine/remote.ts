@@ -796,16 +796,20 @@ export async function connect(
   close();
 
   if (unauthenticated) {
-    // Two causes, and the message names both because the remedies differ.
+    // Rare, and defensive rather than load-bearing.
     //
-    // A leftover engine: the binary was brought up to date by ensureRemote,
-    // but a process already holding the port was not, and the new one exited
-    // on EADDRINUSE without printing a token.
+    // ensureRemote has already brought the remote's BINARY to this exact
+    // version before connect() runs, and every release carries a distinct
+    // number, so an out of date gitc is not normally what is on that port.
+    // What can still be there is a process: an old engine holding 7893 from
+    // an earlier session, which an upgraded binary does not displace. That
+    // one usually reports itself, though - the new engine exits on
+    // EADDRINUSE, ssh goes with it, and `ended` breaks the loop below before
+    // this ping resolves, so the remote's own "port 7893 is already in use"
+    // is what comes back.
     //
-    // Or an older gitc that ensureRemote had no reason to replace. Version
-    // parity is an exact string match, so a remote running a release with the
-    // same version number as this build - which is every 0.5.0 remote until
-    // this change ships under a new number - is left exactly as it is.
+    // What is left is whatever else might answer on that port, which is the
+    // reason to fail fast here rather than wait out the full timeout.
     //
     // Worded as what was observed rather than as what it probably is. All
     // this establishes is that something answered without demanding a token;
