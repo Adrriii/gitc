@@ -363,6 +363,45 @@ export function useUpdateChannel() {
   return { channel, set };
 }
 
+const UPDATE_STREAM_KEY = "gitc.updateStream";
+
+/**
+ * A stream name as published, or null.
+ *
+ * Read back rather than trusted: this is the only setting whose value comes
+ * from names somebody invented when tagging, so it is worth being narrow
+ * about what counts as one.
+ */
+function parseStream(raw: string): string | null {
+  if (raw.length === 0 || raw.length > 40) return null;
+  return /^[A-Za-z0-9][A-Za-z0-9.-]*$/.test(raw) ? raw : null;
+}
+
+/**
+ * Which line of development the test channel follows.
+ *
+ * Defaults to the one this build belongs to, so a tester handed a candidate
+ * stays on its line rather than being moved onto whichever branch tagged the
+ * highest number - which is exactly what happened before streams existed.
+ */
+export function useUpdateStream() {
+  const own = VERSION.includes("-") ? (streamOf(VERSION) ?? "") : "";
+  const [stream, set] = useStored<string>(UPDATE_STREAM_KEY, own, parseStream);
+  return { stream, set };
+}
+
+/** The stream part of a version, matching engine/semver.ts preStream. */
+function streamOf(version: string): string | null {
+  const dash = version.indexOf("-");
+  if (dash === -1) return null;
+  for (const piece of version.substring(dash + 1).split(".")) {
+    if (piece.length === 0) continue;
+    const n = parseInt(piece, 10);
+    if (isNaN(n) || String(n) !== piece) return piece;
+  }
+  return null;
+}
+
 const UPDATE_LEVEL_KEY = "gitc.updateLevel";
 
 function parseUpdateLevel(raw: string): Bump | null {

@@ -53,6 +53,7 @@ import {
   useUpdateCheck,
   useRemoteHold,
   useUpdateChannel,
+  useUpdateStream,
   useUpdateLevel,
 } from "./settings";
 import { shouldPrompt } from "./version";
@@ -232,6 +233,7 @@ export function App() {
   const { level: updateLevel } = useUpdateLevel();
   const { minutes: remoteHold } = useRemoteHold();
   const { channel: updateChannel } = useUpdateChannel();
+  const { stream: updateStream } = useUpdateStream();
 
   // The engine holds the connections; this screen holds the preference, as it
   // does for every other setting. Told on arrival and whenever it changes.
@@ -375,6 +377,8 @@ export function App() {
             switching: false,
             page: "",
             error: e.message,
+            stream: "",
+            streams: [],
           });
         }
       })
@@ -383,14 +387,16 @@ export function App() {
       });
   }, []);
 
-  // Told, then asked again. Changing stream is only meaningful if what is on
-  // offer changes with it, and the answer already held was for the old one.
+  // Told, then asked again. Changing either of these is only meaningful if
+  // what is on offer changes with it, and the answer already held was for the
+  // old one. The stream travels with the channel because the engine needs
+  // both to decide which candidates count.
   useEffect(() => {
     void api
-      .setUpdateChannel(updateChannel)
+      .setUpdateChannel(updateChannel, updateStream)
       .then(() => checkUpdate(false))
       .catch(() => undefined);
-  }, [updateChannel, checkUpdate]);
+  }, [updateChannel, updateStream, checkUpdate]);
 
   /**
    * Follows the update while it runs.

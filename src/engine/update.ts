@@ -20,13 +20,12 @@ import {
   writeFileSync,
   chmodSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { promisify } from "node:util";
 
 import { REPO, VERSION } from "../generated/version.ts";
 import { installedBinary } from "./install.ts";
-import { compare, isPrerelease } from "./semver.ts";
+import { tempFile } from "./paths.ts";
+import { compare, isPrerelease, preStream } from "./semver.ts";
 
 const execFileAsync = promisify(execFile);
 const windows = process.platform === "win32";
@@ -48,6 +47,18 @@ export interface UpdateInfo {
   page: string;
   /** Empty unless something went wrong, in which case it says what. */
   error: string;
+  /**
+   * The line of development being followed, "" for none.
+   *
+   * More than one branch can have candidates published at once, and before
+   * this the updater compared numbers alone - so tagging a candidate on one
+   * branch offered it to every tester on another, whose build had nothing to
+   * do with it. A stream is chosen, and only that stream's candidates and
+   * ordinary releases are offered.
+   */
+  stream: string;
+  /** Every stream with candidates published, newest first. For the picker. */
+  streams: string[];
 }
 
 /** Which releases a person wants to be offered. */
@@ -70,7 +81,7 @@ export type Channel = "stable" | "test";
  */
 function apiUrl(channel: Channel): string {
   const custom = process.env["GITC_UPDATE_API"];
-  if (custom !== undefined && custom.length > 0) return custom;
+  if (custom !== undefined && custom.length > 0) return secureUrl(custom, "GITC_UPDATE_API");
   const base = "https://api.github.com/repos/" + REPO + "/releases";
   // /releases/latest is defined as the newest release that is neither draft
   // nor prerelease, so the stable stream needs no filtering of its own. The
@@ -88,9 +99,56 @@ function apiUrl(channel: Channel): string {
 function downloadBase(tag: string): string {
   const custom = process.env["GITC_UPDATE_BASE"];
   if (custom !== undefined && custom.length > 0) {
-    return custom.endsWith("/") ? custom + tag + "/" : custom + "/" + tag + "/";
+    const base = secureUrl(custom, "GITC_UPDATE_BASE");
+    return base.endsWith("/") ? base + tag + "/" : base + "/" + tag + "/";
   }
   return "https://github.com/" + REPO + "/releases/download/" + tag + "/";
+}
+
+/**
+ * Refuses an update source that is not https.
+ *
+ * These two variables exist so a fork or a self-hosted build can publish
+ * somewhere else, which is a good reason for them to exist and no reason at
+ * all for them to accept "http://". The whole of the trust in an update is
+ * that the bytes came from the right host over TLS - the checksums sit beside
+ * the binary, so they cannot vouch for it on their own - and a plaintext
+ * source hands the next version of the binary to anybody on the path.
+ *
+ * Loopback is allowed because that is how the release flow is tested, and it
+ * is not a network anyone else is on.
+ */
+function secureUrl(value: string, name: string): string {
+  const trimmed = value.trim();
+  const lower = trimmed.toLowerCase();
+  if (lower.startsWith("https://")) return trimmed;
+
+  // The loopback exemption compares the parsed host, not a prefix.
+  // startsWith("http://127.0.0.1") also accepts
+  // "http://127.0.0.1.evil.example/", which is a name anybody can register -
+  // and whoever set the variable serves both the binary and the checksums, so
+  // fail-closed verification would have passed them happily.
+  if (lower.startsWith("http://")) {
+    const rest = lower.substring("http://".length);
+    const cut = rest.search(/[/:?#]/);
+    const host = cut === -1 ? rest : rest.substring(0, cut);
+    if (host === "localhost" || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)) return trimmed;
+  }
+
+  throw new Error(name + " must be an https URL - refusing to update over " + value);
+}
+
+/**
+ * A tag as it may appear in a download URL.
+ *
+ * The tag comes out of the release feed and is pasted straight into a path.
+ * Anything with a slash, a dot-dot or a query in it would fetch something
+ * other than the release it names, so the shape is checked rather than
+ * trusted: versions and tags are letters, digits, dots, dashes, underscores
+ * and plus signs, and nothing here has ever needed more.
+ */
+function safeTag(tag: string): boolean {
+  return tag.length > 0 && tag.length <= 100 && /^[A-Za-z0-9._+-]+$/.test(tag) && !tag.includes("..");
 }
 
 /** The asset this platform needs from a release. */
@@ -215,7 +273,49 @@ function field(json: string, key: string): string {
   return json.substring(start, end);
 }
 
-export async function check(channel: Channel = "stable"): Promise<UpdateInfo> {
+/**
+ * Every stream with a candidate published, newest first.
+ *
+ * The window shows these as the choice, so a name only appears once somebody
+ * has actually published under it - there is no list to maintain anywhere,
+ * and a stream that is finished with stops being offered as soon as its
+ * candidates fall out of the page fetched.
+ */
+function streamsIn(versions: string[]): string[] {
+  const newest = new Map<string, string>();
+  for (const version of versions) {
+    const stream = preStream(version);
+    if (stream === null) continue;
+    const held = newest.get(stream);
+    if (held === undefined || compare(version, held) > 0) newest.set(stream, version);
+  }
+  const names = [...newest.keys()];
+  names.sort((a, b) => {
+    const av = newest.get(a) ?? "";
+    const bv = newest.get(b) ?? "";
+    return compare(bv, av);
+  });
+  return names;
+}
+
+/**
+ * The stream to follow, given what the user chose and what this build is.
+ *
+ * A chosen stream wins. With none chosen, a build that is itself a candidate
+ * follows its own line - which is what somebody handed a test build expects,
+ * and it means an existing tester is never silently moved onto another
+ * branch's work. A released build has no line of its own, so it follows none
+ * until one is picked.
+ */
+function effectiveStream(chosen: string): string {
+  if (chosen.length > 0) return chosen;
+  return preStream(VERSION) ?? "";
+}
+
+export async function check(
+  channel: Channel = "stable",
+  chosenStream = "",
+): Promise<UpdateInfo> {
   const info: UpdateInfo = {
     current: VERSION,
     latest: "",
@@ -223,6 +323,8 @@ export async function check(channel: Channel = "stable"): Promise<UpdateInfo> {
     available: false,
     page: REPO.length > 0 ? "https://github.com/" + REPO + "/releases/latest" : "",
     error: "",
+    stream: channel === "test" ? effectiveStream(chosenStream) : "",
+    streams: [],
   };
 
   if (REPO.length === 0) {
@@ -234,6 +336,16 @@ export async function check(channel: Channel = "stable"): Promise<UpdateInfo> {
     return info;
   }
 
+  // apiUrl refuses a plaintext override, and that refusal is an answer to
+  // report rather than a crash in the middle of a poll.
+  let endpoint: string;
+  try {
+    endpoint = apiUrl(channel);
+  } catch (e) {
+    info.error = (e as Error).message;
+    return info;
+  }
+
   const body = await curl([
     ...META_TIMEOUT,
     "-fsSL",
@@ -241,7 +353,7 @@ export async function check(channel: Channel = "stable"): Promise<UpdateInfo> {
     "accept: application/vnd.github+json",
     "-H",
     "user-agent: gitc/" + VERSION,
-    apiUrl(channel),
+    endpoint,
   ]);
 
   if (body === null) {
@@ -254,15 +366,33 @@ export async function check(channel: Channel = "stable"): Promise<UpdateInfo> {
   // The highest, not the first. A list comes back newest-first by DATE, and a
   // stable hotfix published after an rc would otherwise be the only candidate
   // considered - hiding the rc that is actually newer.
-  const tags = tagNames(body);
+  const tags = tagNames(body).filter(safeTag);
   if (tags.length === 0) {
     info.error = "the release could not be read";
     return info;
   }
 
+  const versions: string[] = [];
+  for (const tag of tags) versions.push(tag.startsWith("v") ? tag.substring(1) : tag);
+
+  // Every stream with something published, so the window can offer the choice
+  // rather than making the user guess a name. Newest first, which puts the
+  // line being worked on now at the top.
+  info.streams = streamsIn(versions);
+
+  // What this build is willing to be offered.
+  //
+  // An ordinary release always counts: a tester has to be able to leave a
+  // stream by taking the release that supersedes it, and that is the only way
+  // off one. A candidate counts only when it belongs to the stream being
+  // followed - which is the whole of the fix, since comparing numbers alone
+  // is what marched a tester from one branch onto another.
   let best = "";
-  for (const tag of tags) {
-    const version = tag.startsWith("v") ? tag.substring(1) : tag;
+  for (const version of versions) {
+    const stream = preStream(version);
+    if (stream !== null) {
+      if (info.stream.length === 0 || stream !== info.stream) continue;
+    }
     if (best.length === 0 || compare(version, best) > 0) best = version;
   }
 
@@ -435,12 +565,16 @@ async function contentLength(url: string): Promise<number> {
  * one takes its name, and the leftover is deleted on the next start. On POSIX
  * replacing the file outright is fine.
  */
-export async function apply(channel: Channel = "stable"): Promise<UpdateResult> {
+export async function apply(
+  channel: Channel = "stable",
+  chosenStream = "",
+): Promise<UpdateResult> {
   progress = { phase: "checking", received: 0, total: 0, message: "Checking for the latest release" };
 
-  // The same stream the check offered from, or pressing the button would look
-  // for something the window never mentioned.
-  const info = await check(channel);
+  // The same channel AND the same stream the check offered from, or pressing
+  // the button would install something the window never mentioned - which
+  // with more than one line of development published is not a hypothetical.
+  const info = await check(channel, chosenStream);
   if (info.error.length > 0) {
     setPhase("failed", info.error);
     return { ok: false, message: info.error, restarting: false };
@@ -452,9 +586,25 @@ export async function apply(channel: Channel = "stable"): Promise<UpdateResult> 
   }
 
   const tag = "v" + info.latest;
-  const base = downloadBase(tag);
+  if (!safeTag(tag)) {
+    const message = "the release tag " + tag + " is not a shape gitc will fetch";
+    setPhase("failed", message);
+    return { ok: false, message, restarting: false };
+  }
+  let base: string;
+  try {
+    base = downloadBase(tag);
+  } catch (e) {
+    const message = (e as Error).message;
+    setPhase("failed", message);
+    return { ok: false, message, restarting: false };
+  }
   const asset = assetName();
-  const temp = join(tmpdir(), "gitc-update-" + info.latest + (windows ? ".exe" : ""));
+  // In this process's own temp directory. The old name was derived from the
+  // release tag, so it was known in advance: on a shared /tmp another account
+  // could pre-create it as a symlink, or - worse - swap the verified file for
+  // their own between the checksum below and the copy that installs it.
+  const temp = tempFile("update-" + info.latest + (windows ? ".exe" : ""));
   const url = base + asset;
 
   const total = await contentLength(url);
@@ -471,21 +621,43 @@ export async function apply(channel: Channel = "stable"): Promise<UpdateResult> 
   // Verify against the checksums published beside the binary. A release
   // without them still installs - the file came from the same place either
   // way - but a mismatch is a hard stop.
+  // Fails CLOSED. This check used to be skipped entirely when SHA256SUMS
+  // could not be fetched, and again when the file did not list this asset -
+  // so the one condition it was meant to catch, somebody able to interfere
+  // with the download, was also the condition that switched it off. Whoever
+  // can substitute the binary can drop the sums request just as easily.
+  //
+  // What this does and does not buy is worth being honest about: the sums
+  // live beside the binary, so they are integrity against a corrupted or
+  // truncated download, not authenticity. HTTPS to the release host is what
+  // makes the pair mean anything, and a signature would be what replaces
+  // this. Until then, a missing checksum is a refused update.
   setPhase("verifying", "Checking the download against its published checksum");
   const sums = await curl([...META_TIMEOUT, "-fsSL", base + "SHA256SUMS"]);
-  if (sums !== null) {
-    const actual = createHash("sha256").update(readFileSync(temp)).digest("hex");
-    let expected = "";
-    for (const line of sums.split(String.fromCharCode(10))) {
-      const parts = line.trim().split(/\s+/);
-      if (parts.length >= 2 && parts[1].replace(/^\*/, "") === asset) expected = parts[0];
-    }
-    if (expected.length > 0 && expected.toLowerCase() !== actual.toLowerCase()) {
-      rmSync(temp, { force: true });
-      const message = "the download did not match its published checksum - update cancelled";
-      setPhase("failed", message);
-      return { ok: false, message, restarting: false };
-    }
+  if (sums === null) {
+    rmSync(temp, { force: true });
+    const message = "could not fetch the published checksums for " + tag + " - update cancelled";
+    setPhase("failed", message);
+    return { ok: false, message, restarting: false };
+  }
+
+  const actual = createHash("sha256").update(readFileSync(temp)).digest("hex");
+  let expected = "";
+  for (const line of sums.split(String.fromCharCode(10))) {
+    const parts = line.trim().split(/\s+/);
+    if (parts.length >= 2 && parts[1].replace(/^\*/, "") === asset) expected = parts[0];
+  }
+  if (expected.length === 0) {
+    rmSync(temp, { force: true });
+    const message = "the published checksums for " + tag + " do not list " + asset;
+    setPhase("failed", message);
+    return { ok: false, message, restarting: false };
+  }
+  if (expected.toLowerCase() !== actual.toLowerCase()) {
+    rmSync(temp, { force: true });
+    const message = "the download did not match its published checksum - update cancelled";
+    setPhase("failed", message);
+    return { ok: false, message, restarting: false };
   }
 
   setPhase("installing", "Putting the new version in place");

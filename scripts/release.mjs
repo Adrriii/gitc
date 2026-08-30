@@ -17,6 +17,9 @@
 //                      release notes on the published page
 //     --author "N <e>" author for the release commit (default: git's own)
 //     --branch <name>  branch to release from (default: the current one)
+//     --stream <name>  the line of development a candidate belongs to
+//                      (default: the branch name). Testers follow one stream
+//                      and are not offered another's candidates.
 //     --skip-verify    tag without the build-only run first
 //     --dry-run        print the plan and change nothing
 //     --yes            allow the tag push without a terminal to confirm at
@@ -46,7 +49,7 @@ const WORKFLOW = "release.yml";
 const argv = process.argv.slice(2);
 
 /** The flags that take a value, so their value is never read as the version. */
-const VALUED = ["-m", "-F", "--author", "--branch"];
+const VALUED = ["-m", "-F", "--author", "--branch", "--stream"];
 
 function flag(name) {
   const i = argv.indexOf(name);
@@ -153,29 +156,63 @@ function bumped(current, kind) {
  * starts a run for the next patch, and `minor-rc` chooses a bigger target when
  * the branch is heading somewhere larger.
  */
-function nextRc(current, base) {
+function nextRc(current, base, stream) {
   // A candidate is for the version NEXT, never the one already out: 0.4.4-rc.1
   // sorts BELOW 0.4.4, so a tester on it would be offered the release it was
   // meant to precede, as though the test build were the newer thing.
   const target = base ?? (current.includes("-") ? current.split("-")[0] : bumped(current, "patch"));
-  const prefix = `${target}-rc.`;
-  if (!current.startsWith(prefix)) return `${target}-rc.1`;
+  const prefix = `${target}-${stream}.`;
+  if (!current.startsWith(prefix)) return `${target}-${stream}.1`;
   const n = Number(current.slice(prefix.length));
-  return `${target}-rc.${Number.isFinite(n) ? n + 1 : 1}`;
+  return `${target}-${stream}.${Number.isFinite(n) ? n + 1 : 1}`;
 }
 
+/**
+ * The line of development a candidate belongs to, taken from the branch.
+ *
+ * Every candidate used to be called "-rc.N", which said nothing about which
+ * work it carried. The updater compared numbers alone, so tagging 0.5.1 on
+ * one branch offered it to every tester on another branch's 0.4.5 - a
+ * different feature entirely, with no way to decline. Naming the stream in
+ * the version is what lets a tester follow one line and ignore the rest; see
+ * preStream in engine/semver.ts, which reads it back.
+ *
+ * Semver splits the prerelease part on dots and allows only [0-9A-Za-z-] in
+ * an identifier, so anything else in a branch name becomes a dash. A name
+ * that is all digits would be read as a candidate number rather than a
+ * stream, so it is refused rather than quietly mangled.
+ */
+function streamFrom(branchName) {
+  const name = branchName
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+  if (name.length === 0) die(`cannot make a stream name out of the branch "${branchName}"`);
+  if (/^[0-9]+$/.test(name)) die(`"${name}" would read as a candidate number, not a stream`);
+  return name;
+}
+
+// Resolved before the version, because a candidate's version now carries the
+// name of the line it belongs to.
+const branch = flag("--branch") ?? git("rev-parse", "--abbrev-ref", "HEAD").out;
+const stream = flag("--stream") ?? streamFrom(branch);
+
 let version;
-if (target === "rc") version = nextRc(pkg.version, null);
+if (target === "rc") version = nextRc(pkg.version, null, stream);
 else if (["major", "minor", "patch"].includes(target)) version = bumped(pkg.version, target);
 else if (["major-rc", "minor-rc", "patch-rc"].includes(target)) {
-  version = nextRc(pkg.version, bumped(pkg.version, target.slice(0, -3)));
+  version = nextRc(pkg.version, bumped(pkg.version, target.slice(0, -3)), stream);
 } else version = target;
 
 // A prerelease part is allowed, and is what keeps a test build out of the main
 // update stream: the workflow publishes any tag containing "-" as a GitHub
 // prerelease, and /releases/latest - which every released gitc asks for - is
 // defined to skip those.
-if (!/^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$/.test(version)) {
+// The hyphen inside the class is semver's, not decoration: a prerelease
+// identifier is [0-9A-Za-z-], and stream names come from branch names, which
+// have hyphens in them far more often than not.
+if (!/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(version)) {
   die(`"${version}" is not a version like 1.2.3 or 1.2.3-rc.1`);
 }
 const prerelease = version.includes("-");
@@ -189,8 +226,7 @@ console.log(`releasing gitc ${version}${dryRun ? "  (dry run)" : ""}`);
 
 step("Checking the ground");
 
-const branch = flag("--branch") ?? git("rev-parse", "--abbrev-ref", "HEAD").out;
-info(`branch ${branch}${prerelease ? "  (prerelease)" : ""}`);
+info(`branch ${branch}${prerelease ? `  (prerelease, stream "${stream}")` : ""}`);
 
 // A release candidate is for a branch. Cutting one from master would put a
 // version nobody is offered on the branch everybody builds from.

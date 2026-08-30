@@ -1,0 +1,168 @@
+import { allowedRequest, isLoopbackHost, isLoopbackOrigin } from "../origin.ts";
+
+let pass = 0;
+let fail = 0;
+
+function eq(label: string, got: unknown, want: unknown) {
+  const ok = JSON.stringify(got) === JSON.stringify(want);
+  if (ok) pass++;
+  else fail++;
+  console.log(
+    `${ok ? "  ok  " : " FAIL "} ${label}\n        got  ${JSON.stringify(got)}\n        want ${JSON.stringify(want)}`,
+  );
+}
+
+const PORT = 7893;
+
+/** Just enough of an IncomingMessage for the guard to read. */
+function req(headers: Record<string, string>, method = "GET", url = "/api/op") {
+  return { headers, method, url } as unknown as import("node:http").IncomingMessage;
+}
+
+// --- Host: the DNS rebinding defence --------------------------------------
+//
+// The attacker points their own name at 127.0.0.1. The browser then treats
+// their page as same-origin with this server and can read every answer. Their
+// name is what arrives in Host, and it is the only place the two cases differ.
+
+eq("loopback by address", isLoopbackHost("127.0.0.1:7893"), true);
+eq("loopback, no port", isLoopbackHost("127.0.0.1"), true);
+eq("elsewhere in 127/8", isLoopbackHost("127.7.7.7:7893"), true);
+eq("localhost", isLoopbackHost("localhost:7893"), true);
+eq("ipv6 loopback", isLoopbackHost("[::1]:7893"), true);
+eq("ipv6 loopback long form", isLoopbackHost("[0:0:0:0:0:0:0:1]:7893"), true);
+eq("case", isLoopbackHost("LOCALHOST:7893"), true);
+
+eq("a rebound name", isLoopbackHost("gitc.evil.example:7893"), false);
+eq("a rebound name, no port", isLoopbackHost("evil.example"), false);
+eq("a name that merely contains 127.0.0.1", isLoopbackHost("127.0.0.1.evil.example"), false);
+eq("another machine", isLoopbackHost("192.168.1.10:7893"), false);
+// The port is not compared: rebinding is about the NAME, and Vite's dev
+// proxy legitimately forwards "127.0.0.1:5173".
+eq("another port on loopback", isLoopbackHost("127.0.0.1:9999"), true);
+eq("the vite dev proxy", isLoopbackHost("127.0.0.1:5173"), true);
+eq("an unclosed bracket", isLoopbackHost("[::1:7893"), false);
+eq("a non-loopback ipv6", isLoopbackHost("[::2]:7893"), false);
+
+// --- Origin: the CSRF defence ---------------------------------------------
+//
+// A page anywhere on the web can POST here. It cannot read the answer, but a
+// write does not need to be read: adding a remote was remote code execution.
+// A "text/plain" body is CORS-simple, so there is no preflight to decline -
+// Origin is what separates the window from somebody else's page.
+
+eq("the window", isLoopbackOrigin("http://127.0.0.1:7893", PORT, false), true);
+// Another local web server is NOT the window. One XSS in any of them would
+// otherwise be a page that can drive gitc.
+eq("another local server", isLoopbackOrigin("http://127.0.0.1:3000", PORT, false), false);
+eq("vite, but not in dev", isLoopbackOrigin("http://127.0.0.1:5173", PORT, false), false);
+eq("vite in the dev loop", isLoopbackOrigin("http://127.0.0.1:5173", PORT, true), true);
+eq("no port means 80", isLoopbackOrigin("http://127.0.0.1", PORT, false), false);
+eq("localhost", isLoopbackOrigin("http://localhost:7893", PORT, false), true);
+eq("ipv6", isLoopbackOrigin("http://[::1]:7893", PORT, false), true);
+
+eq("a website", isLoopbackOrigin("https://evil.example", PORT, false), false);
+eq("a website on a port", isLoopbackOrigin("https://evil.example:7893", PORT, false), false);
+eq("a lookalike host", isLoopbackOrigin("https://127.0.0.1.evil.example", PORT, false), false);
+eq("a lookalike in the path", isLoopbackOrigin("https://evil.example/127.0.0.1", PORT, false), false);
+eq("a file page", isLoopbackOrigin("file://", PORT, false), false);
+
+// --- the guard as a whole -------------------------------------------------
+
+eq(
+  "the window's own request",
+  allowedRequest(req({ host: "127.0.0.1:7893", origin: "http://127.0.0.1:7893", "sec-fetch-site": "same-origin" }), PORT, false),
+  true,
+);
+// Neither header, which is curl and equally a browser too old to ship Fetch
+// Metadata - nothing here tells those apart, and the read is answered either
+// way. It is the content-type gate below that stops a cross-site WRITE in this
+// shape; naming this case "a non-browser client" was assuming the answer.
+eq(
+  "no Origin and no Sec-Fetch-Site: a read is answered",
+  allowedRequest(req({ host: "127.0.0.1:7893" }), PORT, false),
+  true,
+);
+eq(
+  "no Origin and no Sec-Fetch-Site: a write still needs a JSON body",
+  allowedRequest(
+    req({ host: "127.0.0.1:7893", "content-type": "text/plain" }, "POST"),
+    PORT,
+    false,
+  ),
+  false,
+);
+eq(
+  "the address bar",
+  allowedRequest(req({ host: "127.0.0.1:7893", "sec-fetch-site": "none" }), PORT, false),
+  true,
+);
+
+// This exact request added a remote and ran a command, measured, before the
+// guard existed.
+eq(
+  "a cross-site POST",
+  allowedRequest(req({
+      host: "127.0.0.1:7893",
+      origin: "https://evil.example",
+      "content-type": "text/plain;charset=UTF-8",
+    }, "POST"), PORT, false),
+  false,
+);
+eq(
+  "a cross-site form with no Origin",
+  allowedRequest(
+    req({ host: "127.0.0.1:7893", "sec-fetch-site": "cross-site" }, "POST"),
+    PORT,
+    false,
+  ),
+  false,
+);
+eq(
+  "a same-site subdomain",
+  allowedRequest(req({ host: "127.0.0.1:7893", "sec-fetch-site": "same-site" }), PORT, false),
+  false,
+);
+eq(
+  "a rebound name",
+  allowedRequest(req({ host: "gitc.evil.example:7893" }), PORT, false),
+  false,
+);
+
+// A sandboxed iframe sends this, and so do some redirects and file:// pages.
+// None of them is ever a gitc window, so the literal string is refused rather
+// than treated as "no origin" - which is what it used to be.
+eq(
+  "an origin of literally null",
+  allowedRequest(req({ host: "127.0.0.1:7893", origin: "null" }), PORT, false),
+  false,
+);
+
+// --- the one hole in the content-type gate --------------------------------
+//
+// When neither Origin nor Sec-Fetch-Site is present, the content type is the
+// whole of what stops a cross-site write, and /api/bye is the single path let
+// past it - because sendBeacon cannot choose a content type, and the window
+// has to be able to say goodbye while it is being torn down.
+//
+// So the shape of that carve-out is worth pinning. Until these existed, req()
+// set no url at all, exemptFromContentType saw undefined on every call, and
+// widening the exemption to a prefix match would not have failed one
+// assertion.
+
+/** A beacon: POST, no Origin, no Sec-Fetch-Site, the type sendBeacon sends. */
+const beacon = (url: string) =>
+  allowedRequest(
+    req({ host: "127.0.0.1:7893", "content-type": "text/plain" }, "POST", url),
+    PORT,
+    false,
+  );
+
+eq("/api/bye is exempt", beacon("/api/bye"), true);
+eq("a query string does not change that", beacon("/api/bye?x=1"), true);
+eq("the exemption is not a prefix", beacon("/api/byefoo"), false);
+eq("nothing traverses out of it", beacon("/api/bye/../op"), false);
+eq("and nothing else is exempt", beacon("/api/op"), false);
+
+console.log(`\n${pass} passed, ${fail} failed`);
+if (fail > 0) process.exit(1);

@@ -4,11 +4,10 @@
 // rather than touching .git ourselves - that was the whole point of the
 // hybrid split. Reads can afford to be clever; writes cannot.
 
-import { writeFileSync, existsSync, mkdirSync, unlinkSync } from "node:fs";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { writeFileSync, existsSync, unlinkSync } from "node:fs";
 
 import { git, gitOrNull } from "./git.ts";
+import { tempFile } from "./paths.ts";
 
 /**
  * Stages paths.
@@ -74,9 +73,11 @@ export async function discardPaths(
 }
 
 function messageFile(summary: string, description: string): string {
-  const dir = join(tmpdir(), "gitc");
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  const path = join(dir, "COMMIT_EDITMSG-" + String(process.pid));
+  // tempDir() rather than a "gitc" directory in the shared temp directory:
+  // that name is guessable, and whoever creates it first owns it - including
+  // another account on a multi-user machine, who could then read every commit
+  // message written here or point it somewhere by symlink.
+  const path = tempFile("COMMIT_EDITMSG-" + String(process.pid));
 
   const LF = String.fromCharCode(10);
   // git's own convention: subject, blank line, body.

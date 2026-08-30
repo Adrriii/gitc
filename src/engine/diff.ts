@@ -13,9 +13,9 @@
 // the line numbers are git's own.
 
 import { readFileSync, existsSync, statSync } from "node:fs";
-import { join } from "node:path";
 
 import { git, gitOrNull } from "./git.ts";
+import { inRepo } from "./paths.ts";
 import { at } from "./safe.ts";
 
 /** Files past this size are reported rather than rendered line by line. */
@@ -313,7 +313,12 @@ function newFileDiff(repo: string, path: string, context: number): FileDiff {
     whole: context >= FULL_CONTEXT,
   };
 
-  const full = join(repo, path);
+  // The caller's path is repository-relative and arrives over the API.
+  // `join` resolves "..", so this read used to reach any file the engine
+  // could open and hand it back as a diff of a "new" file - measured against
+  // a running engine with ?untracked=1 and a path of "../secret.txt".
+  const full = inRepo(repo, path);
+  if (full === null) return out;
   if (!existsSync(full)) return out;
 
   if (statSync(full).size > MAX_INLINE_BYTES) {

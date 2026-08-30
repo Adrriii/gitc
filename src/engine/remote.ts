@@ -405,8 +405,77 @@ export interface Connection {
    * git under it - while the request it belongs to is still running.
    */
   inFlight: number;
+  /**
+   * The secret the engine at the far end demands on every request.
+   *
+   * A remote engine listens on the remote machine's loopback with nothing in
+   * front of it, and every other account on that machine can reach loopback.
+   * A build box or a jump host - which is what this feature is for - usually
+   * has several. Without this, any of them could read the filesystem through
+   * /api/ls and /api/diff and run /api/op, /api/discard and /api/commit as
+   * the connecting user, for as long as a tab was open, on a port fixed at
+   * 7893 so there was nothing to discover.
+   *
+   * The engine invents it, and prints it on its own stdout - which travels
+   * back inside the ssh channel and nowhere else. Deliberately NOT the
+   * command line: `ps` is world-readable on exactly the hosts where this
+   * matters, so argv is the one channel that would hand the secret to the
+   * accounts it is meant to keep out.
+   */
+  token: string;
   /** Ends the tunnel and, with it, the remote engine. */
   close: () => void;
+}
+
+/**
+ * The line a --serve engine prints to hand its token back up the tunnel.
+ *
+ * A distinctive prefix rather than a position: the remote prints other things
+ * first, and with -tt everything it says arrives on one stream.
+ */
+export const TOKEN_LINE = "gitc-token:";
+
+/**
+ * Reads the token out of whatever the remote has said so far.
+ *
+ * Returns null until the line has arrived in full - a pty delivers it in
+ * whatever chunks it likes, so a prefix with no newline yet is not an answer.
+ */
+export function readToken(said: string): string | null {
+  const at = said.indexOf(TOKEN_LINE);
+  if (at === -1) return null;
+  const from = at + TOKEN_LINE.length;
+  // A pty ends lines with CR LF, and the CR is part of neither.
+  let end = said.length;
+  for (let i = from; i < said.length; i++) {
+    const c = said.charAt(i);
+    if (c === String.fromCharCode(10) || c === String.fromCharCode(13)) {
+      end = i;
+      break;
+    }
+  }
+  if (end === said.length) return null;
+  const token = said.substring(from, end).trim();
+  return token.length > 0 ? token : null;
+}
+
+/**
+ * What the remote said, without the token line.
+ *
+ * The same text is used for error messages, and a secret in a message the UI
+ * shows - and that somebody pastes into a bug report - is a secret gone.
+ */
+export function withoutToken(said: string): string {
+  const at = said.indexOf(TOKEN_LINE);
+  if (at === -1) return said;
+  let end = said.length;
+  for (let i = at; i < said.length; i++) {
+    if (said.charAt(i) === String.fromCharCode(10)) {
+      end = i + 1;
+      break;
+    }
+  }
+  return said.substring(0, at) + said.substring(end);
 }
 
 /** A free loopback port, found by letting the OS pick one and handing it back. */
@@ -434,9 +503,12 @@ export function tunnelRequest(
   path: string,
   method: string,
   body: string | null,
+  /** The far engine's token - see Connection.token. */
+  token: string,
 ): Promise<{ status: number; text: string }> {
   return new Promise((resolve) => {
     const headers: Record<string, string> = {};
+    if (token.length > 0) headers["x-gitc-token"] = token;
     if (body !== null) {
       headers["content-type"] = "application/json";
       headers["content-length"] = String(Buffer.byteLength(body));
@@ -465,9 +537,44 @@ export function tunnelRequest(
   });
 }
 
-/** Is the tunnel carrying a live gitc yet? */
-function answering(port: number): Promise<boolean> {
+/**
+ * Is the tunnel carrying OUR engine yet?
+ *
+ * Two questions, in this order, and the order is the point.
+ *
+ * First: does whatever holds this port refuse a request with no token? An
+ * earlier version asked only "does it answer 200 with the token", which any
+ * HTTP server on that port satisfies - it does not have to demand the token,
+ * merely tolerate an unknown header. So a process already sitting on the
+ * remote's 7893, which on a shared box is the premise of this whole feature,
+ * answered the ping and was then handed the token and every request after it.
+ *
+ * Asking without the token first costs nothing and is asked before anything
+ * is revealed: a stranger that answers 200 to an unauthenticated ping is not
+ * a gitc engine of ours, and we stop there having told it nothing.
+ *
+ * Second: does it accept OUR token? Only an engine that printed it can.
+ */
+function answering(port: number, token: string): Promise<boolean> {
   return new Promise((resolve) => {
+    void ping(port, null).then((unauthenticated) => {
+      // Not 403 means it does not demand a token. Either something else holds
+      // the port, or it is a gitc too old to have this - and neither is a
+      // thing to hand a secret to.
+      if (unauthenticated !== 403) {
+        resolve(false);
+        return;
+      }
+      void ping(port, token).then((authenticated) => resolve(authenticated === 200));
+    });
+  });
+}
+
+/** One /api/ping, answering with the status code or 0 if nothing replied. */
+function ping(port: number, token: string | null): Promise<number> {
+  return new Promise((resolve) => {
+    const headers: Record<string, string> = {};
+    if (token !== null) headers["x-gitc-token"] = token;
     const req = request(
       {
         // Spelled out rather than shorthand: the compiler asks for it here.
@@ -475,12 +582,13 @@ function answering(port: number): Promise<boolean> {
         port: port,
         path: "/api/ping",
         method: "GET",
+        headers: headers,
         timeout: 2000,
       },
-      (res) => resolve(res.statusCode === 200),
+      (res) => resolve(res.statusCode ?? 0),
     );
-    req.on("error", () => resolve(false));
-    req.on("timeout", () => resolve(false));
+    req.on("error", () => resolve(0));
+    req.on("timeout", () => resolve(0));
     req.end();
   });
 }
@@ -513,20 +621,17 @@ export async function connect(
   // Same argument as the three -o flags below, which already decline to trust
   // ambient config for BatchMode, ConnectTimeout and ExitOnForwardFailure.
   const forward = "127.0.0.1:" + String(port) + ":127.0.0.1:" + String(REMOTE_PORT);
-  // The engine over there listens on the remote's loopback with nothing in
-  // front of it, which is the right bind and is NOT a trust boundary on the
-  // machines this feature is for. A build box or jump host usually has other
-  // accounts, and any of them can reach 127.0.0.1:7893 for as long as a tab is
-  // open - the port is fixed, so there is nothing to discover - and get the
-  // filesystem through /api/ls plus the whole mutating surface, as the
-  // connecting user. Documented rather than fixed: this branch is not the
-  // place to grow an authentication scheme.
+  // The engine over there listens on the remote's loopback, which is the
+  // right bind and is NOT on its own a trust boundary on the machines this
+  // feature is for: a build box or a jump host usually has other accounts,
+  // and any of them can reach 127.0.0.1:7893 on a port fixed enough that
+  // there is nothing to discover. What stops them is the token that engine
+  // demands - see Connection.token, and the announcement in main.ts.
   //
-  // When one is added, the secret cannot travel on this command line. `ps` is
-  // world-readable on exactly the hosts where this matters, so argv is the one
-  // channel that leaks it to the accounts it is meant to keep out; an
-  // environment variable sent through ssh, or a mode-600 file written by the
-  // same session, both work.
+  // The token travels on the remote's stdout, which arrives here inside the
+  // ssh channel. Not on this command line: `ps` is world-readable on exactly
+  // the hosts where this matters, so argv is the one channel that would hand
+  // the secret to the accounts it is meant to keep out.
   //
   // --port= with the equals sign: the space form is ignored, and the engine
   // would then find the default port, hand off to whatever holds it and exit.
@@ -577,10 +682,43 @@ export async function connect(
   // child, which for a tunnel that is meant to live for hours is a hang
   // waiting to happen.
   let remoteSaid = "";
+  /**
+   * The token, taken off the stream as it arrives rather than out of the
+   * capped buffer above.
+   *
+   * The 4000-character cap was harmless when this stream only ever became an
+   * error message. It is not harmless now that the token arrives on it: -tt
+   * allocates a pty, sshd prints its banner and MOTD into one, and a host
+   * whose banner runs past 4000 characters would push the token line out of
+   * everything readToken can see - making that host permanently
+   * unconnectable, and reporting it as a timeout rather than as the cause.
+   *
+   * So the scan runs over a sliding tail of its own, which stops growing the
+   * moment the token is found. A tail is enough because the line is short:
+   * whatever chunk boundary it is delivered across, the whole of it is inside
+   * the window by the time it is complete.
+   */
+  let tokenTail = "";
+  let token: string | null = null;
+  const TAIL = 4096;
+
   const outStream = child.stdout;
   if (outStream !== null) {
     outStream.on("data", (c: Buffer) => {
-      if (remoteSaid.length < 4000) remoteSaid += c.toString("utf8");
+      const text = c.toString("utf8");
+      if (remoteSaid.length < 4000) remoteSaid += text;
+      if (token === null) {
+        // Scanned BEFORE the tail is trimmed, so a chunk that carries the
+        // whole line and then a great deal more cannot lose it between the
+        // two steps. Trimming first made that ordering matter; this way it
+        // does not.
+        tokenTail += text;
+        token = readToken(tokenTail);
+        if (token !== null) tokenTail = "";
+        else if (tokenTail.length > TAIL) {
+          tokenTail = tokenTail.substring(tokenTail.length - TAIL);
+        }
+      }
     });
   }
 
@@ -603,7 +741,7 @@ export async function connect(
     ended = true;
     if (closedHere) return;
     const why = stderr.trim();
-    const said = remoteSaid.trim();
+    const said = withoutToken(remoteSaid).trim();
     console.log(
       "[tunnel] " + host + " ended on its own, code " + String(code) +
         (why.length > 0 ? " - ssh: " + why : "") +
@@ -616,10 +754,36 @@ export async function connect(
     onEnded();
   });
 
+  /**
+   * Something is on that port and it does not want a token.
+   *
+   * Which is not a mystery to time out over: an engine of ours always refuses
+   * an unauthenticated ping, before and after it has said anything, so a 200
+   * is proof that whatever answered is not one. In practice it is a gitc from
+   * before the token existed, still running from an earlier session - the
+   * binary gets brought up to date by ensureRemote, but a process already
+   * holding 7893 does not, and the new one exits on EADDRINUSE without ever
+   * printing a token.
+   *
+   * Worth telling apart because the alternative is the worst kind of error:
+   * thirty seconds of "Opening...", then failureReason handing back the old
+   * engine's own cheerful stdout - "gitc serving http://127.0.0.1:7893/" -
+   * as the explanation for a failure.
+   */
+  let unauthenticated = false;
+
   const started = Date.now();
   while (Date.now() - started < CONNECT_TIMEOUT_MS) {
-    if (await answering(port)) {
-      return { host, port, usedAt: Date.now(), inFlight: 0, close };
+    // The token first, then readiness. There is nothing to probe with until
+    // the engine has announced itself, and it only announces once it has the
+    // port - so this arriving is also the first evidence the far side is up.
+    if (token !== null) {
+      if (await answering(port, token)) {
+        return { host, port, usedAt: Date.now(), inFlight: 0, token, close };
+      }
+    } else if ((await ping(port, null)) === 200) {
+      unauthenticated = true;
+      break;
     }
     // ssh has already gone: a refused key under BatchMode, a forward that
     // could not bind, an engine that exited on a taken port. Waiting out the
@@ -630,7 +794,41 @@ export async function connect(
   }
 
   close();
-  throw new Error(failureReason(stderr, remoteSaid));
+
+  if (unauthenticated) {
+    // Rare, and defensive rather than load-bearing.
+    //
+    // ensureRemote has already brought the remote's BINARY to this exact
+    // version before connect() runs, and every release carries a distinct
+    // number, so an out of date gitc is not normally what is on that port.
+    // What can still be there is a process: an old engine holding 7893 from
+    // an earlier session, which an upgraded binary does not displace. That
+    // one usually reports itself, though - the new engine exits on
+    // EADDRINUSE, ssh goes with it, and `ended` breaks the loop below before
+    // this ping resolves, so the remote's own "port 7893 is already in use"
+    // is what comes back.
+    //
+    // What is left is whatever else might answer on that port, which is the
+    // reason to fail fast here rather than wait out the full timeout.
+    //
+    // Worded as what was observed rather than as what it probably is. All
+    // this establishes is that something answered without demanding a token;
+    // an unrelated program on that port produces the same 200 and would
+    // otherwise be told it is an out of date gitc. That is not a hypothetical
+    // - a five-line Python server standing in for exactly this case is how
+    // the token-disclosure check was tested.
+    throw new Error(
+      "something on " + host + " port " + String(REMOTE_PORT) +
+        " answers without demanding a connection token - an older gitc, or" +
+        " another program holding that port. If it is a gitc left over from" +
+        " an earlier session, stop it there; if it is an older gitc, update" +
+        " gitc on " + host + "; otherwise free that port.",
+    );
+  }
+
+  // withoutToken: this text reaches the UI, and a secret in an error message
+  // is a secret in a screenshot.
+  throw new Error(failureReason(stderr, withoutToken(remoteSaid)));
 }
 
 /**
