@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "../api";
 import type { UpdateInfo } from "../types";
 import {
@@ -110,6 +110,25 @@ export function Preferences({
   const { stream: updateStream, set: setUpdateStream } = useUpdateStream();
   const { onFocus: fetchOnFocus, set: setFetchOnFocus } = useFetchOnFocus();
   const { minutes: remoteHold, set: setRemoteHold } = useRemoteHold();
+  /**
+   * Machines gitc has been allowed to install itself on.
+   *
+   * Read from the engine rather than kept in the window's settings: the
+   * engine is what acts on it, and it is written where the session is, not in
+   * the browser's storage. Loaded on arrival, because a machine approved a
+   * minute ago is the one somebody is here to look at.
+   */
+  const [remotes, setRemotes] = useState<string[]>([]);
+  useEffect(() => {
+    let live = true;
+    api
+      .approvedRemotes()
+      .then((h) => live && setRemotes(h))
+      .catch(() => live && setRemotes([]));
+    return () => {
+      live = false;
+    };
+  }, []);
 
   return (
     <div className={s.screen}>
@@ -280,6 +299,32 @@ export function Preferences({
                   </button>
                 ))}
               </div>
+            </Row>
+            <Row
+              label="Machines gitc may install on"
+              hint={
+                remotes.length === 0
+                  ? "A repository on another machine is served by a gitc running over there, which gitc installs itself the first time you open that machine - and asks before it does. Nothing has been agreed to yet."
+                  : "gitc may keep a copy of itself on these, and updates it when versions no longer match. Removing one means being asked again next time; the copy already over there is left alone."
+              }
+            >
+              {remotes.length === 0 ? (
+                <span className={s.value}>None</span>
+              ) : (
+                <div className={s.chips}>
+                  {remotes.map((host) => (
+                    <button
+                      key={host}
+                      className={s.chip}
+                      onClick={() => void api.revokeRemote(host).then(setRemotes).catch(() => {})}
+                      title={`Ask again before installing gitc on ${host}`}
+                    >
+                      <span className={s.chipName}>{host}</span>
+                      <Icon name="close" size={10} />
+                    </button>
+                  ))}
+                </div>
+              )}
             </Row>
             <Row
               label="Fetch on focus"

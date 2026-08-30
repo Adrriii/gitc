@@ -62,11 +62,18 @@ import {
   connect,
   ensureRemote,
   detectRemote,
+  planRemote,
   isSafeDestination,
   tunnelRequest,
   TOKEN_LINE,
   type Connection,
 } from "./engine/remote.ts";
+import {
+  isApprovedRemote,
+  approvedRemotes,
+  approveRemote,
+  revokeRemote,
+} from "./engine/approvals.ts";
 import { readSshHosts } from "./engine/sshConfig.ts";
 import {
   check as checkUpdate,
@@ -1041,7 +1048,9 @@ async function openConnection(host: string): Promise<Connection | { error: strin
   const kind = await detectRemote(host);
   if (kind.refusal !== null) return { error: kind.refusal };
 
-  const install = await ensureRemote(host);
+  // Installing on somebody else's machine happens only where it has been
+  // agreed to. ensureRemote is the gate; this is the answer it is given.
+  const install = await ensureRemote(host, isApprovedRemote(host));
   if (!install.ok) return { error: install.error };
 
   const bin = kind.binPath === null ? "~/.local/bin/gitc" : kind.binPath;
@@ -1520,6 +1529,55 @@ async function handleApi(
   if (path === "/api/remote/hold") {
     const body = JSON.parse(await readBody(req)) as { minutes: number };
     if (body.minutes >= 0) remoteHoldMinutes = body.minutes;
+    sendJson(res, JSON.stringify({ ok: true }));
+    return true;
+  }
+
+  // What opening a host would do about the gitc over there, without doing any
+  // of it. The window asks this before it browses a machine, so an install can
+  // be agreed to rather than noticed afterwards.
+  if (path.startsWith("/api/remote/plan")) {
+    const q = path.indexOf("?");
+    const params = q === -1 ? "" : path.substring(q + 1);
+    let host = "";
+    for (const pair of params.split("&")) {
+      const eq = pair.indexOf("=");
+      if (eq === -1) continue;
+      if (pair.substring(0, eq) === "host") host = decodeURIComponent(pair.substring(eq + 1));
+    }
+    const plan = await planRemote(host);
+    sendJson(res, JSON.stringify({ ...plan, approved: isApprovedRemote(host) }));
+    return true;
+  }
+
+  // The machines already agreed to, and taking one back. Preferences shows
+  // them: an approval that cannot be withdrawn is not really a choice, and
+  // "gitc will not ask again" has to be somewhere you can see.
+  if (path === "/api/remote/approvals") {
+    sendJson(res, JSON.stringify({ hosts: approvedRemotes() }));
+    return true;
+  }
+
+  if (path === "/api/remote/revoke") {
+    const body = JSON.parse(await readBody(req)) as { host: string };
+    // The binary already over there is left where it is. Removing it means
+    // reaching that machine, which is exactly the permission being withdrawn.
+    revokeRemote(body.host);
+    sendJson(res, JSON.stringify({ hosts: approvedRemotes() }));
+    return true;
+  }
+
+  // "gitc may keep a copy of itself on that machine". Recorded on disk, so a
+  // machine already agreed to is not asked about again on the next launch.
+  if (path === "/api/remote/approve") {
+    const body = JSON.parse(await readBody(req)) as { host: string };
+    // The same check the connection makes: an approval is a destination that
+    // will later be handed to ssh, and it outlives this process.
+    if (!isSafeDestination(body.host)) {
+      send(res, 400, "application/json", JSON.stringify({ error: "not a usable ssh destination" }));
+      return true;
+    }
+    approveRemote(body.host);
     sendJson(res, JSON.stringify({ ok: true }));
     return true;
   }

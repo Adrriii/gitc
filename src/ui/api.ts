@@ -15,6 +15,7 @@ import type {
   ConflictVersions,
   Submodule,
   SshHost,
+  RemotePlan,
 } from "./types";
 import type { DiffTarget } from "./components/DiffView";
 
@@ -113,6 +114,33 @@ export const api = {
 
   /** Hosts from ~/.ssh/config that a remote tab could be opened on. */
   hosts: () => json<{ hosts: SshHost[] }>("/api/hosts").then((r) => r.hosts),
+
+  /**
+   * What opening a machine would do about the gitc on it, without doing it.
+   *
+   * Two ssh round trips and no writes, so it is safe to ask before the user
+   * has agreed to anything - which is the point: the engine will not install
+   * on a machine that has not been approved, and this is how the window knows
+   * to offer that choice rather than report the refusal.
+   */
+  remotePlan: (host: string) =>
+    json<RemotePlan>(`/api/remote/plan?host=${encodeURIComponent(host)}`),
+
+  /** Records that gitc may keep a copy of itself on that machine. */
+  approveRemote: (host: string) => post<{ ok: boolean }>("/api/remote/approve", { host }),
+
+  /** The machines that have been agreed to, newest last. */
+  approvedRemotes: () =>
+    json<{ hosts: string[] }>("/api/remote/approvals").then((r) => r.hosts),
+
+  /**
+   * Takes an approval back, and returns what is left.
+   *
+   * The copy of gitc already on that machine stays: deleting it means
+   * connecting to it, which is the permission being withdrawn.
+   */
+  revokeRemote: (host: string) =>
+    post<{ hosts: string[] }>("/api/remote/revoke", { host }).then((r) => r.hosts),
 
   close: (id: string) => post<Session>("/api/close", { id }),
 

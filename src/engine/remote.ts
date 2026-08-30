@@ -32,6 +32,8 @@ import { DETECT_COMMAND, classify, type RemoteKind } from "./remotePlatform.ts";
 const REMOTE_PORT = 7893;
 /** How long to wait for the remote engine to answer through the tunnel. */
 const CONNECT_TIMEOUT_MS = 30000;
+/** Where the remote's binary goes when its platform did not name a place. */
+const DEFAULT_BIN = "~/.local/bin/gitc";
 
 /**
  * Refuses an ssh destination that ssh would read as an option.
@@ -171,7 +173,7 @@ function downloadScript(version: string, kind: RemoteKind): string {
   // Both are non-null by the time this runs - ensureRemote refuses a platform
   // that has neither - but the types do not know that.
   const asset = kind.asset === null ? "gitc" : kind.asset;
-  const bin = kind.binPath === null ? "~/.local/bin/gitc" : kind.binPath;
+  const bin = kind.binPath === null ? DEFAULT_BIN : kind.binPath;
   return [
     "set -e",
     "mkdir -p $(dirname " + bin + ")",
@@ -190,7 +192,63 @@ function downloadScript(version: string, kind: RemoteKind): string {
 
 export type InstallOutcome =
   | { ok: true; how: "already" | "downloaded" | "pushed" }
-  | { ok: false; error: string };
+  /**
+   * `needsApproval` separates "gitc may not install here" from every other
+   * failure, so the window can offer the question instead of only the error.
+   */
+  | { ok: false; error: string; needsApproval?: boolean };
+
+/**
+ * What connecting to a host would do about the binary over there.
+ *
+ * Read-only, deliberately: it runs the same two probes ensureRemote starts
+ * with - what the machine is, and what gitc it already has - and stops before
+ * the part that writes. That is what makes it usable as the question asked
+ * BEFORE anything installs, which is the whole point of it existing
+ * separately.
+ */
+export interface RemotePlan {
+  host: string;
+  /**
+   * "ready"   the right gitc is already there, nothing to do
+   * "install" no gitc on that machine at all
+   * "replace" a gitc of another version, which cannot serve a tab
+   * "refused" the machine cannot be used, whatever anybody agrees to
+   */
+  action: "ready" | "install" | "replace" | "refused";
+  /** The version already over there, null when there is none. */
+  have: string | null;
+  /** The version it would end up with, which is this gitc's. */
+  want: string;
+  /** Where the binary goes, as the remote's own shell would write it. */
+  path: string;
+  /** Why the machine cannot be used, null when it can. */
+  refusal: string | null;
+}
+
+export async function planRemote(host: string): Promise<RemotePlan> {
+  const want = VERSION;
+  if (!isSafeDestination(host)) {
+    return {
+      host,
+      action: "refused",
+      have: null,
+      want,
+      path: DEFAULT_BIN,
+      refusal: '"' + host + '" is not a usable ssh destination',
+    };
+  }
+
+  const kind = await detectRemote(host);
+  const path = kind.binPath === null ? DEFAULT_BIN : kind.binPath;
+  if (kind.refusal !== null) {
+    return { host, action: "refused", have: null, want, path, refusal: kind.refusal };
+  }
+
+  const have = await remoteVersion(host, path);
+  const action = have === want ? "ready" : have === null ? "install" : "replace";
+  return { host, action, have, want, path, refusal: null };
+}
 
 /**
  * Makes sure the remote has a gitc matching this one.
@@ -209,14 +267,34 @@ export type InstallOutcome =
  * Versions must match exactly. The UI and the engine are one program split
  * across a socket, and a mismatch is a field the window reads that the engine
  * never sends.
+ *
+ * `approved` is the answer to the question in approvals.ts, and it gates every
+ * path that writes to the remote - the download it runs there as much as the
+ * binary pushed from here. The decision is passed in rather than read here so
+ * this file stays free of the config directory, and so a caller cannot install
+ * by forgetting to ask.
  */
-export async function ensureRemote(host: string): Promise<InstallOutcome> {
+export async function ensureRemote(host: string, approved: boolean): Promise<InstallOutcome> {
   const kind = await detectRemote(host);
   if (kind.refusal !== null) return { ok: false, error: kind.refusal };
-  const bin = kind.binPath === null ? "~/.local/bin/gitc" : kind.binPath;
+  const bin = kind.binPath === null ? DEFAULT_BIN : kind.binPath;
 
   const have = await remoteVersion(host, bin);
   if (have === VERSION) return { ok: true, how: "already" };
+
+  // Nothing below this line is reversible from here: it puts a file on
+  // somebody else's machine.
+  if (!approved) {
+    const what =
+      have === null
+        ? "gitc is not installed on " + host
+        : host + " has gitc " + have + ", and this one is " + VERSION;
+    return {
+      ok: false,
+      needsApproval: true,
+      error: what + " - open it from the Repositories screen to let gitc install itself there",
+    };
+  }
 
   const dl = await sshRun(host, downloadScript(VERSION, kind));
   if (dl.code === 0) {

@@ -39,6 +39,27 @@ export interface SshHost {
   port: number | null;
 }
 
+/**
+ * What opening a machine would do about the gitc on it.
+ *
+ * Asked before browsing one, because the answer decides whether a binary is
+ * about to be written to somebody else's home directory - and that question
+ * belongs to the person, not to the first keystroke in the path field.
+ */
+export interface RemotePlan {
+  host: string;
+  action: "ready" | "install" | "replace" | "refused";
+  /** The version already on that machine, null when there is none. */
+  have: string | null;
+  /** The version it would end up with. */
+  want: string;
+  /** Where the binary goes, as that machine writes a path. */
+  path: string;
+  refusal: string | null;
+  /** Whether gitc has already been allowed to install itself there. */
+  approved: boolean;
+}
+
 export interface Session {
   tabs: Tab[];
   activeId: string | null;
