@@ -15,8 +15,8 @@ function eq(label: string, got: unknown, want: unknown) {
 const PORT = 7893;
 
 /** Just enough of an IncomingMessage for the guard to read. */
-function req(headers: Record<string, string>) {
-  return { headers } as unknown as import("node:http").IncomingMessage;
+function req(headers: Record<string, string>, method = "GET") {
+  return { headers, method } as unknown as import("node:http").IncomingMessage;
 }
 
 // --- Host: the DNS rebinding defence --------------------------------------
@@ -74,10 +74,23 @@ eq(
   allowedRequest(req({ host: "127.0.0.1:7893", origin: "http://127.0.0.1:7893", "sec-fetch-site": "same-origin" }), PORT, false),
   true,
 );
+// Neither header, which is curl and equally a browser too old to ship Fetch
+// Metadata - nothing here tells those apart, and the read is answered either
+// way. It is the content-type gate below that stops a cross-site WRITE in this
+// shape; naming this case "a non-browser client" was assuming the answer.
 eq(
-  "a non-browser client, no Origin",
+  "no Origin and no Sec-Fetch-Site: a read is answered",
   allowedRequest(req({ host: "127.0.0.1:7893" }), PORT, false),
   true,
+);
+eq(
+  "no Origin and no Sec-Fetch-Site: a write still needs a JSON body",
+  allowedRequest(
+    req({ host: "127.0.0.1:7893", "content-type": "text/plain" }, "POST"),
+    PORT,
+    false,
+  ),
+  false,
 );
 eq(
   "the address bar",
@@ -93,12 +106,16 @@ eq(
       host: "127.0.0.1:7893",
       origin: "https://evil.example",
       "content-type": "text/plain;charset=UTF-8",
-    }), PORT, false),
+    }, "POST"), PORT, false),
   false,
 );
 eq(
   "a cross-site form with no Origin",
-  allowedRequest(req({ host: "127.0.0.1:7893", "sec-fetch-site": "cross-site" }), PORT, false),
+  allowedRequest(
+    req({ host: "127.0.0.1:7893", "sec-fetch-site": "cross-site" }, "POST"),
+    PORT,
+    false,
+  ),
   false,
 );
 eq(

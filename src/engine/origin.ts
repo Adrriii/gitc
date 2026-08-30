@@ -38,9 +38,16 @@
  *   attacker's DNS points their NAME at 127.0.0.1, and the browser sends that
  *   name in Host. A real client of this engine has 127.0.0.1 in the URL bar.
  *
- * Sec-Fetch-Site covers the gap between them - a form POST carries no Origin
- * in some browsers, but every browser that ships Fetch Metadata sends this.
- * Absent means a non-browser client, which Host has already vouched for.
+ * Sec-Fetch-Site covers the gap between them, for the browsers that send it: a
+ * form POST carries no Origin in some, and this says "cross-site" anyway.
+ *
+ * When it is absent, nothing has been established about the caller. It may be
+ * a browser too old to ship Fetch Metadata, or it may be curl; Host does not
+ * tell the two apart, and is satisfied by anything that addresses this engine
+ * by a loopback address. A request with neither header is answered - that is
+ * deliberate, since every non-browser client of this engine looks like that -
+ * and what stops a cross-site WRITE in that shape is the content type below,
+ * not this check and not Host.
  */
 export function allowedRequest(
   req: import("node:http").IncomingMessage,
