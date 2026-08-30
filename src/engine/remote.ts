@@ -806,11 +806,19 @@ export async function connect(
     // parity is an exact string match, so a remote running a release with the
     // same version number as this build - which is every 0.5.0 remote until
     // this change ships under a new number - is left exactly as it is.
+    //
+    // Worded as what was observed rather than as what it probably is. All
+    // this establishes is that something answered without demanding a token;
+    // an unrelated program on that port produces the same 200 and would
+    // otherwise be told it is an out of date gitc. That is not a hypothetical
+    // - a five-line Python server standing in for exactly this case is how
+    // the token-disclosure check was tested.
     throw new Error(
-      "the gitc answering on " + host + " port " + String(REMOTE_PORT) +
-        " is older than this one and does not support the connection token." +
-        " If it is left over from an earlier session, stop it there and try" +
-        " again; otherwise update gitc on " + host + ".",
+      "something on " + host + " port " + String(REMOTE_PORT) +
+        " answers without demanding a connection token - an older gitc, or" +
+        " another program holding that port. If it is a gitc left over from" +
+        " an earlier session, stop it there; if it is an older gitc, update" +
+        " gitc on " + host + "; otherwise free that port.",
     );
   }
 
