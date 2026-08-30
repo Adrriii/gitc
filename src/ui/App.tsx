@@ -56,7 +56,7 @@ import {
   useUpdateStream,
   useUpdateLevel,
 } from "./settings";
-import { shouldPrompt } from "./version";
+import { shouldPrompt, versionChip } from "./version";
 import { rangeSelect, toggleSelect } from "./selection";
 import { nextAfter, stagedFiles, unstagedFiles } from "./staging";
 import s from "./App.module.scss";
@@ -495,6 +495,17 @@ export function App() {
   const activeId = session?.activeId ?? null;
   const activeTab = session?.tabs.find((t) => t.id === activeId) ?? null;
   activeIdRef.current = activeId;
+
+  // What the corner says about versions. A remote tab is served by a gitc on
+  // the other machine, and that is the one worth naming while you are in it.
+  const activeHost = activeTab === null ? null : activeTab.host;
+  const activeRemote =
+    activeHost === null ? undefined : remotes.find((r) => r.host === activeHost);
+  const { label: versionLabel, title: versionTitle } = versionChip(
+    VERSION,
+    activeHost,
+    activeRemote?.version ?? "",
+  );
 
   // Ctrl+Tab / Ctrl+Shift+Tab / Ctrl+W. The step wraps in both directions:
   // adding tabs.length before the modulo keeps -1 from landing outside the
@@ -1898,8 +1909,16 @@ export function App() {
                     : `Update to ${update.latest}`}
               </button>
             )}
-            <span className={s.version} title={`gitc ${VERSION}`}>
-              v{VERSION}
+            {/*
+              In a remote tab, the version that matters is the one serving it.
+              The two are the same number whenever the tab works at all - a
+              remote engine of another version cannot serve one, which is what
+              ensureRemote is for - so naming the machine beside it says more
+              than printing 0.5.1 twice. They are only shown apart when they
+              genuinely differ, which is a tunnel outliving an update.
+            */}
+            <span className={s.version} title={versionTitle}>
+              {versionLabel}
             </span>
           </div>
         </div>

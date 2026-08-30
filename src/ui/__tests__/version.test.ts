@@ -1,4 +1,4 @@
-import { bump, meets, shouldPrompt } from "../version.ts";
+import { bump, meets, shouldPrompt, versionChip } from "../version.ts";
 
 let pass = 0;
 let fail = 0;
@@ -56,6 +56,36 @@ eq(
 eq("rc to its release prompts", shouldPrompt("0.5.0-rc.2", "0.5.0", "major"), true);
 eq("the same rc does not", shouldPrompt("0.5.0-rc.1", "0.5.0-rc.1", "patch"), false);
 eq("a stable user is unaffected by the rule", shouldPrompt("0.4.3", "0.4.4", "minor"), false);
+
+// The corner of the status bar. A remote tab is served by the gitc on the
+// other machine, and that is the one worth naming while you are in it.
+eq("a local tab shows gitc's own version", versionChip("0.5.1", null, "").label, "v0.5.1");
+eq(
+  "a remote tab names the machine instead of repeating the number",
+  versionChip("0.5.1", "server", "0.5.1").label,
+  "server v0.5.1",
+);
+eq(
+  "and says whose it is",
+  versionChip("0.5.1", "server", "0.5.1").title,
+  "gitc 0.5.1, here and on server",
+);
+
+// Only reachable by a tunnel that outlived an update - which is exactly when
+// hiding one of the two numbers would be the wrong thing to do.
+eq(
+  "a mismatch is shown as two",
+  versionChip("0.5.1", "server", "0.4.9").label,
+  "v0.5.1 · server v0.4.9",
+);
+
+// A machine still connecting, one that is offline, and a gitc too old to say
+// all arrive as an empty string. None of them is a version to put on screen.
+eq(
+  "an unknown remote falls back to the local version",
+  versionChip("0.5.1", "server", "").label,
+  "v0.5.1",
+);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 // exitCode, not exit(): exit() can abort a queued stdout write on Windows.

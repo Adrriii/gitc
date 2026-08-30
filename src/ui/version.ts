@@ -75,3 +75,34 @@ export function shouldPrompt(current: string, latest: string, threshold: Bump): 
   const size = bump(current, latest);
   return size !== null && meets(size, threshold);
 }
+
+/**
+ * The version for the corner of the status bar, and whose version it is.
+ *
+ * In a local tab this is gitc's own, as it always was. In a remote tab the
+ * engine answering that tab is the one on the other machine, so it is named:
+ * the numbers are equal whenever the tab works at all - a remote engine of
+ * another version cannot serve one - and printing the same number twice would
+ * say less than naming the machine. The two are shown apart only when they
+ * really differ, which means a tunnel that outlived an update, and is exactly
+ * the moment somebody needs to be told.
+ *
+ * An empty `remote` is a machine still connecting, one that is offline, or a
+ * gitc too old to say - none of which is a version to put on screen.
+ */
+export function versionChip(
+  local: string,
+  host: string | null,
+  remote: string,
+): { label: string; title: string } {
+  if (host === null || remote.length === 0) {
+    return { label: "v" + local, title: "gitc " + local };
+  }
+  if (remote === local) {
+    return { label: host + " v" + remote, title: `gitc ${local}, here and on ${host}` };
+  }
+  return {
+    label: `v${local} · ${host} v${remote}`,
+    title: `gitc ${local} here, gitc ${remote} on ${host}`,
+  };
+}

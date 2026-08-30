@@ -28,7 +28,16 @@ const FAILURES_BEFORE_DEAD = 5;
 function sameRemotes(a: RemoteState[], b: RemoteState[]): boolean {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) {
-    if (a[i].host !== b[i].host || a[i].state !== b[i].state) return false;
+    // The version too, or the status bar would keep whatever it first saw:
+    // this array is only replaced when it differs, and a reconnect that
+    // changed nothing but the version would never reach the window.
+    if (
+      a[i].host !== b[i].host ||
+      a[i].state !== b[i].state ||
+      a[i].version !== b[i].version
+    ) {
+      return false;
+    }
   }
   return true;
 }

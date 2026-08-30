@@ -29,6 +29,15 @@ export interface Tab {
 export interface RemoteState {
   host: string;
   state: "online" | "connecting" | "offline";
+  /**
+   * The version of the gitc serving that machine's tabs, "" when it is not
+   * connected or is too old to say.
+   *
+   * The engine's own answer, not the version of the binary sitting on its
+   * disk: a gitc already holding the remote's port keeps serving from the
+   * process it started as, however new that file is.
+   */
+  version: string;
 }
 
 /** A host offered by ~/.ssh/config. */

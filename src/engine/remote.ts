@@ -501,6 +501,18 @@ export interface Connection {
    * accounts it is meant to keep out.
    */
   token: string;
+  /**
+   * The version the engine at the far end reports for itself, "" when it has
+   * not been asked yet or is too old to say.
+   *
+   * The BINARY's version is known before this - ensureRemote brings it to
+   * this one - but the binary is not what is serving. A gitc already holding
+   * the remote's port keeps serving from the process it started as, however
+   * new the file on disk is, and that difference is the whole reason a tab
+   * reports fields the window does not understand. This is the running
+   * engine's own answer, so it describes what is actually on the other end.
+   */
+  version: string;
   /** Ends the tunnel and, with it, the remote engine. */
   close: () => void;
 }
@@ -857,7 +869,9 @@ export async function connect(
     // port - so this arriving is also the first evidence the far side is up.
     if (token !== null) {
       if (await answering(port, token)) {
-        return { host, port, usedAt: Date.now(), inFlight: 0, token, close };
+        // version is filled in by the caller, from the far engine's own ping:
+        // there is nothing to ask until the tunnel exists, which is here.
+        return { host, port, usedAt: Date.now(), inFlight: 0, token, version: "", close };
       }
     } else if ((await ping(port, null)) === 200) {
       unauthenticated = true;

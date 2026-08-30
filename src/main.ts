@@ -1084,6 +1084,10 @@ async function openConnection(host: string): Promise<Connection | { error: strin
     // about a tab that engine has never heard of - which is what "no such
     // tab" was, after a restart or after an idle connection was dropped.
     await registerTabs(host, conn);
+    // Asked of the engine rather than assumed from the binary: ensureRemote
+    // has just brought the FILE to this version, but a gitc already holding
+    // the remote's port goes on serving from the process it started as.
+    conn.version = await remoteEngineVersion(conn);
     if (diedDuringSetup) {
       conn.close();
       return { error: "the connection to " + host + " dropped while it was being set up" };
@@ -1097,6 +1101,24 @@ async function openConnection(host: string): Promise<Connection | { error: strin
     return conn;
   } catch (e) {
     return { error: "could not reach " + host + ": " + (e as Error).message };
+  }
+}
+
+/**
+ * What the engine at the far end says it is.
+ *
+ * Its own /api/ping, down the tunnel that was just built. An engine too old to
+ * carry the field, or one that does not answer, leaves this empty - the status
+ * bar then says nothing about the version rather than inventing one.
+ */
+async function remoteEngineVersion(conn: Connection): Promise<string> {
+  const got = await tunnelRequest(conn.port, "/api/ping", "GET", null, conn.token);
+  if (got.status !== 200) return "";
+  try {
+    const parsed = JSON.parse(got.text) as { version?: string };
+    return parsed.version ?? "";
+  } catch {
+    return "";
   }
 }
 
@@ -1443,17 +1465,18 @@ async function handleApi(
     // heartbeat the window already sends rather than on a poll of its own:
     // this changes exactly when the connection does, and the window is asking
     // every two seconds anyway.
-    const remotes: { host: string; state: string }[] = [];
+    const remotes: { host: string; state: string; version: string }[] = [];
     for (const tab of session.tabs) {
       const host = tab.host;
       if (host === null) continue;
       if (remotes.some((r) => r.host === host)) continue;
-      const state = connections.has(host)
-        ? "online"
-        : connecting.has(host)
-          ? "connecting"
-          : "offline";
-      remotes.push({ host, state });
+      const conn = connections.get(host);
+      const state =
+        conn !== undefined ? "online" : connecting.has(host) ? "connecting" : "offline";
+      // Empty for a machine that is not connected, and for one running a gitc
+      // too old to say - the window then shows nothing about the version
+      // rather than a number it would have to be wrong about.
+      remotes.push({ host, state, version: conn === undefined ? "" : conn.version });
     }
 
     sendJson(
@@ -1461,6 +1484,11 @@ async function handleApi(
       JSON.stringify({
         ok: true,
         instance: INSTANCE,
+        // This engine's own version, for whoever is asking. Locally the window
+        // already knows it; through a tunnel it is the only honest answer to
+        // "what is serving that tab" - the binary on the remote's disk can be
+        // newer than the process still holding its port.
+        version: VERSION,
         windowGone: gone,
         quitting: quitting,
         remotes,
