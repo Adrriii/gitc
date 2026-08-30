@@ -893,8 +893,25 @@ async function openRepo(path: string, wantId?: string): Promise<Tab | null> {
     saveSession(session);
     return t;
   }
+  // Nothing else may keep this id.
+  //
+  // The branch above drops a duplicate only when it finds a tab for the same
+  // PATH. Nothing covered the other shape: a client asking for id t7 when
+  // this engine already has a t7 for a different repository - which is the
+  // ordinary case for a remote engine, since it keeps its own session between
+  // connections and the client picks the ids. Both tabs went into the list,
+  // findTab returned the first, and every request for that id ran git in the
+  // wrong repository.
+  //
+  // Seen for real: a stale tab pointed at a directory that had since been
+  // deleted, so a repository that was open and healthy answered every call
+  // with "spawn git ENOENT" - Node's error for a cwd that does not exist,
+  // which reads as though git itself were missing.
+  const id = wantId === undefined ? makeId() : wantId;
+  session.tabs = session.tabs.filter((t) => t.id !== id);
+
   const tab: Tab = {
-    id: wantId === undefined ? makeId() : wantId,
+    id,
     name: basename(resolved),
     path: resolved,
     host: null,
