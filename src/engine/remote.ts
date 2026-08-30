@@ -405,8 +405,77 @@ export interface Connection {
    * git under it - while the request it belongs to is still running.
    */
   inFlight: number;
+  /**
+   * The secret the engine at the far end demands on every request.
+   *
+   * A remote engine listens on the remote machine's loopback with nothing in
+   * front of it, and every other account on that machine can reach loopback.
+   * A build box or a jump host - which is what this feature is for - usually
+   * has several. Without this, any of them could read the filesystem through
+   * /api/ls and /api/diff and run /api/op, /api/discard and /api/commit as
+   * the connecting user, for as long as a tab was open, on a port fixed at
+   * 7893 so there was nothing to discover.
+   *
+   * The engine invents it, and prints it on its own stdout - which travels
+   * back inside the ssh channel and nowhere else. Deliberately NOT the
+   * command line: `ps` is world-readable on exactly the hosts where this
+   * matters, so argv is the one channel that would hand the secret to the
+   * accounts it is meant to keep out.
+   */
+  token: string;
   /** Ends the tunnel and, with it, the remote engine. */
   close: () => void;
+}
+
+/**
+ * The line a --serve engine prints to hand its token back up the tunnel.
+ *
+ * A distinctive prefix rather than a position: the remote prints other things
+ * first, and with -tt everything it says arrives on one stream.
+ */
+export const TOKEN_LINE = "gitc-token:";
+
+/**
+ * Reads the token out of whatever the remote has said so far.
+ *
+ * Returns null until the line has arrived in full - a pty delivers it in
+ * whatever chunks it likes, so a prefix with no newline yet is not an answer.
+ */
+export function readToken(said: string): string | null {
+  const at = said.indexOf(TOKEN_LINE);
+  if (at === -1) return null;
+  const from = at + TOKEN_LINE.length;
+  // A pty ends lines with CR LF, and the CR is part of neither.
+  let end = said.length;
+  for (let i = from; i < said.length; i++) {
+    const c = said.charAt(i);
+    if (c === String.fromCharCode(10) || c === String.fromCharCode(13)) {
+      end = i;
+      break;
+    }
+  }
+  if (end === said.length) return null;
+  const token = said.substring(from, end).trim();
+  return token.length > 0 ? token : null;
+}
+
+/**
+ * What the remote said, without the token line.
+ *
+ * The same text is used for error messages, and a secret in a message the UI
+ * shows - and that somebody pastes into a bug report - is a secret gone.
+ */
+export function withoutToken(said: string): string {
+  const at = said.indexOf(TOKEN_LINE);
+  if (at === -1) return said;
+  let end = said.length;
+  for (let i = at; i < said.length; i++) {
+    if (said.charAt(i) === String.fromCharCode(10)) {
+      end = i + 1;
+      break;
+    }
+  }
+  return said.substring(0, at) + said.substring(end);
 }
 
 /** A free loopback port, found by letting the OS pick one and handing it back. */
@@ -434,9 +503,12 @@ export function tunnelRequest(
   path: string,
   method: string,
   body: string | null,
+  /** The far engine's token - see Connection.token. */
+  token: string,
 ): Promise<{ status: number; text: string }> {
   return new Promise((resolve) => {
     const headers: Record<string, string> = {};
+    if (token.length > 0) headers["x-gitc-token"] = token;
     if (body !== null) {
       headers["content-type"] = "application/json";
       headers["content-length"] = String(Buffer.byteLength(body));
@@ -465,8 +537,15 @@ export function tunnelRequest(
   });
 }
 
-/** Is the tunnel carrying a live gitc yet? */
-function answering(port: number): Promise<boolean> {
+/**
+ * Is the tunnel carrying a live gitc yet?
+ *
+ * Asked WITH the token, so a 200 means more than "something is listening": it
+ * means the engine that printed that token is the thing on the other end of
+ * this forward. A stranger holding the port answers 403 and the wait
+ * continues, which is the right answer to "is my engine ready".
+ */
+function answering(port: number, token: string): Promise<boolean> {
   return new Promise((resolve) => {
     const req = request(
       {
@@ -475,6 +554,7 @@ function answering(port: number): Promise<boolean> {
         port: port,
         path: "/api/ping",
         method: "GET",
+        headers: { "x-gitc-token": token },
         timeout: 2000,
       },
       (res) => resolve(res.statusCode === 200),
@@ -603,7 +683,7 @@ export async function connect(
     ended = true;
     if (closedHere) return;
     const why = stderr.trim();
-    const said = remoteSaid.trim();
+    const said = withoutToken(remoteSaid).trim();
     console.log(
       "[tunnel] " + host + " ended on its own, code " + String(code) +
         (why.length > 0 ? " - ssh: " + why : "") +
@@ -618,8 +698,12 @@ export async function connect(
 
   const started = Date.now();
   while (Date.now() - started < CONNECT_TIMEOUT_MS) {
-    if (await answering(port)) {
-      return { host, port, usedAt: Date.now(), inFlight: 0, close };
+    // The token first, then readiness. Both come from the same stream and in
+    // that order - the engine prints its token before it starts listening -
+    // so there is nothing to probe with until this arrives.
+    const token = readToken(remoteSaid);
+    if (token !== null && (await answering(port, token))) {
+      return { host, port, usedAt: Date.now(), inFlight: 0, token, close };
     }
     // ssh has already gone: a refused key under BatchMode, a forward that
     // could not bind, an engine that exited on a taken port. Waiting out the
@@ -630,7 +714,9 @@ export async function connect(
   }
 
   close();
-  throw new Error(failureReason(stderr, remoteSaid));
+  // withoutToken: this text reaches the UI, and a secret in an error message
+  // is a secret in a screenshot.
+  throw new Error(failureReason(stderr, withoutToken(remoteSaid)));
 }
 
 /**

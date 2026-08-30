@@ -26,6 +26,7 @@ import { promisify } from "node:util";
 
 import { REPO, VERSION } from "../generated/version.ts";
 import { installedBinary } from "./install.ts";
+import { tempFile } from "./paths.ts";
 import { compare, isPrerelease } from "./semver.ts";
 
 const execFileAsync = promisify(execFile);
@@ -70,7 +71,7 @@ export type Channel = "stable" | "test";
  */
 function apiUrl(channel: Channel): string {
   const custom = process.env["GITC_UPDATE_API"];
-  if (custom !== undefined && custom.length > 0) return custom;
+  if (custom !== undefined && custom.length > 0) return secureUrl(custom, "GITC_UPDATE_API");
   const base = "https://api.github.com/repos/" + REPO + "/releases";
   // /releases/latest is defined as the newest release that is neither draft
   // nor prerelease, so the stable stream needs no filtering of its own. The
@@ -88,9 +89,45 @@ function apiUrl(channel: Channel): string {
 function downloadBase(tag: string): string {
   const custom = process.env["GITC_UPDATE_BASE"];
   if (custom !== undefined && custom.length > 0) {
-    return custom.endsWith("/") ? custom + tag + "/" : custom + "/" + tag + "/";
+    const base = secureUrl(custom, "GITC_UPDATE_BASE");
+    return base.endsWith("/") ? base + tag + "/" : base + "/" + tag + "/";
   }
   return "https://github.com/" + REPO + "/releases/download/" + tag + "/";
+}
+
+/**
+ * Refuses an update source that is not https.
+ *
+ * These two variables exist so a fork or a self-hosted build can publish
+ * somewhere else, which is a good reason for them to exist and no reason at
+ * all for them to accept "http://". The whole of the trust in an update is
+ * that the bytes came from the right host over TLS - the checksums sit beside
+ * the binary, so they cannot vouch for it on their own - and a plaintext
+ * source hands the next version of the binary to anybody on the path.
+ *
+ * Loopback is allowed because that is how the release flow is tested, and it
+ * is not a network anyone else is on.
+ */
+function secureUrl(value: string, name: string): string {
+  const lower = value.trim().toLowerCase();
+  if (lower.startsWith("https://")) return value.trim();
+  if (lower.startsWith("http://127.0.0.1") || lower.startsWith("http://localhost")) {
+    return value.trim();
+  }
+  throw new Error(name + " must be an https URL - refusing to update over " + value);
+}
+
+/**
+ * A tag as it may appear in a download URL.
+ *
+ * The tag comes out of the release feed and is pasted straight into a path.
+ * Anything with a slash, a dot-dot or a query in it would fetch something
+ * other than the release it names, so the shape is checked rather than
+ * trusted: versions and tags are letters, digits, dots, dashes, underscores
+ * and plus signs, and nothing here has ever needed more.
+ */
+function safeTag(tag: string): boolean {
+  return tag.length > 0 && tag.length <= 100 && /^[A-Za-z0-9._+-]+$/.test(tag) && !tag.includes("..");
 }
 
 /** The asset this platform needs from a release. */
@@ -234,6 +271,16 @@ export async function check(channel: Channel = "stable"): Promise<UpdateInfo> {
     return info;
   }
 
+  // apiUrl refuses a plaintext override, and that refusal is an answer to
+  // report rather than a crash in the middle of a poll.
+  let endpoint: string;
+  try {
+    endpoint = apiUrl(channel);
+  } catch (e) {
+    info.error = (e as Error).message;
+    return info;
+  }
+
   const body = await curl([
     ...META_TIMEOUT,
     "-fsSL",
@@ -241,7 +288,7 @@ export async function check(channel: Channel = "stable"): Promise<UpdateInfo> {
     "accept: application/vnd.github+json",
     "-H",
     "user-agent: gitc/" + VERSION,
-    apiUrl(channel),
+    endpoint,
   ]);
 
   if (body === null) {
@@ -254,7 +301,7 @@ export async function check(channel: Channel = "stable"): Promise<UpdateInfo> {
   // The highest, not the first. A list comes back newest-first by DATE, and a
   // stable hotfix published after an rc would otherwise be the only candidate
   // considered - hiding the rc that is actually newer.
-  const tags = tagNames(body);
+  const tags = tagNames(body).filter(safeTag);
   if (tags.length === 0) {
     info.error = "the release could not be read";
     return info;
@@ -452,9 +499,25 @@ export async function apply(channel: Channel = "stable"): Promise<UpdateResult> 
   }
 
   const tag = "v" + info.latest;
-  const base = downloadBase(tag);
+  if (!safeTag(tag)) {
+    const message = "the release tag " + tag + " is not a shape gitc will fetch";
+    setPhase("failed", message);
+    return { ok: false, message, restarting: false };
+  }
+  let base: string;
+  try {
+    base = downloadBase(tag);
+  } catch (e) {
+    const message = (e as Error).message;
+    setPhase("failed", message);
+    return { ok: false, message, restarting: false };
+  }
   const asset = assetName();
-  const temp = join(tmpdir(), "gitc-update-" + info.latest + (windows ? ".exe" : ""));
+  // In this process's own temp directory. The old name was derived from the
+  // release tag, so it was known in advance: on a shared /tmp another account
+  // could pre-create it as a symlink, or - worse - swap the verified file for
+  // their own between the checksum below and the copy that installs it.
+  const temp = tempFile("update-" + info.latest + (windows ? ".exe" : ""));
   const url = base + asset;
 
   const total = await contentLength(url);
@@ -471,21 +534,43 @@ export async function apply(channel: Channel = "stable"): Promise<UpdateResult> 
   // Verify against the checksums published beside the binary. A release
   // without them still installs - the file came from the same place either
   // way - but a mismatch is a hard stop.
+  // Fails CLOSED. This check used to be skipped entirely when SHA256SUMS
+  // could not be fetched, and again when the file did not list this asset -
+  // so the one condition it was meant to catch, somebody able to interfere
+  // with the download, was also the condition that switched it off. Whoever
+  // can substitute the binary can drop the sums request just as easily.
+  //
+  // What this does and does not buy is worth being honest about: the sums
+  // live beside the binary, so they are integrity against a corrupted or
+  // truncated download, not authenticity. HTTPS to the release host is what
+  // makes the pair mean anything, and a signature would be what replaces
+  // this. Until then, a missing checksum is a refused update.
   setPhase("verifying", "Checking the download against its published checksum");
   const sums = await curl([...META_TIMEOUT, "-fsSL", base + "SHA256SUMS"]);
-  if (sums !== null) {
-    const actual = createHash("sha256").update(readFileSync(temp)).digest("hex");
-    let expected = "";
-    for (const line of sums.split(String.fromCharCode(10))) {
-      const parts = line.trim().split(/\s+/);
-      if (parts.length >= 2 && parts[1].replace(/^\*/, "") === asset) expected = parts[0];
-    }
-    if (expected.length > 0 && expected.toLowerCase() !== actual.toLowerCase()) {
-      rmSync(temp, { force: true });
-      const message = "the download did not match its published checksum - update cancelled";
-      setPhase("failed", message);
-      return { ok: false, message, restarting: false };
-    }
+  if (sums === null) {
+    rmSync(temp, { force: true });
+    const message = "could not fetch the published checksums for " + tag + " - update cancelled";
+    setPhase("failed", message);
+    return { ok: false, message, restarting: false };
+  }
+
+  const actual = createHash("sha256").update(readFileSync(temp)).digest("hex");
+  let expected = "";
+  for (const line of sums.split(String.fromCharCode(10))) {
+    const parts = line.trim().split(/\s+/);
+    if (parts.length >= 2 && parts[1].replace(/^\*/, "") === asset) expected = parts[0];
+  }
+  if (expected.length === 0) {
+    rmSync(temp, { force: true });
+    const message = "the published checksums for " + tag + " do not list " + asset;
+    setPhase("failed", message);
+    return { ok: false, message, restarting: false };
+  }
+  if (expected.toLowerCase() !== actual.toLowerCase()) {
+    rmSync(temp, { force: true });
+    const message = "the download did not match its published checksum - update cancelled";
+    setPhase("failed", message);
+    return { ok: false, message, restarting: false };
   }
 
   setPhase("installing", "Putting the new version in place");

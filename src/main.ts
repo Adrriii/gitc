@@ -4,11 +4,11 @@
 // which gives a chromeless window without needing a GUI toolkit - see
 // docs/toolchain.md for why that is the shape of this program.
 
+import { randomBytes } from "node:crypto";
 import { createServer, request } from "node:http";
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { join, basename, resolve } from "node:path";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { join, basename, resolve, sep } from "node:path";
 
 import {
   readCommits,
@@ -64,6 +64,7 @@ import {
   detectRemote,
   isSafeDestination,
   tunnelRequest,
+  TOKEN_LINE,
   type Connection,
 } from "./engine/remote.ts";
 import { readSshHosts } from "./engine/sshConfig.ts";
@@ -77,11 +78,44 @@ import {
 import { NAME, VERSION } from "./generated/version.ts";
 import { loadSession, saveSession, touchRecent } from "./state.ts";
 import { at } from "./engine/safe.ts";
+import { allowedRequest } from "./engine/origin.ts";
+import { cleanTempDir } from "./engine/paths.ts";
 import type { Session, Tab } from "./state.ts";
 import { bakedAsset } from "./generated/assets.ts";
 
 const DEFAULT_PORT = 7893;
 const DEFAULT_LIMIT = 2000;
+
+/**
+ * The most a request body may be, in bytes.
+ *
+ * readBody accumulated a string with no ceiling, so anything that could reach
+ * the port could grow the engine's heap until the process died - a two-line
+ * denial of service against a program holding somebody's uncommitted work.
+ * The largest legitimate body is a conflict resolution or a patch, and both
+ * are files a person is editing.
+ */
+const MAX_BODY_BYTES = 64 * 1024 * 1024;
+
+/**
+ * The secret this engine demands, when it is serving somebody else.
+ *
+ * Empty for an ordinary desktop gitc, which is answering its own window on
+ * its own machine and has loopback plus the checks in engine/origin.ts
+ * between it and the world.
+ *
+ * Set for --serve, where neither of those is enough. That engine sits on
+ * another machine's loopback, and loopback there is shared with every other
+ * account on the box - which on a build server or a jump host is the whole
+ * point of the box. Before this, any of them could read the filesystem
+ * through /api/ls and /api/diff and run /api/op as the connecting user, on a
+ * fixed port, for as long as a tab was open.
+ *
+ * It goes back to the client on stdout, inside the ssh channel, and never on
+ * a command line: `ps` is world-readable on exactly those hosts.
+ */
+let serveToken = "";
+
 
 /**
  * The hash the uncommitted-work row carries.
@@ -149,12 +183,23 @@ const QUIT_GRACE_MS = 3000;
 // --------------------------------------------------------------- avatars
 
 /** Where a user drops images to override an author's avatar. */
-function avatarDir(): string {
+/**
+ * Where gitc keeps everything that belongs to this user.
+ *
+ * The same directory the session and the hidden-ref state already live in -
+ * per-user by construction on every platform, which is the property the
+ * browser profile below needs and did not have.
+ */
+function stateDir(): string {
   const appData = process.env["APPDATA"];
-  if (appData !== undefined && appData.length > 0) return join(appData, "gitc", "avatars");
+  if (appData !== undefined && appData.length > 0) return join(appData, "gitc");
   const home = process.env["HOME"];
-  if (home !== undefined && home.length > 0) return join(home, ".config", "gitc", "avatars");
-  return join(".gitc", "avatars");
+  if (home !== undefined && home.length > 0) return join(home, ".config", "gitc");
+  return ".gitc";
+}
+
+function avatarDir(): string {
+  return join(stateDir(), "avatars");
 }
 
 function avatarType(file: string): string {
@@ -180,15 +225,25 @@ function findAvatarOverride(email: string): string | null {
   const dir = avatarDir();
   if (!existsSync(dir)) return null;
 
+  // Only the sanitised spelling is looked up now. The address as-typed used
+  // to be tried first, unfiltered, and it is a query parameter: "../../x.png"
+  // read a file from anywhere on the disk that happened to end in one of
+  // these extensions, and served it back.
+  //
+  // The two spellings were there to make the file easy to name by hand, and
+  // the sanitised one still is - an address with nothing unusual in it is
+  // unchanged by this, which is nearly all of them.
   const safe = lower.replace(/[^a-z0-9.@_-]/g, "_");
-  const stems = [lower, safe];
+  if (safe.length === 0 || safe === "." || safe === "..") return null;
   const exts = [".png", ".jpg", ".jpeg", ".svg", ".gif", ".webp"];
 
-  for (const stem of stems) {
-    for (const ext of exts) {
-      const candidate = join(dir, stem + ext);
-      if (existsSync(candidate)) return candidate;
-    }
+  const root = resolve(dir);
+  for (const ext of exts) {
+    const candidate = resolve(root, safe + ext);
+    // Belt and braces: the sanitiser above already removes every separator,
+    // so this can only fail if that list is ever widened.
+    if (!candidate.startsWith(root + sep)) continue;
+    if (existsSync(candidate)) return candidate;
   }
   return null;
 }
@@ -200,9 +255,32 @@ function findAvatarOverride(email: string): string | null {
  * editing the frontend doesn't need a recompile.
  */
 function asset(name: string): string | null {
+  // The name comes straight off the request line, and `join` resolves "..".
+  // A client that does not normalise its own path - which is anything that is
+  // not a browser - could read any file this process can, served as
+  // text/plain: `GET /../../secret.txt` returned it, measured.
+  //
+  // The baked assets are a fixed set with no directories in it, so there is
+  // nothing to lose by refusing every path that is not a plain file name.
+  if (!isPlainAssetName(name)) return null;
+
   const devPath = join(process.cwd(), "build", "ui", name);
   if (existsSync(devPath)) return readFileSync(devPath, "utf8");
   return bakedAsset(name);
+}
+
+/**
+ * A bare file name: no directories, no traversal, no drive letters.
+ *
+ * Vite emits `index.html`, `app.js` and `app.css` beside each other, so a
+ * separator in an asset name has never meant anything legitimate here.
+ */
+function isPlainAssetName(name: string): boolean {
+  if (name.length === 0 || name.length > 128) return false;
+  if (name.indexOf("/") !== -1 || name.indexOf("\\") !== -1) return false;
+  if (name.indexOf(String.fromCharCode(0)) !== -1) return false;
+  if (name === "." || name === "..") return false;
+  return true;
 }
 
 function contentType(name: string): string {
@@ -630,6 +708,9 @@ function sendThrough(
 ): Promise<Relayed> {
   return new Promise((resolve) => {
     const headers: Record<string, string> = {};
+    // Every request down a tunnel carries the far engine's token; without it
+    // that engine answers 403 to us exactly as it does to a stranger.
+    if (conn.token.length > 0) headers["x-gitc-token"] = conn.token;
     if (contentType !== undefined) headers["content-type"] = contentType;
     if (body.length > 0) headers["content-length"] = String(Buffer.byteLength(body));
 
@@ -670,13 +751,36 @@ function sendThrough(
   });
 }
 
+/**
+ * Reads a request body, up to MAX_BODY_BYTES.
+ *
+ * Anything larger is not truncated but abandoned: a body that was cut in half
+ * is not valid JSON, and half a conflict resolution written to a file would be
+ * worse than an error. The socket is destroyed so the sender stops, rather
+ * than being left to push megabytes at a promise that has already settled.
+ */
 function readBody(req: import("node:http").IncomingMessage): Promise<string> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     let data = "";
+    let size = 0;
+    let over = false;
     req.on("data", (chunk: Buffer) => {
+      if (over) return;
+      size += chunk.length;
+      if (size > MAX_BODY_BYTES) {
+        over = true;
+        req.destroy();
+        reject(new Error("request body too large"));
+        return;
+      }
       data += chunk.toString();
     });
-    req.on("end", () => resolve(data));
+    req.on("end", () => {
+      if (!over) resolve(data);
+    });
+    req.on("error", (e: Error) => {
+      if (!over) reject(e);
+    });
   });
 }
 
@@ -1061,13 +1165,14 @@ async function openRemoteRepoOnce(
   // this side chose. It costs a round trip and it works against engines older
   // than this change, which the version check cannot help with - an out of
   // date remote is exactly the one that needs it.
-  await closeStaleRemoteTab(conn.port, path, wanted);
+  await closeStaleRemoteTab(conn.port, path, wanted, conn.token);
 
   const answer = await tunnelRequest(
     conn.port,
     "/api/open",
     "POST",
     JSON.stringify({ path, id: wanted }),
+    conn.token,
   );
   if (answer.status !== 200) {
     // The tunnel stays: it may already be serving other tabs, and a host that
@@ -1112,12 +1217,13 @@ async function openRemoteRepoOnce(
 async function registerTabs(host: string, conn: Connection): Promise<void> {
   for (const tab of session.tabs) {
     if (tab.host !== host) continue;
-    await closeStaleRemoteTab(conn.port, tab.path, tab.id);
+    await closeStaleRemoteTab(conn.port, tab.path, tab.id, conn.token);
     await tunnelRequest(
       conn.port,
       "/api/open",
       "POST",
       JSON.stringify({ path: tab.path, id: tab.id }),
+      conn.token,
     );
   }
 }
@@ -1129,8 +1235,13 @@ async function registerTabs(host: string, conn: Connection): Promise<void> {
  * Best effort throughout: this is the far end's own bookkeeping, and failing
  * to tidy it is not a reason to refuse to open a repository.
  */
-async function closeStaleRemoteTab(port: number, path: string, wanted: string): Promise<void> {
-  const got = await tunnelRequest(port, "/api/session", "GET", null);
+async function closeStaleRemoteTab(
+  port: number,
+  path: string,
+  wanted: string,
+  token: string,
+): Promise<void> {
+  const got = await tunnelRequest(port, "/api/session", "GET", null, token);
   if (got.status !== 200) return;
 
   let theirs: { tabs: { id: string; path: string }[] };
@@ -1142,7 +1253,7 @@ async function closeStaleRemoteTab(port: number, path: string, wanted: string): 
 
   for (const t of theirs.tabs) {
     if (t.path !== path || t.id === wanted) continue;
-    await tunnelRequest(port, "/api/close", "POST", JSON.stringify({ id: t.id }));
+    await tunnelRequest(port, "/api/close", "POST", JSON.stringify({ id: t.id }), token);
   }
 }
 
@@ -1917,6 +2028,9 @@ function shutdown(): void {
   // answer for that has to live on the remote side.
   for (const conn of connections.values()) conn.close();
   connections.clear();
+  // The private temp directory this process made for patches, squash specs
+  // and commit messages. mkdtemp does not clean up after itself.
+  cleanTempDir();
   process.exit(0);
 }
 
@@ -1940,7 +2054,22 @@ function openWindow(
   // invocation sharing a profile hands the URL to the running browser and the
   // flag is dropped, so the confirm opened at whatever bounds the main window
   // last used - full screen, if that is how gitc was left.
-  const profile = join(tmpdir(), profileName);
+  // Under gitc's own state directory, not the shared temp directory.
+  //
+  // The path was fixed and predictable ("/tmp/gitc-window"), and on Linux and
+  // macOS /tmp is shared by every account on the machine. Whoever creates that
+  // directory first owns it, and it is a Chromium profile: its Preferences
+  // decide what the browser loads, and the window it configures is the one
+  // holding an unauthenticated connection to this engine. A directory beside
+  // the session file is per-user by construction.
+  const profile = join(stateDir(), profileName);
+  // Chromium makes the profile itself, but not a missing parent.
+  try {
+    mkdirSync(profile, { recursive: true });
+  } catch {
+    // Already there, or somewhere unwritable - Chromium reports the second
+    // case far better than a thrown error here would.
+  }
 
   // On Linux the window manager identifies a window by its WM_CLASS, and a
   // Chromium started with --app= reports the browser's - so gitc gets the
@@ -2215,6 +2344,15 @@ async function main(): Promise<void> {
     }
   }
 
+  // A serving engine invents its secret before it binds anything, and says it
+  // on stdout - which, started over ssh, is a stream only the client that
+  // opened the tunnel can read. Printed before listen() so it cannot be
+  // raced by the client's first request.
+  if (serving) {
+    serveToken = randomBytes(32).toString("hex");
+    console.log(TOKEN_LINE + " " + serveToken);
+  }
+
   if (wanted !== null) await openRepo(wanted);
   if (session.activeId === null) {
     const head = at(session.tabs, 0);
@@ -2224,6 +2362,31 @@ async function main(): Promise<void> {
   const server = createServer((req, res) => {
     const url = req.url === undefined ? "/" : req.url;
     const path = url === "/" ? "/index.html" : url;
+
+    // Before anything is parsed, let alone acted on. See allowedRequest: this
+    // is what stops a page on any website from driving this engine, and a
+    // rebound hostname from reading its answers.
+    // The dev loop is the only shape where the window is served by Vite on
+    // another port rather than by this engine. `headless` alone is not that
+    // shape: --serve sets it too, and an engine on somebody's server has no
+    // business trusting a page from a development server on that machine.
+    if (!allowedRequest(req, port, headless && !serving)) {
+      send(res, 403, "text/plain", "forbidden");
+      return;
+    }
+
+    // An engine serving somebody else answers only the client that started
+    // it. See serveToken: on the machines this runs on, loopback is not a
+    // boundary, and this is the one that replaces it.
+    //
+    // Applied to the assets as well as the API. There is nothing secret in
+    // the bundle, but a stranger who can load the page is a stranger with a
+    // window pointed at this engine, and the page is of no use to anybody on
+    // that machine anyway - the window lives at the other end of the tunnel.
+    if (serveToken.length > 0 && req.headers["x-gitc-token"] !== serveToken) {
+      send(res, 403, "text/plain", "forbidden");
+      return;
+    }
 
     if (path.startsWith("/api/")) {
       // A request about a repository on another machine is answered by the
@@ -2253,9 +2416,17 @@ async function main(): Promise<void> {
           markWindowAlive();
 
           const type = req.headers["content-type"];
-          void readBody(req).then((body) =>
-            proxyToHost(on, path, req.method === undefined ? "GET" : req.method, type, body, res),
-          );
+          void readBody(req)
+            .then((body) =>
+              proxyToHost(on, path, req.method === undefined ? "GET" : req.method, type, body, res),
+            )
+            // readBody rejects on an oversized body now, and an unhandled
+            // rejection here would take the engine down rather than the
+            // request.
+            .catch((e: unknown) => {
+              const msg = e instanceof Error ? e.message : String(e);
+              send(res, 413, "text/plain", msg);
+            });
           return;
         }
       }

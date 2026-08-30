@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { git, gitOrNull } from "./git.ts";
+import { needInRepo, safeArgument, safeRemoteUrl, tempFile } from "./paths.ts";
 import { readPending, readRemotes } from "./refs.ts";
 import { at } from "./safe.ts";
 
@@ -308,7 +309,10 @@ async function classifyRefusal(repo: string, upstream: string): Promise<PushRefu
  */
 function needRef(ref: string, what: string): string {
   if (ref.trim().length === 0) throw new Error("no " + what + " given");
-  return ref;
+  // Every git call here builds its own argv, so there is no shell - but a ref
+  // spelled as an option is read as one. "--upload-pack=<command>" reaching
+  // `git fetch` is a command git runs, and this value arrives over the API.
+  return safeArgument(ref, what);
 }
 
 /**
@@ -582,6 +586,7 @@ export async function runOp(repo: string, req: OpRequest): Promise<OpResult> {
     case "checkoutCommit": {
       const sha = at(req.shas, 0);
       if (sha === undefined) throw new Error("no commit given");
+      safeArgument(sha, "commit");
       // Checking out a commit detaches HEAD. That is the intended behaviour
       // here - the UI says so before calling.
       await git(repo, ["checkout", "--detach", sha]);
@@ -592,9 +597,11 @@ export async function runOp(repo: string, req: OpRequest): Promise<OpResult> {
 
     case "createBranch": {
       if (req.name.trim().length === 0) throw new Error("branch needs a name");
+      safeArgument(req.name, "branch name");
       // No start point means "from HEAD", which is the argument being absent
       // rather than being an empty string.
       const start = at(req.shas, 0) ?? req.ref;
+      if (start.trim().length > 0) safeArgument(start, "start point");
       const args = req.checkout ? ["checkout", "-b", req.name] : ["branch", req.name];
       if (start.trim().length > 0) args.push(start);
       await git(repo, args);
@@ -603,6 +610,7 @@ export async function runOp(repo: string, req: OpRequest): Promise<OpResult> {
 
     case "renameBranch": {
       if (req.name.trim().length === 0) throw new Error("branch needs a name");
+      safeArgument(req.name, "branch name");
       needRef(req.ref, "branch");
       await git(repo, ["branch", "-m", req.ref, req.name]);
       return ok("renamed to " + req.name);
@@ -647,6 +655,7 @@ export async function runOp(repo: string, req: OpRequest): Promise<OpResult> {
     case "deleteRemoteBranch": {
       needRef(req.ref, "branch");
       if (req.remote.trim().length === 0) throw new Error("no remote given");
+      safeArgument(req.remote, "remote");
       await git(repo, ["push", req.remote, "--delete", req.ref]);
       return ok("deleted " + req.remote + "/" + req.ref);
     }
@@ -684,6 +693,7 @@ export async function runOp(repo: string, req: OpRequest): Promise<OpResult> {
 
     case "cherryPick": {
       if (req.shas.length === 0) throw new Error("no commits given");
+      for (const sha of req.shas) safeArgument(sha, "commit");
       // Oldest first, so the run lands in the order it was authored.
       const ordered = req.shas.slice().reverse();
       return conflictProne(
@@ -696,6 +706,7 @@ export async function runOp(repo: string, req: OpRequest): Promise<OpResult> {
 
     case "revert": {
       if (req.shas.length === 0) throw new Error("no commits given");
+      for (const sha of req.shas) safeArgument(sha, "commit");
       // Newest first: reverting an older commit before a newer one that
       // touches the same lines conflicts almost every time.
       return conflictProne(
@@ -709,6 +720,7 @@ export async function runOp(repo: string, req: OpRequest): Promise<OpResult> {
     case "reset": {
       const sha = at(req.shas, 0);
       if (sha === undefined) throw new Error("no commit given");
+      safeArgument(sha, "commit");
       const mode = req.mode === "soft" || req.mode === "hard" ? req.mode : "mixed";
       await git(repo, ["reset", "--" + mode, sha]);
       return ok("reset " + mode + " to " + sha.substring(0, 7));
@@ -718,7 +730,8 @@ export async function runOp(repo: string, req: OpRequest): Promise<OpResult> {
 
     case "createTag": {
       if (req.name.trim().length === 0) throw new Error("tag needs a name");
-      const at0 = at(req.shas, 0) ?? "HEAD";
+      safeArgument(req.name, "tag name");
+      const at0 = safeArgument(at(req.shas, 0) ?? "HEAD", "commit");
       if (req.message.length > 0) {
         await git(repo, ["tag", "-a", req.name, "-m", req.message, at0]);
       } else {
@@ -821,8 +834,11 @@ export async function runOp(repo: string, req: OpRequest): Promise<OpResult> {
       if (message.length === 0) throw new Error("the squashed commit needs a message");
 
       const stamp = String(Date.now());
-      const specPath = join(tmpdir(), "gitc-squash-" + stamp + ".txt");
-      const msgPath = join(tmpdir(), "gitc-squash-msg-" + stamp + ".txt");
+      // In this process's own temp directory - see tempDir(). A guessable
+      // name in the shared temp directory can be pre-created as a symlink by
+      // another account on the machine, and this writes through it.
+      const specPath = tempFile("squash-" + stamp + ".txt");
+      const msgPath = tempFile("squash-msg-" + stamp + ".txt");
       writeFileSync(specPath, folded.join(String.fromCharCode(10)), "utf8");
       writeFileSync(msgPath, message, "utf8");
 
@@ -915,7 +931,7 @@ export async function runOp(repo: string, req: OpRequest): Promise<OpResult> {
       // every REVERSE apply fail to find its text ("patch does not apply"),
       // which is unstaging and discarding both.
 
-      const file = join(tmpdir(), "gitc-hunk-" + String(Date.now()) + ".patch");
+      const file = tempFile("hunk-" + String(Date.now()) + ".patch");
       writeFileSync(file, patch, "utf8");
       try {
         await git(repo, args.concat([file]));
@@ -931,7 +947,11 @@ export async function runOp(repo: string, req: OpRequest): Promise<OpResult> {
     case "editFile": {
       const rel = req.path;
       if (rel.trim().length === 0) throw new Error("no file to open");
-      const full = join(repo, rel);
+      // openInEditor hands this to the platform's opener, which on Windows is
+      // `cmd /c start` - it runs the file rather than merely showing it. A
+      // path that could leave the repository was therefore a way to run any
+      // executable on the machine.
+      const full = needInRepo(repo, rel);
       // A file shown from a commit may not exist in the working tree at all -
       // deleted since, or never checked out on this branch. Say so rather than
       // silently opening nothing.
@@ -944,8 +964,13 @@ export async function runOp(repo: string, req: OpRequest): Promise<OpResult> {
 
     case "addRemote": {
       if (req.name.trim().length === 0) throw new Error("the remote needs a name");
-      const url = req.message.trim();
-      if (url.length === 0) throw new Error("the remote needs a URL");
+      safeArgument(req.name, "remote name");
+      // The transport is the whole finding. "ext::sh -c <command>" is a valid
+      // git URL that runs a shell command, and the fetch below happens
+      // automatically - so this was remote code execution for anything that
+      // could reach the port, which before the Origin check meant any website
+      // the user visited. Confirmed against a running engine.
+      const url = safeRemoteUrl(req.message);
       if (readRemotes(repo).remotes.includes(req.name)) {
         throw new Error("A remote called " + req.name + " already exists.");
       }
@@ -959,6 +984,7 @@ export async function runOp(repo: string, req: OpRequest): Promise<OpResult> {
     case "renameRemote": {
       needRef(req.ref, "remote");
       if (req.name.trim().length === 0) throw new Error("the remote needs a name");
+      safeArgument(req.name, "remote name");
       await git(repo, ["remote", "rename", req.ref, req.name]);
       return ok("renamed " + req.ref + " to " + req.name);
     }
@@ -971,8 +997,9 @@ export async function runOp(repo: string, req: OpRequest): Promise<OpResult> {
 
     case "setRemoteUrl": {
       needRef(req.ref, "remote");
-      const url = req.message.trim();
-      if (url.length === 0) throw new Error("the remote needs a URL");
+      // Same transport hazard as addRemote: pointing an existing remote at
+      // "ext::..." reaches the same helper on the next fetch.
+      const url = safeRemoteUrl(req.message);
       await git(repo, ["remote", "set-url", req.ref, url]);
       return ok("updated the URL for " + req.ref);
     }

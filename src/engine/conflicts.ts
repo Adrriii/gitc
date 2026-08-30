@@ -13,6 +13,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { git, gitOrNull } from "./git.ts";
+import { needInRepo } from "./paths.ts";
 import { gitDir } from "./refs.ts";
 import { at } from "./safe.ts";
 
@@ -274,7 +275,9 @@ export async function readConflictVersions(
   const theirs = await stage(repo, STAGE_THEIRS, path);
 
   let merged = "";
-  const worktree = join(repo, path);
+  // Repository-relative, and it comes off the query string. Without this the
+  // "merged" field returned any file the engine could read.
+  const worktree = needInRepo(repo, path);
   if (existsSync(worktree)) merged = readFileSync(worktree, "utf8");
 
   const NUL = String.fromCharCode(0);
@@ -307,7 +310,13 @@ export async function resolveWithContent(
   path: string,
   content: string,
 ): Promise<void> {
-  writeFileSync(join(repo, path), content, "utf8");
+  // The write happens before git ever sees the path, so git's own "outside
+  // repository" complaint was no protection at all: it was reported to the
+  // caller AFTER the file had been written. This was an arbitrary file write
+  // with arbitrary content, reachable by anything that could reach the port -
+  // confirmed by writing outside the repository from a cross-site request.
+  const full = needInRepo(repo, path);
+  writeFileSync(full, content, "utf8");
   await git(repo, ["add", "--", path]);
 }
 
@@ -325,6 +334,7 @@ export async function resolveWithSide(
   path: string,
   side: string,
 ): Promise<void> {
+  needInRepo(repo, path);
   if (side === "delete") {
     await git(repo, ["rm", "-f", "--", path]);
     return;
@@ -339,10 +349,12 @@ export async function resolveWithSide(
 /** Stages every conflicted file as-is, markers and all if still present. */
 export async function markAllResolved(repo: string, paths: string[]): Promise<void> {
   if (paths.length === 0) return;
+  for (const path of paths) needInRepo(repo, path);
   await git(repo, ["add", "--"].concat(paths));
 }
 
 /** Undoes a resolution, putting the file back into conflict. */
 export async function unresolve(repo: string, path: string): Promise<void> {
+  needInRepo(repo, path);
   await git(repo, ["checkout", "-m", "--", path]);
 }
