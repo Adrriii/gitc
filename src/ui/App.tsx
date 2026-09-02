@@ -1075,7 +1075,35 @@ export function App() {
           },
           {
             label: many ? `Revert ${chosen.length} commits` : "Revert commit",
-            action: () => void runOp({ op: "revert", shas: chosen }),
+            // Both answers are what somebody means by "revert" often enough
+            // that picking one for them is wrong half the time: undoing a
+            // change to look at it before committing, and undoing it as a
+            // commit of its own, are different intentions.
+            action: () =>
+              setChoose({
+                title: many ? `Revert ${chosen.length} commits` : "Revert commit",
+                body: many
+                  ? "The changes these commits made are undone, newest first."
+                  : `The changes ${short} made are undone.`,
+                // Choose truncates a hint to one line, so these stay short -
+                // the body above carries whatever needs a sentence.
+                options: [
+                  {
+                    value: "worktree",
+                    label: "Leave the changes unstaged",
+                    hint: "edit or discard first",
+                  },
+                  {
+                    value: "commit",
+                    label: "Commit the revert now",
+                    hint: many ? "one commit each" : `Revert "${subjectOf(hash)}"`,
+                  },
+                ],
+                onPick: (mode) => {
+                  setChoose(null);
+                  void runOp({ op: "revert", shas: chosen, mode });
+                },
+              }),
           },
           { separator: true },
           {

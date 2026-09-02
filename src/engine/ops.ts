@@ -1000,17 +1000,71 @@ export async function runOp(repo: string, req: OpRequest): Promise<OpResult> {
       );
     }
 
+    /**
+     * Undoes commits, either as a commit of its own or as pending changes.
+     *
+     * `mode` is "worktree" to leave the undoing in the working tree unstaged,
+     * so it can be read, edited down or thrown away before it becomes history;
+     * anything else commits it straight away with git's own `Revert "<subject>"`
+     * message. Both are what someone means by "revert" often enough that
+     * guessing gets it wrong half the time.
+     */
     case "revert": {
       if (req.shas.length === 0) throw new Error("no commits given");
       for (const sha of req.shas) safeArgument(sha, "commit");
       // Newest first: reverting an older commit before a newer one that
       // touches the same lines conflicts almost every time.
-      return conflictProne(
+      const many = req.shas.length > 1;
+      const count = many ? String(req.shas.length) + " commits" : "1 commit";
+
+      if (req.mode !== "worktree") {
+        return conflictProne(
+          repo,
+          ["revert", "--no-edit"].concat(req.shas),
+          "Revert",
+          "reverted " + count,
+        );
+      }
+
+      // The paths the revert is about to touch, read BEFORE it runs: they are
+      // what gets unstaged afterwards. Unstaging wholesale with a bare
+      // `git reset` would also throw away anything the user had staged for a
+      // change of their own, which has nothing to do with this revert.
+      const touched = new Set<string>();
+      for (const sha of req.shas) {
+        const out = await gitOrNull(repo, [
+          "diff-tree",
+          "-r",
+          "--no-commit-id",
+          "--name-only",
+          sha,
+        ]);
+        if (out === null) continue;
+        for (const line of out.split(String.fromCharCode(10))) {
+          const path = line.trim();
+          if (path.length > 0) touched.add(path);
+        }
+      }
+
+      const result = await conflictProne(
         repo,
-        ["revert", "--no-edit"].concat(req.shas),
+        ["revert", "--no-commit"].concat(req.shas),
         "Revert",
-        "reverted " + req.shas.length + " commit(s)",
+        "reverted " + count + " into the working tree",
       );
+      if (!result.ok) return result;
+
+      // `--no-commit` leaves REVERT_HEAD and the sequencer behind on purpose -
+      // git is holding the door open for `revert --continue`. Nothing here
+      // wants that, and left in place it shows up as a revert in progress
+      // (readPending), so the state is cleared. `--quit` forgets the operation
+      // and keeps the index and working tree, which is exactly the split we
+      // want.
+      await gitOrNull(repo, ["revert", "--quit"]);
+      if (touched.size > 0) {
+        await gitOrNull(repo, ["reset", "-q", "HEAD", "--"].concat([...touched]));
+      }
+      return result;
     }
 
     case "reset": {
