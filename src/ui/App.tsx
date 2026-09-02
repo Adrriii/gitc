@@ -1863,6 +1863,7 @@ export function App() {
                 openPath={openFile?.path ?? null}
                 onChanged={refresh}
                 onCommitted={() => setOpenFile(null)}
+                onReword={(hash, message) => void runOp({ op: "reword", shas: [hash], message })}
               />
             )}
           </div>

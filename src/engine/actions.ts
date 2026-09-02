@@ -7,7 +7,7 @@
 import { writeFileSync, existsSync, unlinkSync } from "node:fs";
 
 import { git, gitOrNull } from "./git.ts";
-import { tempFile } from "./paths.ts";
+import { safeArgument, tempFile } from "./paths.ts";
 
 /**
  * Stages paths.
@@ -132,15 +132,31 @@ export async function commit(
   }
 }
 
-/** The message of the current HEAD commit, to prefill an amend. */
-export async function headMessage(
+/**
+ * A commit's message exactly as it is stored.
+ *
+ * `%B` and not the parsed body the graph carries: that one has co-author
+ * trailers lifted out of it for display, and editing a message that had them
+ * removed and writing the result back would drop the people they credit.
+ * Whoever is rewording a commit is editing the real message, trailers and all.
+ */
+export async function commitMessage(
   repo: string,
+  rev: string,
 ): Promise<{ summary: string; description: string } | null> {
-  const raw = await gitOrNull(repo, ["log", "-1", "--format=%B"]);
+  safeArgument(rev, "commit");
+  const raw = await gitOrNull(repo, ["log", "-1", "--format=%B", rev, "--"]);
   if (raw === null) return null;
   const LF = String.fromCharCode(10);
   const lines = raw.replace(/\r/g, "").split(LF);
   const summary = lines.length > 0 ? lines[0] : "";
   const description = lines.slice(1).join(LF).trim();
   return { summary, description };
+}
+
+/** The message of the current HEAD commit, to prefill an amend. */
+export async function headMessage(
+  repo: string,
+): Promise<{ summary: string; description: string } | null> {
+  return commitMessage(repo, "HEAD");
 }

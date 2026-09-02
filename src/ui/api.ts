@@ -289,6 +289,17 @@ export const api = {
       `/api/headmessage?id=${encodeURIComponent(id)}`,
     ),
 
+  /**
+   * One commit's message as git stores it.
+   *
+   * The graph's copy has co-author trailers lifted out for display, so it is
+   * the wrong thing to put in an editor whose result gets written back.
+   */
+  commitMessage: (id: string, sha: string) =>
+    json<{ summary: string; description: string }>(
+      `/api/message?id=${encodeURIComponent(id)}&sha=${encodeURIComponent(sha)}`,
+    ),
+
   commitFiles: (id: string, sha: string) =>
     json<{ files: FileChange[] }>(
       `/api/commit?id=${encodeURIComponent(id)}&sha=${encodeURIComponent(sha)}`,

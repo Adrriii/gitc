@@ -42,6 +42,7 @@ import {
   discardPaths,
   commit,
   headMessage,
+  commitMessage,
 } from "./engine/actions.ts";
 import {
   diffCommitFile,
@@ -1990,6 +1991,36 @@ async function handleApi(
     }
     const msg = await headMessage(tab.path);
     sendJson(res, JSON.stringify(msg === null ? { summary: "", description: "" } : msg));
+    return true;
+  }
+
+  // One commit's message as git stores it, which is not the one the graph
+  // carries - see commitMessage(). Read when a reword starts, so what gets
+  // edited is what is actually in the commit.
+  if (path.startsWith("/api/message")) {
+    const q = path.indexOf("?");
+    const params = q === -1 ? "" : path.substring(q + 1);
+    let id = "";
+    let sha = "";
+    for (const pair of params.split("&")) {
+      const eq = pair.indexOf("=");
+      if (eq === -1) continue;
+      const key = pair.substring(0, eq);
+      const value = decodeURIComponent(pair.substring(eq + 1));
+      if (key === "id") id = value;
+      if (key === "sha") sha = value;
+    }
+    const tab = findTab(id);
+    if (tab === null) {
+      send(res, 404, "application/json", JSON.stringify({ error: "no such tab" }));
+      return true;
+    }
+    if (sha.trim().length === 0) {
+      send(res, 400, "application/json", JSON.stringify({ error: "no commit given" }));
+      return true;
+    }
+    const one = await commitMessage(tab.path, sha);
+    sendJson(res, JSON.stringify(one === null ? { summary: "", description: "" } : one));
     return true;
   }
 

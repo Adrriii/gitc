@@ -1164,6 +1164,63 @@ export async function runOp(repo: string, req: OpRequest): Promise<OpResult> {
       );
     }
 
+    /**
+     * Changes a commit's message and nothing else.
+     *
+     * HEAD is the common case and gets the cheap path: `commit --amend` needs
+     * no rebase, so it works with a dirty working tree, which is exactly the
+     * state someone is in when they notice the typo they just committed.
+     *
+     * `--only` with no paths is what makes that safe. A plain `--amend` folds
+     * whatever is staged into the commit, so fixing a subject line would
+     * silently absorb the next change; `--only` amends the message alone.
+     *
+     * No `--date=now` either, unlike the amend the staging panel offers. That
+     * one is revising work; this one is correcting a sentence about work that
+     * happened when it says it happened.
+     */
+    case "reword": {
+      const sha = at(req.shas, 0);
+      if (sha === undefined) throw new Error("no commit given");
+      safeArgument(sha, "commit");
+
+      const message = req.message.trim();
+      if (message.length === 0) throw new Error("a commit needs a message");
+
+      const head = await gitOrNull(repo, ["rev-parse", "HEAD"]);
+      const isHead = head !== null && head.trim() === sha;
+
+      if (isHead) {
+        const path = tempFile("reword-" + String(Date.now()) + ".txt");
+        writeFileSync(path, message + String.fromCharCode(10), "utf8");
+        try {
+          // --allow-empty because an empty commit is being kept exactly as
+          // empty as it was. Without it git refuses to amend one at all,
+          // offering to delete it instead - which is not what renaming it
+          // asked for.
+          await git(repo, ["commit", "--amend", "--only", "--allow-empty", "-F", path]);
+        } finally {
+          try {
+            if (existsSync(path)) unlinkSync(path);
+          } catch {
+            // A leftover temp file is not worth failing the operation over.
+          }
+        }
+        return ok("reworded " + sha.substring(0, 7));
+      }
+
+      await checkRewritable(repo, sha, "rewording");
+      return rebaseWith(
+        repo,
+        "reword",
+        [sha],
+        sha,
+        message,
+        "Reword",
+        "reworded " + sha.substring(0, 7),
+      );
+    }
+
     case "submoduleUpdate": {
       // --init so a submodule that was never checked out works from the same
       // action: "update" is what someone wants in both cases, and asking them

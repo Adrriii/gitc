@@ -61,6 +61,318 @@
   line-height: 1.5;
 }
 
+// A double-click is not discoverable on its own, so the box that accepts one
+// says so on hover: the border warms up and the text takes a caret cursor,
+// the same two cues a text field gives.
+.messageEditable {
+  cursor: text;
+
+  &:hover {
+    border-color: var(--line-hard);
+  }
+}
+
+// Stands in for a body that is not there, so "double-click the description"
+// has something to aim at on a commit that has none.
+.bodyEmpty {
+  color: var(--fg-faint);
+  font-style: italic;
+}
+
+.messageEdit {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-color: var(--accent);
+}
+
+.summaryRow {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.editSummary {
+  flex: 1;
+  padding: 6px 44px 6px 8px;
+  background: var(--bg-0);
+  border: 1px solid var(--bg-2);
+  border-radius: var(--radius);
+  color: var(--fg-bright);
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+
+  &:focus {
+    border-color: var(--accent);
+  }
+  &::placeholder {
+    color: var(--fg-faint);
+  }
+}
+
+.counter {
+  position: absolute;
+  right: 10px;
+  font-size: 11px;
+  color: var(--fg-faint);
+}
+
+.over {
+  color: var(--amber);
+}
+
+.editBody {
+  min-height: 72px;
+  resize: vertical;
+  padding: 6px 8px;
+  background: var(--bg-0);
+  border: 1px solid var(--bg-2);
+  border-radius: var(--radius);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+
+  &:focus {
+    border-color: var(--accent);
+  }
+  &::placeholder {
+    color: var(--fg-faint);
+  }
+}
+
+// --- co-authors, while the message is being edited -------------------------
+
+.coEdit {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding-top: 8px;
+  border-top: 1px solid var(--bg-2);
+}
+
+.coEditHead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--fg-faint);
+}
+
+.coEditCount {
+  color: var(--fg-muted);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.coRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+// The name is the half you recognise someone by; the email is the half that
+// has to be exact for a forge to match them to an account. Both get room,
+// with the email a little wider because it is the longer of the two.
+.coNameField,
+.coEmailField {
+  min-width: 0;
+  padding: 4px 6px;
+  background: var(--bg-0);
+  border: 1px solid var(--bg-2);
+  border-radius: var(--radius);
+  color: var(--fg);
+  font: inherit;
+  font-size: 11px;
+  outline: none;
+
+  &:focus {
+    border-color: var(--accent);
+  }
+  &::placeholder {
+    color: var(--fg-faint);
+  }
+}
+
+.coNameField {
+  flex: 1 1 40%;
+}
+
+.coEmailField {
+  flex: 1 1 60%;
+  color: var(--fg-dim);
+}
+
+.coDrop {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  line-height: 1;
+  border: none;
+  border-radius: var(--radius);
+  background: none;
+  color: var(--fg-faint);
+  font-size: 14px;
+  cursor: pointer;
+
+  &:hover {
+    background: var(--bg-3);
+    color: var(--red);
+  }
+}
+
+.coAdd {
+  align-self: flex-start;
+  padding: 3px 8px;
+  border-radius: var(--radius);
+  border: 1px dashed var(--bg-2);
+  background: none;
+  color: var(--fg-muted);
+  font-size: 11px;
+  cursor: pointer;
+
+  &:hover {
+    border-color: var(--accent);
+    color: var(--fg);
+  }
+  &:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+}
+
+// In the flow, not floating over it. Overlaid, the list covered the Save and
+// Cancel buttons it sits above - and hiding the way out of a dialog is worse
+// than making the panel a little taller, which it scrolls for anyway.
+.picker {
+  padding: 6px;
+  background: var(--bg-2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+}
+
+.pickerFilter {
+  width: 100%;
+  padding: 5px 7px;
+  margin-bottom: 5px;
+  background: var(--bg-0);
+  border: 1px solid var(--bg-2);
+  border-radius: var(--radius);
+  color: var(--fg);
+  font: inherit;
+  font-size: 11px;
+  outline: none;
+
+  &:focus {
+    border-color: var(--accent);
+  }
+  &::placeholder {
+    color: var(--fg-faint);
+  }
+}
+
+.pickerList {
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.pickerRow {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 4px 6px;
+  border: none;
+  border-radius: var(--radius);
+  background: none;
+  color: var(--fg);
+  text-align: left;
+  cursor: pointer;
+
+  &:hover {
+    background: var(--bg-4);
+  }
+}
+
+.pickerName {
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.pickerEmail {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+// How many commits they have here - the reason this one is near the top.
+.pickerCount {
+  flex: none;
+  font-size: 11px;
+  color: var(--fg-faint);
+}
+
+.pickerEmpty {
+  padding: 8px 6px;
+  font-size: 11px;
+  color: var(--fg-faint);
+}
+
+.editActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.editNote {
+  flex: 1;
+  font-size: 11px;
+  color: var(--fg-faint);
+  line-height: 1.35;
+}
+
+.editCancel,
+.editSave {
+  padding: 4px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--bg-2);
+  background: var(--bg-2);
+  color: var(--fg);
+  cursor: pointer;
+
+  &:hover {
+    background: var(--bg-3);
+  }
+}
+
+.editSave {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg);
+
+  &:hover {
+    filter: brightness(1.1);
+  }
+  &:disabled {
+    opacity: 0.5;
+    cursor: default;
+    filter: none;
+  }
+}
+
+.editError {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--red);
+}
+
 .person {
   display: flex;
   align-items: center;
