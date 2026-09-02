@@ -974,6 +974,12 @@ export function App() {
        * cases anyway (checkRewritable); offering a menu entry that always
        * errors is just worse manners.
        */
+      const isHead = (data?.head.hash ?? null) === hash;
+      // Untracked files included: a commit that added a file leaves it
+      // untracked once unpacked, so one that was already there could not be
+      // told apart from one the unpack produced.
+      const clean = (data?.status.length ?? 0) === 0;
+
       // Is any commit in the selection a merge? Asked of the selection
       // itself, not inferred from the chain below - squashing or dropping a
       // merge silently loses the branch it brought in, so the check for it
@@ -1105,6 +1111,60 @@ export function App() {
                 },
               }),
           },
+          ...(onCurrent && !picksMerge
+            ? [
+                {
+                  label: many ? `Drop ${chosen.length} commits` : "Drop commit",
+                  hint: "deleted outright, not undone by a new commit",
+                  action: () =>
+                    setConfirm({
+                      title: many ? `Drop ${chosen.length} commits?` : `Drop ${short}?`,
+                      body: (
+                        <>
+                          <p>
+                            {many
+                              ? `These ${chosen.length} commits are removed from ${on} entirely. `
+                              : `${short} is removed from ${on} entirely. `}
+                            Nothing undoes the change in a commit of its own - use Revert for that.
+                          </p>
+                          {(rewrite ?? 0) > 0 && (
+                            <p>
+                              The {rewrite === 1 ? "commit" : `${rewrite ?? 0} commits`} above{" "}
+                              {rewrite === 1 ? "is" : "are"} rewritten, so anyone who already has
+                              them will have to reconcile.
+                            </p>
+                          )}
+                        </>
+                      ),
+                      confirmLabel: many ? `Drop ${chosen.length} commits` : "Drop commit",
+                      destructive: true,
+                      onConfirm: () => {
+                        setConfirm(null);
+                        void runOp({ op: "drop", shas: chosen });
+                      },
+                    }),
+                },
+              ]
+            : []),
+          // Unpack is the tip only, and only from a clean tree - what makes it
+          // useful is that afterwards the working tree holds exactly the
+          // commit that came apart, which is not true if something was already
+          // modified. Shown greyed out rather than hidden when the tree is
+          // dirty: "why is this missing" is a worse question than "why is this
+          // unavailable", which the hint answers.
+          ...(!many && isHead
+            ? [
+                {
+                  label: "Unpack commit",
+                  hint: clean
+                    ? "drops it and leaves its changes unstaged"
+                    : "needs a clean working tree - commit or stash what is there",
+                  action: clean
+                    ? () => void runOp({ op: "unpack", shas: [hash] })
+                    : undefined,
+                },
+              ]
+            : []),
           { separator: true },
           {
             label: `Reset ${on} here, keep changes`,

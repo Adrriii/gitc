@@ -1275,6 +1275,91 @@ export async function runOp(repo: string, req: OpRequest): Promise<OpResult> {
       );
     }
 
+    /**
+     * Takes the current commit apart, leaving its changes in the working tree.
+     *
+     * The one thing "drop" cannot do: undo a commit without also throwing away
+     * what was in it. `reset --mixed HEAD^` moves the branch back and resets
+     * the index, but leaves the files alone - so the commit is gone from
+     * history and its changes are sitting there unstaged, ready to be split,
+     * corrected or partly discarded.
+     *
+     * Only ever the current commit, and only from a clean tree. Both are the
+     * same requirement really: what makes this useful is that afterwards the
+     * working tree holds EXACTLY the commit that was unpacked. Anything already
+     * modified would be mixed in among it with no way to tell which was which.
+     */
+    case "unpack": {
+      const sha = at(req.shas, 0);
+      if (sha === undefined) throw new Error("no commit given");
+      safeArgument(sha, "commit");
+
+      const head = await gitOrNull(repo, ["rev-parse", "HEAD"]);
+      if (head === null || head.trim() !== sha) {
+        throw new Error(
+          "only the commit at the tip can be unpacked - its changes have nowhere " +
+            "to go otherwise",
+        );
+      }
+
+      const parent = await gitOrNull(repo, ["rev-parse", "--verify", sha + "^"]);
+      if (parent === null) {
+        throw new Error("that is the first commit, so there is nothing to unpack it onto");
+      }
+
+      // Untracked files count. A commit that ADDED a file leaves that file
+      // untracked once the commit is gone, so an untracked file that was
+      // already there is indistinguishable from one this unpacked - which is
+      // the exact confusion the clean-tree rule exists to prevent.
+      const dirty = await gitOrNull(repo, [
+        "--no-optional-locks",
+        "status",
+        "--porcelain",
+        "-uall",
+      ]);
+      if (dirty === null || dirty.trim().length > 0) {
+        throw new Error(
+          "the working tree has to be clean to unpack a commit - commit or stash " +
+            "what is there first",
+        );
+      }
+
+      await git(repo, ["reset", "--mixed", sha + "^"]);
+      return ok("unpacked " + sha.substring(0, 7) + " into the working tree");
+    }
+
+    /**
+     * Deletes commits outright, keeping everything above them.
+     *
+     * Unlike a revert, which adds a commit undoing the change, this removes
+     * the commits from history - so the commits above are rewritten, and a
+     * later commit that depended on a dropped one conflicts. That is a real
+     * conflict with a real resolution, so it goes through conflictProne like
+     * any other rebase.
+     */
+    case "drop": {
+      const picked = req.shas;
+      if (picked.length === 0) throw new Error("no commits given");
+      for (const sha of picked) safeArgument(sha, "commit");
+
+      const oldest = at(picked, picked.length - 1);
+      if (oldest === undefined) throw new Error("nothing to drop");
+
+      await noMergesAmong(repo, picked, "dropping them");
+      await checkRewritable(repo, oldest, "dropping");
+      return rebaseWith(
+        repo,
+        "drop",
+        picked,
+        oldest,
+        null,
+        "Drop",
+        picked.length === 1
+          ? "dropped " + oldest.substring(0, 7)
+          : "dropped " + String(picked.length) + " commits",
+      );
+    }
+
     case "submoduleUpdate": {
       // --init so a submodule that was never checked out works from the same
       // action: "update" is what someone wants in both cases, and asking them
