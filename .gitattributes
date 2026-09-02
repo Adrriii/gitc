@@ -1,0 +1,11 @@
+# Line endings are LF, in the repository and in the working tree alike.
+#
+# The index was already LF everywhere - core.autocrlf normalises on the way
+# in - but the checked-out files were CRLF on Windows, so a script that
+# rewrites a whole file had to detect and preserve them, and one that forgot
+# produced a diff of every line. This settles it in one place instead.
+* text=auto eol=lf
+
+*.png binary
+*.ico binary
+*.svg text eol=lf
