@@ -58,11 +58,12 @@
   border-radius: var(--radius);
   font-size: 12px;
   border: 1px solid var(--line);
-  background: var(--bg-4);
+  background: var(--bg-3);
   color: var(--fg);
+  cursor: pointer;
 
-  &:hover {
-    background: var(--bg-4);
+  &:not(:disabled):hover {
+    filter: brightness(1.35);
   }
 }
 
@@ -76,8 +77,4 @@
   border-color: var(--red-line);
   background: var(--red-line);
   color: var(--red-fg);
-
-  &:hover {
-    background: var(--red-line);
-  }
 }
