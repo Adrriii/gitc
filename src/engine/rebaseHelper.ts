@@ -13,28 +13,51 @@
 import { readFileSync, writeFileSync } from "node:fs";
 
 /**
- * Rewrites a rebase todo list, marking the given commits to be squashed.
- *
- * The spec file holds the hashes to fold, one per line - written by the caller
- * because the command line is not a good place for a list of unknown length.
+ * The todo commands gitc drives a rebase with.
  *
  * `squash` rather than `fixup`, because the two differ in exactly the way that
  * matters here: fixup keeps the first commit's message and never opens an
  * editor, so the message the user typed would be silently discarded. squash
  * asks the editor for a combined message, which is the invocation that lets
  * writeMessage() put the real one in.
+ *
+ * `reword` for the same reason from the other direction: it changes nothing but
+ * the message and asks the editor for it, so an amend of a commit buried in
+ * history costs no replay of its contents.
+ *
+ * `drop` needs no editor at all.
+ */
+const COMMANDS = ["squash", "drop", "reword"];
+
+/**
+ * Rewrites a rebase todo list, applying one command to the given commits.
+ *
+ * The spec file holds the command on its first line and then the hashes to
+ * apply it to, one per line - written by the caller because the command line is
+ * not a good place for a list of unknown length.
  */
 export function rewriteTodo(specPath: string, todoPath: string): void {
-  const wanted = new Set<string>();
-  for (const line of readFileSync(specPath, "utf8").split(String.fromCharCode(10))) {
-    const hash = line.trim();
-    if (hash.length > 0) wanted.add(hash);
-  }
-
   const LF = String.fromCharCode(10);
+
+  let command = "";
+  const wanted = new Set<string>();
+  for (const line of readFileSync(specPath, "utf8").split(LF)) {
+    const text = line.trim();
+    if (text.length === 0) continue;
+    if (command.length === 0) {
+      command = text;
+      continue;
+    }
+    wanted.add(text);
+  }
+  // A spec gitc did not write, or one truncated by a crash mid-write. Leaving
+  // the todo alone makes the rebase a no-op replay, which is the only harmless
+  // thing to do with an instruction we cannot read.
+  if (COMMANDS.indexOf(command) === -1) return;
+
   const out: string[] = [];
-  /** Index of the last line turned into a squash, or -1. */
-  let lastFold = -1;
+  /** Index of the last line the command was applied to, or -1. */
+  let last = -1;
 
   for (const line of readFileSync(todoPath, "utf8").split(LF)) {
     const trimmed = line.trim();
@@ -55,17 +78,17 @@ export function rewriteTodo(specPath: string, todoPath: string): void {
 
     // A todo lists abbreviated hashes, so match on prefixes in either
     // direction rather than requiring equal lengths.
-    let fold = false;
+    let hit = false;
     for (const candidate of wanted) {
       if (candidate.startsWith(hash) || hash.startsWith(candidate)) {
-        fold = true;
+        hit = true;
         break;
       }
     }
 
-    if (fold) {
-      out.push("squash " + parts.slice(1).join(" "));
-      lastFold = out.length - 1;
+    if (hit) {
+      out.push(command + " " + parts.slice(1).join(" "));
+      last = out.length - 1;
     } else {
       out.push(line);
     }
@@ -81,7 +104,10 @@ export function rewriteTodo(specPath: string, todoPath: string): void {
   // It goes in as an `exec` immediately after the last fold rather than as an
   // amend afterwards, because the squashed commit is not necessarily HEAD when
   // the rebase finishes: anything that came after it is replayed on top.
-  if (lastFold === -1) {
+  //
+  // Only for squash. A reword is not new work - the commit it renames existed
+  // when it says it did - and a drop creates no commit to date.
+  if (command !== "squash" || last === -1) {
     writeFileSync(todoPath, out.join(LF), "utf8");
     return;
   }
@@ -90,7 +116,7 @@ export function rewriteTodo(specPath: string, todoPath: string): void {
   const final: string[] = [];
   for (let i = 0; i < out.length; i++) {
     final.push(out[i]);
-    if (i === lastFold) final.push("exec git commit --amend --no-edit --date=now");
+    if (i === last) final.push("exec git commit --amend --no-edit --date=now");
   }
 
   writeFileSync(todoPath, final.join(LF), "utf8");
@@ -99,8 +125,8 @@ export function rewriteTodo(specPath: string, todoPath: string): void {
 /**
  * Replaces whatever message git is about to ask about with a prepared one.
  *
- * Used for the squashed commit's message, which the user typed in gitc before
- * the rebase started.
+ * Used for the squashed commit's message, and for the new message of a
+ * reworded one - both typed in gitc before the rebase started.
  */
 export function writeMessage(messagePath: string, targetPath: string): void {
   writeFileSync(targetPath, readFileSync(messagePath, "utf8"), "utf8");

@@ -45,7 +45,7 @@ export interface RawCommit {
  * Tolerant on purpose: these are typed by hand and by a dozen different
  * tools, so a missing bracket should still credit the person.
  */
-function parsePerson(value: string): Person | null {
+export function parsePerson(value: string): Person | null {
   const text = value.trim();
   if (text.length === 0) return null;
   const open = text.lastIndexOf("<");
@@ -64,7 +64,7 @@ const CO_AUTHOR = "co-authored-by:";
  * Returns the body with those lines removed, so the message reads as written
  * and the people are credited separately rather than twice.
  */
-function extractCoAuthors(body: string): { body: string; coAuthors: Person[] } {
+export function extractCoAuthors(body: string): { body: string; coAuthors: Person[] } {
   const LF = String.fromCharCode(10);
   const kept: string[] = [];
   const coAuthors: Person[] = [];

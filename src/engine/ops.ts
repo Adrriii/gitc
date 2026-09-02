@@ -10,10 +10,11 @@ import { spawn } from "node:child_process";
 import { existsSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { git, gitOrNull } from "./git.ts";
+import { extractCoAuthors, git, gitOrNull } from "./git.ts";
+import type { Person } from "./git.ts";
 import { needInRepo, safeArgument, safeRemoteUrl, tempFile } from "./paths.ts";
 import { readPending, readRemotes } from "./refs.ts";
-import { at } from "./safe.ts";
+import { at, atOr } from "./safe.ts";
 
 export interface OpRequest {
   op: string;
@@ -212,6 +213,302 @@ async function conflictProne(
 async function hasUnmerged(repo: string): Promise<boolean> {
   const out = await gitOrNull(repo, ["--no-optional-locks", "ls-files", "--unmerged"]);
   return out !== null && out.trim().length > 0;
+}
+
+/**
+ * Refuses a history rewrite that git's interactive rebase would get wrong.
+ *
+ * Two things have to hold for `rebase -i <oldest>^` to mean what the user
+ * pointed at:
+ *
+ * - the run must be behind HEAD. Rewriting rewrites the CURRENT branch, so a
+ *   commit that is not an ancestor of HEAD would not be touched at all - the
+ *   rebase would replay unrelated history and appear to do nothing.
+ * - nothing merged in between. A plain interactive rebase flattens merges: the
+ *   second parent's commits are dropped from the todo entirely, so a reword of
+ *   one commit would quietly delete the other side of every merge above it.
+ *   `--rebase-merges` exists for that and produces a todo of label/reset lines
+ *   that rewriteTodo does not speak, so the honest answer is to decline.
+ */
+/**
+ * Refuses a run that has a merge commit in it.
+ *
+ * Asked of the commits themselves rather than derived from a range. The range
+ * check in checkRewritable covers `oldest..HEAD`, which does contain every
+ * merge in a contiguous selection - but "is any of THESE a merge" is the
+ * question, and the answer to the question you are actually asking is worth
+ * more than a correct inference from a different one. A merge in a squash or a
+ * drop is the case that silently loses a whole branch.
+ */
+async function noMergesAmong(repo: string, shas: string[], what: string): Promise<void> {
+  const found = await gitOrNull(repo, ["rev-list", "--no-walk", "--merges"].concat(shas));
+  if (found === null || found.trim().length === 0) return;
+  const n = found.trim().split(String.fromCharCode(10)).length;
+  throw new Error(
+    (n === 1 ? "one of those commits is a merge" : String(n) + " of those commits are merges") +
+      ", and an interactive rebase leaves merges out of its todo entirely - so " +
+      what +
+      " would flatten what they merged",
+  );
+}
+
+async function checkRewritable(repo: string, oldest: string, what: string): Promise<void> {
+  const ancestor = await gitOrNull(repo, ["merge-base", "--is-ancestor", oldest, "HEAD"]);
+  if (ancestor === null) {
+    throw new Error(
+      "that commit is not on the current branch, so " +
+        what +
+        " it would rewrite history you are not on - check the branch out first",
+    );
+  }
+
+  // The run's own far end counts too: git leaves a merge out of the todo list
+  // altogether, so the command would land on nothing while everything above it
+  // was still replayed - the worst of both answers.
+  const isMerge = await gitOrNull(repo, ["rev-list", "--no-walk", "--merges", oldest]);
+  if (isMerge !== null && isMerge.trim().length > 0) {
+    throw new Error(
+      "that is a merge commit, and an interactive rebase leaves merges out of its " +
+        "todo entirely - so " +
+        what +
+        " one would flatten the merge instead",
+    );
+  }
+
+  const mergeOut = await gitOrNull(repo, ["rev-list", "--count", "--merges", oldest + "..HEAD"]);
+  const merges = mergeOut === null ? 0 : parseInt(mergeOut.trim(), 10);
+  if (!isNaN(merges) && merges > 0) {
+    throw new Error(
+      merges === 1
+        ? "there is a merge commit between that commit and HEAD; " +
+          "rewriting across it would flatten the merged branch away"
+        : "there are " +
+          String(merges) +
+          " merge commits between that commit and HEAD; " +
+          "rewriting across them would flatten the merged branches away",
+    );
+  }
+}
+
+// Field and record separators for the --format output read below.
+//
+// Split on the real characters, but ASKED for as %x00 and %x01 - git expands
+// those itself. A literal NUL cannot travel in an argument: argv is
+// NUL-terminated, so "--format=%an" plus a NUL plus "%ae" reaches git as
+// "--format=%an" and everything after it is silently gone. That shipped once
+// as a squash message made of nothing but concatenated author names.
+const SEP = String.fromCharCode(0);
+const RECORD = String.fromCharCode(1);
+
+const CO_AUTHOR_LABEL = "Co-authored-by: ";
+
+/** One person, however each trailer or author field happened to spell them. */
+function personKey(person: Person): string {
+  const email = person.email.trim().toLowerCase();
+  return email.length > 0 ? email : person.name.trim().toLowerCase();
+}
+
+/** How a trailer writes one person. */
+function personText(person: Person): string {
+  const name = person.name.trim();
+  const email = person.email.trim();
+  if (email.length === 0) return name;
+  if (name.length === 0) return "<" + email + ">";
+  return name + " <" + email + ">";
+}
+
+/**
+ * Everyone a squashed commit still has to credit.
+ *
+ * A squash keeps the OLDEST commit's author, which is right - the run starts
+ * where that person started it - but it is only half the record. The other
+ * commits had authors of their own, and any of them may have carried
+ * `Co-authored-by:` trailers, and a squash that writes one new message drops
+ * all of it: work by three people ends up looking like work by one.
+ *
+ * So everybody in the run is collected here - authors and trailers alike -
+ * minus whoever ends up as the author, since crediting them as a co-author of
+ * their own commit says nothing and forges show it twice.
+ */
+async function creditsFor(repo: string, shas: string[], author: Person): Promise<Person[]> {
+  const seen = new Set<string>();
+  seen.add(personKey(author));
+  // Declared before the early return: a bare `[]` has no element type to infer
+  // from here, and scriptc reads it as number[] (docs/toolchain.md).
+  const credits: Person[] = [];
+
+  // --no-walk so the listed commits are the ONLY ones read: without it git
+  // walks their ancestors too, and a squash of two commits would collect the
+  // whole history's authors. `=unsorted` with the run oldest-first so the
+  // trailers come out in the order the work happened rather than in whatever
+  // order the commit dates put them.
+  const out = await gitOrNull(
+    repo,
+    ["log", "--no-walk=unsorted", "--format=%an%x00%ae%x00%B%x01"].concat(shas.slice().reverse()),
+  );
+  if (out === null) return credits;
+
+  const remember = (person: Person) => {
+    if (person.name.trim().length === 0 && person.email.trim().length === 0) return;
+    const key = personKey(person);
+    if (key.length === 0 || seen.has(key)) return;
+    seen.add(key);
+    credits.push(person);
+  };
+
+  for (const record of out.split(RECORD)) {
+    if (record.trim().length === 0) continue;
+    const fields = record.split(SEP);
+    const name = atOr(fields, 0, "").replace(/[\r\n]/g, "").trim();
+    const email = atOr(fields, 1, "").trim();
+    // The whole message, subject included: a subject line cannot be a
+    // trailer, so there is nothing to strip off first.
+    const body = atOr(fields, 2, "");
+    remember({ name, email });
+    for (const person of extractCoAuthors(body).coAuthors) remember(person);
+  }
+
+  return credits;
+}
+
+/**
+ * The message a squashed run gets, written from the run itself.
+ *
+ * The oldest commit keeps its subject, because it is the commit the squash
+ * keeps - its place in history, its author, and so its title. Everything
+ * folded into it goes into the body, subject and description together and
+ * oldest first, so a run of small commits collapses into one that still says
+ * what each of them did.
+ *
+ * Composed here rather than asked for in a dialog: a squash of six commits is
+ * six messages, and nobody wants to retype them into a text box before the
+ * operation they asked for will run. It is a commit like any other afterwards,
+ * and amending it is a double-click away.
+ */
+async function squashMessage(repo: string, shas: string[]): Promise<string> {
+  const LF = String.fromCharCode(10);
+
+  // Oldest first, which is the order they were written in and the order the
+  // squashed message should read in. `shas` arrives newest-first.
+  //
+  // `=unsorted` is what makes that hold. A plain --no-walk sorts by commit
+  // date whatever order the arguments came in, so the message would come back
+  // newest-first - and after any rebase, date order and graph order are not
+  // the same thing anyway.
+  const ordered = shas.slice().reverse();
+  const out = await gitOrNull(
+    repo,
+    ["log", "--no-walk=unsorted", "--format=%s%x00%b%x01"].concat(ordered),
+  );
+  if (out === null) return "";
+
+  const subjects: string[] = [];
+  const bodies: string[] = [];
+  for (const record of out.split(RECORD)) {
+    if (record.trim().length === 0) continue;
+    const fields = record.split(SEP);
+    subjects.push(atOr(fields, 0, "").replace(/[\r\n]/g, "").trim());
+    // Trailers come off here and are put back by withCredits(), so that a
+    // Co-authored-by: from the middle of the run does not end up buried in
+    // the body where no forge would read it.
+    bodies.push(extractCoAuthors(atOr(fields, 1, "")).body.trim());
+  }
+
+  const paragraphs: string[] = [];
+  const firstBody = atOr(bodies, 0, "");
+  if (firstBody.length > 0) paragraphs.push(firstBody);
+  for (let i = 1; i < subjects.length; i++) {
+    const subject = atOr(subjects, i, "");
+    const body = atOr(bodies, i, "");
+    if (subject.length === 0 && body.length === 0) continue;
+    paragraphs.push(body.length > 0 ? subject + LF + LF + body : subject);
+  }
+
+  const head = atOr(subjects, 0, "");
+  return paragraphs.length === 0 ? head : head + LF + LF + paragraphs.join(LF + LF);
+}
+
+/**
+ * Puts a set of co-author trailers onto a message, keeping what it already has.
+ *
+ * The blank line before the block is what makes them trailers rather than the
+ * last paragraph of the body, and anyone the message already credits is left
+ * exactly where they are - a person named twice is a person a forge shows
+ * twice.
+ */
+function withCredits(message: string, credits: Person[]): string {
+  const LF = String.fromCharCode(10);
+  const already = new Set<string>();
+  for (const person of extractCoAuthors(message).coAuthors) already.add(personKey(person));
+
+  const lines: string[] = [];
+  for (const person of credits) {
+    if (already.has(personKey(person))) continue;
+    already.add(personKey(person));
+    lines.push(CO_AUTHOR_LABEL + personText(person));
+  }
+  if (lines.length === 0) return message;
+
+  return message.trim() + LF + LF + lines.join(LF);
+}
+
+/**
+ * Runs the interactive rebase gitc drives itself: one todo command, one run.
+ *
+ * `hashes` are the commits to apply `command` to and `oldest` is the far end
+ * of the run - its parent becomes the rebase base, so nothing below it is
+ * replayed. `message` is the commit message the rebase will ask for, for the
+ * commands that ask (squash and reword); the rest pass null.
+ *
+ * See engine/rebaseHelper.ts for why the editors point back at this binary.
+ */
+async function rebaseWith(
+  repo: string,
+  command: string,
+  hashes: string[],
+  oldest: string,
+  message: string | null,
+  label: string,
+  done: string,
+): Promise<OpResult> {
+  const stamp = String(Date.now());
+  // In this process's own temp directory - see tempDir(). A guessable name in
+  // the shared temp directory can be pre-created as a symlink by another
+  // account on the machine, and this writes through it.
+  const specPath = tempFile(command + "-" + stamp + ".txt");
+  const msgPath = message === null ? "" : tempFile(command + "-msg-" + stamp + ".txt");
+
+  const LF = String.fromCharCode(10);
+  writeFileSync(specPath, [command].concat(hashes).join(LF), "utf8");
+  if (message !== null) writeFileSync(msgPath, message, "utf8");
+
+  // A root commit has no parent to rebase onto, so the whole history is
+  // replayed instead.
+  const parent = await gitOrNull(repo, ["rev-parse", "--verify", oldest + "^"]);
+  const base = parent === null ? "--root" : oldest + "^";
+
+  const self = process.execPath;
+  const env: Record<string, string> = {
+    GIT_SEQUENCE_EDITOR: quoted(self) + " --rebase-todo " + quoted(specPath),
+  };
+  // Left unset for a drop: nothing should be asking for a message, and if
+  // something does, git's own refusal to open an editor is a better outcome
+  // than silently writing a message we never prepared.
+  if (message !== null) {
+    env["GIT_EDITOR"] = quoted(self) + " --rebase-message " + quoted(msgPath);
+  }
+
+  try {
+    return await conflictProne(repo, ["rebase", "-i", base], label, done, env);
+  } finally {
+    for (const file of [specPath, msgPath]) {
+      try {
+        if (file.length > 0 && existsSync(file)) unlinkSync(file);
+      } catch {
+        // A leftover temp file is not worth failing the operation over.
+      }
+    }
+  }
 }
 
 /** Counts commits in a range, 0 if the range cannot be resolved. */
@@ -809,7 +1106,11 @@ export async function runOp(repo: string, req: OpRequest): Promise<OpResult> {
       return ok("dropped " + which);
     }
 
-    // --- managing remotes -------------------------------------------------
+    // --- rewriting a run of commits ---------------------------------------
+    //
+    // All three drive git's own interactive rebase through rebaseWith(), and
+    // all three take the same selection: a contiguous run, newest first, which
+    // is the only shape the UI can build (see ui/selection.ts).
 
     case "squash": {
       // The selection is a contiguous run of commits, newest first - the UI
@@ -960,6 +1261,8 @@ export async function runOp(repo: string, req: OpRequest): Promise<OpResult> {
       openInEditor(full);
       return ok("opened " + rel);
     }
+
+    // --- managing remotes -------------------------------------------------
 
     case "addRemote": {
       if (req.name.trim().length === 0) throw new Error("the remote needs a name");
