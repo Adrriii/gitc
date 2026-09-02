@@ -81,6 +81,7 @@ import {
   apply as applyUpdate,
   cleanupPrevious,
   updateProgress,
+  releaseNotes,
   type Channel,
 } from "./engine/update.ts";
 import { NAME, VERSION } from "./generated/version.ts";
@@ -1144,6 +1145,7 @@ const LOCAL_ONLY = [
   "/api/hosts",
   "/api/remote",
   "/api/update",
+  "/api/changelog",
 ];
 
 function isLocalOnly(path: string): boolean {
@@ -1669,6 +1671,13 @@ async function handleApi(
       return true;
     }
     sendJson(res, JSON.stringify(await checkUpdate(updateChannel, updateStream)));
+    return true;
+  }
+
+  // What changed in the version that is running. Read on demand rather than
+  // polled: nobody needs it until they open the About tab.
+  if (path === "/api/changelog") {
+    sendJson(res, JSON.stringify(await releaseNotes()));
     return true;
   }
 

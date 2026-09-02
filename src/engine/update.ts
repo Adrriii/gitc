@@ -156,15 +156,34 @@ function assetName(): string {
   return windows ? "gitc.exe" : "gitc";
 }
 
+/**
+ * Where a string value starts, or -1.
+ *
+ * Not a search for `"key":"`. GitHub pretty-prints some endpoints and not
+ * others - /releases/latest comes back compact, /releases/tags/<tag> comes
+ * back indented with a space after every colon - so a scanner that assumes one
+ * of them reads nothing at all from the other, and says the release could not
+ * be read rather than that it could not be parsed.
+ */
+function valueAt(json: string, key: string, from = 0): number {
+  const at = json.indexOf('"' + key + '"', from);
+  if (at === -1) return -1;
+  let i = at + key.length + 2;
+  while (i < json.length && /s/.test(json.charAt(i))) i += 1;
+  if (json.charAt(i) !== ":") return -1;
+  i += 1;
+  while (i < json.length && /s/.test(json.charAt(i))) i += 1;
+  if (json.charAt(i) !== '"') return -1;
+  return i + 1;
+}
+
 /** Every tag_name in the answer - one release, or a list of them. */
 function tagNames(json: string): string[] {
   const out: string[] = [];
-  const needle = '"tag_name":"';
   let from = 0;
   while (true) {
-    const at = json.indexOf(needle, from);
-    if (at === -1) break;
-    const start = at + needle.length;
+    const start = valueAt(json, "tag_name", from);
+    if (start === -1) break;
     const end = json.indexOf('"', start);
     if (end === -1) break;
     out.push(json.substring(start, end));
@@ -264,10 +283,8 @@ async function curlAvailable(): Promise<boolean> {
  * fields that matter are unambiguous in the text.
  */
 function field(json: string, key: string): string {
-  const needle = "\"" + key + "\":\"";
-  const at = json.indexOf(needle);
-  if (at === -1) return "";
-  const start = at + needle.length;
+  const start = valueAt(json, key);
+  if (start === -1) return "";
   const end = json.indexOf("\"", start);
   if (end === -1) return "";
   return json.substring(start, end);
@@ -310,6 +327,108 @@ function streamsIn(versions: string[]): string[] {
 function effectiveStream(chosen: string): string {
   if (chosen.length > 0) return chosen;
   return preStream(VERSION) ?? "";
+}
+
+/**
+ * Pulls one string field out of a JSON document, escapes and all.
+ *
+ * field() above stops at the first quote, which is right for a tag name and
+ * wrong for a release body: that one is a whole document of prose, with
+ * escaped quotes and newlines throughout. So the closing quote is found by
+ * scanning past backslash pairs, and the slice is handed to JSON.parse as a
+ * string of its own - the only way to undo \n, \" and \uXXXX that is
+ * guaranteed to agree with whatever produced them.
+ */
+function longField(json: string, key: string): string {
+  const start = valueAt(json, key);
+  if (start === -1) return "";
+
+  let i = start;
+  while (i < json.length) {
+    const ch = json.charAt(i);
+    if (ch === "\\") {
+      i += 2;
+      continue;
+    }
+    if (ch === '"') break;
+    i += 1;
+  }
+  if (i >= json.length) return "";
+
+  try {
+    return JSON.parse('"' + json.substring(start, i) + '"') as string;
+  } catch {
+    return "";
+  }
+}
+
+export interface ReleaseNotes {
+  version: string;
+  /** The published notes, or "" when there are none to show. */
+  notes: string;
+  /** Where the notes live, for the "read the rest" link. */
+  page: string;
+  error: string;
+}
+
+/**
+ * The notes published with the version that is running.
+ *
+ * Not the newest release's - this version's. The About tab is answering "what
+ * changed in the gitc I have", which after an update is the thing somebody
+ * actually wants to read, and which for anyone who has not updated is not the
+ * latest release at all.
+ *
+ * Read from the release page rather than baked into the binary: the notes are
+ * written onto the published release after the tag exists, so at build time
+ * there is nothing to bake.
+ */
+export async function releaseNotes(): Promise<ReleaseNotes> {
+  const tag = "v" + VERSION;
+  const out: ReleaseNotes = {
+    version: VERSION,
+    notes: "",
+    page: REPO.length > 0 ? "https://github.com/" + REPO + "/releases/tag/" + tag : "",
+    error: "",
+  };
+
+  if (REPO.length === 0) {
+    out.error = "this build does not know which repository to read";
+    return out;
+  }
+  if (!(await curlAvailable())) {
+    out.error = "curl is not available, so gitc cannot read the release notes";
+    return out;
+  }
+
+  // The override names the releases collection; one release by tag hangs off
+  // it the same way /latest does.
+  const custom = process.env["GITC_UPDATE_API"];
+  const base =
+    custom !== undefined && custom.length > 0
+      ? secureUrl(custom, "GITC_UPDATE_API")
+      : "https://api.github.com/repos/" + REPO + "/releases";
+
+  const body = await curl([
+    ...META_TIMEOUT,
+    "-fsSL",
+    "-H",
+    "accept: application/vnd.github+json",
+    "-H",
+    "user-agent: gitc/" + VERSION,
+    base + "/tags/" + tag,
+  ]);
+
+  if (body === null) {
+    // A build from source, or a version whose tag was never published.
+    // Nothing is wrong; there is simply nothing to show.
+    out.error = "no release is published for " + tag;
+    return out;
+  }
+
+  out.notes = longField(body, "body").trim();
+  if (out.notes.length === 0) out.error = "that release was published without notes";
+  return out;
 }
 
 export async function check(

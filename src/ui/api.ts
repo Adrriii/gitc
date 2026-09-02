@@ -16,6 +16,7 @@ import type {
   Submodule,
   SshHost,
   RemotePlan,
+  ReleaseNotes,
 } from "./types";
 import type { DiffTarget } from "./components/DiffView";
 
@@ -191,6 +192,9 @@ export const api = {
   /** Which releases to be offered. The engine is what talks to GitHub. */
   setUpdateChannel: (channel: string, stream?: string) =>
     post<{ ok: boolean }>("/api/update/channel", { channel, stream }),
+
+  /** What changed in the version that is running. */
+  changelog: () => json<ReleaseNotes>("/api/changelog"),
 
   /** Asks whether a newer gitc has been released. */
   checkUpdate: () => json<UpdateInfo>("/api/update"),

@@ -160,6 +160,16 @@ export interface UpdateInfo {
   streams: string[];
 }
 
+/** The notes published with the version that is running. */
+export interface ReleaseNotes {
+  version: string;
+  /** Markdown, or "" when there are none to show. */
+  notes: string;
+  /** The release page, for reading the rest of it. */
+  page: string;
+  error: string;
+}
+
 export interface UpdateResult {
   ok: boolean;
   message: string;

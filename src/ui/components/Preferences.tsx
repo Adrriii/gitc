@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import type { UpdateInfo } from "../types";
+import type { ReleaseNotes, UpdateInfo } from "../types";
 import {
   FETCH_INTERVALS,
   REMOTE_HOLDS,
@@ -21,6 +21,7 @@ import {
 import { UPDATE_LEVELS } from "../version";
 import { PRESETS, TOKEN_GROUPS, useTheme } from "../theme";
 import { VERSION } from "../../generated/version";
+import { changelogOnly, parseNotes, type Line } from "../changelog";
 import { Icon } from "./Icon";
 import s from "./Preferences.module.scss";
 
@@ -35,6 +36,63 @@ import s from "./Preferences.module.scss";
  * nothing to save. Settings that need a round trip to see are settings people
  * assume are broken.
  */
+
+/**
+ * The release notes, as elements rather than as markup.
+ *
+ * The text comes off a release page over the network, so none of it is allowed
+ * anywhere near dangerouslySetInnerHTML. changelog.ts parses it to a structure
+ * and this lays that structure out; a link exists only where the parser was
+ * willing to make one, which is https and nothing else.
+ */
+function Notes({ lines }: { lines: Line[] }) {
+  return (
+    <div className={s.notes}>
+      {lines.map((line, i) => {
+        if (line.kind === "blank") return <div key={i} className={s.noteGap} />;
+
+        const pieces = line.pieces.map((p, j) =>
+          p.href !== undefined ? (
+            <a key={j} href={p.href} target="_blank" rel="noreferrer noopener">
+              {p.text}
+            </a>
+          ) : p.code === true ? (
+            <code key={j}>{p.text}</code>
+          ) : p.bold === true ? (
+            <b key={j}>{p.text}</b>
+          ) : (
+            <span key={j}>{p.text}</span>
+          ),
+        );
+
+        if (line.kind === "heading") {
+          return (
+            <div key={i} className={s.noteHead}>
+              {pieces}
+            </div>
+          );
+        }
+        if (line.kind === "bullet") {
+          return (
+            <div
+              key={i}
+              className={s.noteItem}
+              style={line.depth > 0 ? { paddingLeft: line.depth * 14 } : undefined}
+            >
+              <span className={s.noteDot}>–</span>
+              <span>{pieces}</span>
+            </div>
+          );
+        }
+        return (
+          <div key={i} className={s.noteText}>
+            {pieces}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 type Section = "theme" | "editor" | "repository" | "commands" | "about";
 
@@ -110,6 +168,22 @@ export function Preferences({
   const { stream: updateStream, set: setUpdateStream } = useUpdateStream();
   const { onFocus: fetchOnFocus, set: setFetchOnFocus } = useFetchOnFocus();
   const { minutes: remoteHold, set: setRemoteHold } = useRemoteHold();
+
+  // Fetched when the About tab is first opened rather than on mount: it is a
+  // request to a release page, and most visits to this screen are for a theme.
+  const [notes, setNotes] = useState<ReleaseNotes | null>(null);
+  const [notesFailed, setNotesFailed] = useState("");
+  useEffect(() => {
+    if (section !== "about" || notes !== null || notesFailed.length > 0) return;
+    let live = true;
+    api
+      .changelog()
+      .then((r) => live && setNotes(r))
+      .catch((e: Error) => live && setNotesFailed(e.message));
+    return () => {
+      live = false;
+    };
+  }, [section, notes, notesFailed]);
   /**
    * Machines gitc has been allowed to install itself on.
    *
@@ -493,6 +567,36 @@ export function Preferences({
               <span className={s.value}>
                 {navigator.userAgent.includes("Windows") ? "%APPDATA%\\gitc" : "~/.config/gitc"}
               </span>
+            </Row>
+            {/* Last, because it is the longest thing on the page and the
+                settings above it are what someone came here to change. */}
+            <Row
+              label={`What changed in ${VERSION}`}
+              hint="From the release page for this version."
+            >
+              <div className={s.changelog}>
+                {notesFailed.length > 0 || (notes !== null && changelogOnly(notes.notes).length === 0) ? (
+                  <span className={s.hint}>
+                    {notesFailed.length > 0 ? notesFailed : (notes?.error ?? "")}
+                  </span>
+                ) : notes === null ? (
+                  <span className={s.hint}>reading the release notes…</span>
+                ) : (
+                  <>
+                    <Notes lines={parseNotes(changelogOnly(notes.notes))} />
+                    {notes.page.length > 0 && (
+                      <a
+                        className={s.notesLink}
+                        href={notes.page}
+                        target="_blank"
+                        rel="noreferrer noopener"
+                      >
+                        the release page
+                      </a>
+                    )}
+                  </>
+                )}
+              </div>
             </Row>
           </>
         )}
