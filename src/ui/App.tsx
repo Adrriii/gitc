@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type {
+  Commit,
   ConflictState,
   GraphPayload,
   OpArgs,
@@ -57,7 +58,7 @@ import {
   useUpdateLevel,
 } from "./settings";
 import { shouldPrompt, versionChip } from "./version";
-import { rangeSelect, toggleSelect } from "./selection";
+import { chainBetween, rangeSelect, toggleSelect } from "./selection";
 import { nextAfter, stagedFiles, unstagedFiles } from "./staging";
 import s from "./App.module.scss";
 
@@ -960,6 +961,39 @@ export function App() {
       const short = hash.substring(0, 7);
       const on = branch ?? "HEAD";
 
+      const commits = data?.commits ?? [];
+      const subjectOf = (h: string): string => commits.find((c) => c.hash === h)?.subject ?? "";
+
+      /**
+       * Whether the run is behind HEAD on its own first-parent line.
+       *
+       * What "of the current branch" means for anything that rewrites: a drop
+       * replays the commits above the oldest one picked, so they have to be
+       * commits HEAD can actually see - and a merge in between would be
+       * flattened away by a plain interactive rebase. The engine refuses both
+       * cases anyway (checkRewritable); offering a menu entry that always
+       * errors is just worse manners.
+       */
+      // Is any commit in the selection a merge? Asked of the selection
+      // itself, not inferred from the chain below - squashing or dropping a
+      // merge silently loses the branch it brought in, so the check for it
+      // answers the question directly.
+      const byHashAll = new Map<string, Commit>();
+      for (const c of commits) byHashAll.set(c.hash, c);
+      const picksMerge = chosen.some((h) => (byHashAll.get(h)?.parents.length ?? 0) > 1);
+
+      const rewrite = (() => {
+        const head = data?.head.hash ?? null;
+        const older = chosen.length > 0 ? chosen[chosen.length - 1] : null;
+        if (head === null || older === null) return null;
+        const chain = chainBetween(commits, byHashAll, head, older);
+        if (chain === null) return null;
+        if (chain.some((h) => (byHashAll.get(h)?.parents.length ?? 0) > 1)) return null;
+        // Everything in the chain that is not itself being dropped is replayed.
+        return chain.filter((h) => !chosen.includes(h)).length;
+      })();
+      const onCurrent = rewrite !== null;
+
       setMenu({
         x,
         y,
@@ -998,39 +1032,21 @@ export function App() {
                 },
               }),
           },
-          ...(many
+          // A merge cannot be squashed: git leaves merges out of an interactive
+          // rebase.s todo, so the run would replay flat with the merged branch
+          // gone. Not offered for a selection holding one, nor for a run the
+          // engine would refuse anyway.
+          ...(many && onCurrent && !picksMerge
             ? [
                 {
                   label: `Squash ${chosen.length} commits into one`,
-                  hint: "keeps the oldest commit's place in history",
-                  action: () => {
-                    // Prefilled with every message in the run, oldest first,
-                    // so nothing is silently thrown away - editing it down is
-                    // easier than remembering what was in the others.
-                    const runs = data?.commits.filter((c) => chosen.includes(c.hash)) ?? [];
-                    const initial = [...runs]
-                      .reverse()
-                      .map((c) => c.subject)
-                      .join("\n");
-                    setForm({
-                      title: `Squash ${chosen.length} commits`,
-                      body:
-                        "They are replaced by a single commit in the oldest one's place. " +
-                        "This rewrites history, so avoid it on commits you have pushed.",
-                      fields: [
-                        {
-                          key: "message",
-                          label: "Message for the squashed commit",
-                          initial,
-                        },
-                      ],
-                      confirmLabel: "Squash",
-                      onConfirm: (v) => {
-                        setForm(null);
-                        void runOp({ op: "squash", shas: chosen, message: v.message });
-                      },
-                    });
-                  },
+                  hint: "keeps the oldest commit's place in history and its author",
+                  // Straight to the commit, with no dialog asking for a
+                  // message: the engine writes one from the run itself (the
+                  // oldest commit's title, then everything folded into it) and
+                  // that commit is then a commit like any other - amending it
+                  // is a double-click away in the panel.
+                  action: () => void runOp({ op: "squash", shas: chosen }),
                 },
                 { separator: true },
               ]
@@ -1112,7 +1128,7 @@ export function App() {
         ],
       });
     },
-    [selected, branch, runOp],
+    [selected, branch, runOp, data],
   );
 
   /**

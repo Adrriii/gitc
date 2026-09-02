@@ -1113,14 +1113,15 @@ export async function runOp(repo: string, req: OpRequest): Promise<OpResult> {
     // is the only shape the UI can build (see ui/selection.ts).
 
     case "squash": {
-      // The selection is a contiguous run of commits, newest first - the UI
-      // only ever offers squash for such a run (see selection.ts).
       const picked = req.shas;
       if (picked.length < 2) throw new Error("select at least two commits to squash");
 
-      const newest = at(picked, 0);
       const oldest = at(picked, picked.length - 1);
-      if (newest === undefined || oldest === undefined) throw new Error("nothing to squash");
+      if (oldest === undefined) throw new Error("nothing to squash");
+      for (const sha of picked) safeArgument(sha, "commit");
+
+      await noMergesAmong(repo, picked, "squashing them");
+      await checkRewritable(repo, oldest, "squashing");
 
       // Everything except the oldest gets folded into it, so the run keeps the
       // oldest commit's position in history and its author.
@@ -1130,48 +1131,37 @@ export async function runOp(repo: string, req: OpRequest): Promise<OpResult> {
         if (hash !== undefined) folded.push(hash);
       }
 
-      const message = req.message.trim();
-      if (message.length === 0) throw new Error("the squashed commit needs a message");
-
-      const stamp = String(Date.now());
-      // In this process's own temp directory - see tempDir(). A guessable
-      // name in the shared temp directory can be pre-created as a symlink by
-      // another account on the machine, and this writes through it.
-      const specPath = tempFile("squash-" + stamp + ".txt");
-      const msgPath = tempFile("squash-msg-" + stamp + ".txt");
-      writeFileSync(specPath, folded.join(String.fromCharCode(10)), "utf8");
-      writeFileSync(msgPath, message, "utf8");
-
-      // A root commit has no parent to rebase onto, so the whole history is
-      // replayed instead.
-      const parent = await gitOrNull(repo, ["rev-parse", "--verify", oldest + "^"]);
-      const base = parent === null ? "--root" : oldest + "^";
-
-      // gitc drives its own rebase: see engine/rebaseHelper.ts for why the
-      // editors point back at this binary.
-      const self = process.execPath;
-      const env: Record<string, string> = {
-        GIT_SEQUENCE_EDITOR: quoted(self) + " --rebase-todo " + quoted(specPath),
-        GIT_EDITOR: quoted(self) + " --rebase-message " + quoted(msgPath),
+      // The author the squashed commit ends up with is the oldest commit's -
+      // that is what git's own `squash` does, and it is the right one. Everyone
+      // else in the run has to be credited explicitly or the squash quietly
+      // erases them; see creditsFor().
+      const authorOut = await gitOrNull(repo, [
+        "log",
+        "--no-walk",
+        "--format=%an%x00%ae",
+        oldest,
+      ]);
+      const authorFields = (authorOut ?? "").trim().split(String.fromCharCode(0));
+      const author: Person = {
+        name: atOr(authorFields, 0, "").trim(),
+        email: atOr(authorFields, 1, "").trim(),
       };
+      // `message` is honoured if the caller supplied one - nothing does today,
+      // and composing it here is what lets the squash run without stopping to
+      // ask for one (see squashMessage).
+      const typed = req.message.trim();
+      const message = typed.length > 0 ? typed : await squashMessage(repo, picked);
+      const credited = withCredits(message, await creditsFor(repo, picked, author));
 
-      try {
-        return await conflictProne(
-          repo,
-          ["rebase", "-i", base],
-          "Squash",
-          "squashed " + String(picked.length) + " commits",
-          env,
-        );
-      } finally {
-        for (const file of [specPath, msgPath]) {
-          try {
-            if (existsSync(file)) unlinkSync(file);
-          } catch {
-            // A leftover temp file is not worth failing the operation over.
-          }
-        }
-      }
+      return rebaseWith(
+        repo,
+        "squash",
+        folded,
+        oldest,
+        credited,
+        "Squash",
+        "squashed " + String(picked.length) + " commits",
+      );
     }
 
     case "submoduleUpdate": {
