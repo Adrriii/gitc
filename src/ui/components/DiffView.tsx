@@ -8,6 +8,9 @@ import { markHtml } from "../markHtml";
 import { useDiffWrap, useTabSize } from "../settings";
 import { Icon } from "./Icon";
 import { CloseButton } from "./CloseButton";
+import { ContextMenu } from "./ContextMenu";
+import { MediaPreview } from "./MediaPreview";
+import { absolutePath, mediaFor } from "../media";
 import s from "./DiffView.module.scss";
 
 export type DiffTarget =
@@ -114,10 +117,13 @@ export function DiffView({
   onClose,
   onChanged,
   version,
+  repoPath,
 }: {
   tabId: string;
   target: DiffTarget;
   path: string;
+  /** The repository's own path, for "Copy full path". */
+  repoPath?: string;
   /** What the file is being compared against - a commit, a run, or the tree. */
   contextLabel: string;
   onClose: () => void;
@@ -245,6 +251,23 @@ export function DiffView({
   const cut = path.lastIndexOf("/");
   const dir = cut === -1 ? "" : path.substring(0, cut + 1);
   const base = cut === -1 ? path : path.substring(cut + 1);
+  const media = useMemo(() => mediaFor(path), [path]);
+
+  /**
+   * Copying the path of the file on screen. The button copies it as git
+   * names it, relative to the repository - what a commit message, a review
+   * comment or `git log -- <path>` wants. Right-clicking the path offers the
+   * full one as well, for a terminal or a file manager.
+   */
+  const [copied, setCopied] = useState(false);
+  const [pathMenu, setPathMenu] = useState<{ x: number; y: number } | null>(null);
+  const copy = (text: string) => {
+    setPathMenu(null);
+    void navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    });
+  };
 
   // Jump between changed regions with the up/down arrows.
   const stepChange = (dir: 1 | -1) => {
@@ -511,8 +534,43 @@ export function DiffView({
     <div className={s.wrap}>
       <div className={s.pathBar}>
         <Icon name="file" size={13} className={s.pathIco} />
-        <span className={s.pathDir}>{dir}</span>
-        <span className={s.pathBase}>{base}</span>
+        <span
+          className={s.pathText}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            setPathMenu({ x: e.clientX, y: e.clientY });
+          }}
+        >
+          <span className={s.pathDir}>{dir}</span>
+          <span className={s.pathBase}>{base}</span>
+        </span>
+        <button
+          className={`${s.copyPath} ${copied ? s.copied : ""}`}
+          onClick={() => copy(path)}
+          title={copied ? "Copied" : "Copy path (right-click the path for the full one)"}
+        >
+          <Icon name={copied ? "check" : "copy"} size={12} />
+        </button>
+        {pathMenu !== null && (
+          <ContextMenu
+            x={pathMenu.x}
+            y={pathMenu.y}
+            onClose={() => setPathMenu(null)}
+            items={[
+              { label: "Copy path", hint: path, action: () => copy(path) },
+              ...(repoPath === undefined
+                ? []
+                : [
+                    {
+                      label: "Copy full path",
+                      hint: absolutePath(repoPath, path),
+                      action: () => copy(absolutePath(repoPath, path)),
+                    },
+                  ]),
+              { label: "Copy file name", hint: base, action: () => copy(base) },
+            ]}
+          />
+        )}
         <span className={s.context}>in {contextLabel}</span>
         <span className={s.spacer} />
         <span className={s.enc}>UTF-8</span>
@@ -610,7 +668,18 @@ export function DiffView({
         )}
         {!loading && error === null && diff !== null && (
           <>
-            {diff.tooLarge ? (
+            {media !== null && (diff.binary || diff.tooLarge) ? (
+              <MediaPreview
+                tabId={tabId}
+                target={target}
+                path={path}
+                oldPath={diff.oldPath}
+                status={diff.status}
+                kind={media.kind}
+                type={media.type}
+                version={version}
+              />
+            ) : diff.tooLarge ? (
               <div className={s.note}>File is too large to display.</div>
             ) : diff.binary ? (
               <div className={s.note}>Binary file — no textual diff.</div>

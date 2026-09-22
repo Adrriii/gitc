@@ -50,6 +50,7 @@ import {
   diffWorkingFile,
   FULL_CONTEXT,
 } from "./engine/diff.ts";
+import { readMedia } from "./engine/media.ts";
 import { readHead, readRefs, readPending, readRemotes, gitDir } from "./engine/refs.ts";
 import type { Ref } from "./engine/refs.ts";
 import { loadHidden, saveHidden } from "./engine/visibility.ts";
@@ -2113,6 +2114,54 @@ async function handleApi(
     } catch (e) {
       const err = e as Error;
       send(res, 500, "application/json", JSON.stringify({ error: err.message }));
+    }
+    return true;
+  }
+
+  // One side of a file, as bytes, for the diff view to preview an image or a
+  // video. See engine/media.ts for how the two halves keep that safe.
+  if (path.startsWith("/api/media?")) {
+    const params = path.substring(path.indexOf("?") + 1);
+    let id = "";
+    let file = "";
+    let oldPath = "";
+    let side = "";
+    const target = { sha: "", from: "", to: "", mode: "" };
+    for (const pair of params.split("&")) {
+      const eq = pair.indexOf("=");
+      if (eq === -1) continue;
+      const key = pair.substring(0, eq);
+      const value = decodeURIComponent(pair.substring(eq + 1));
+      if (key === "id") id = value;
+      if (key === "path") file = value;
+      if (key === "oldPath") oldPath = value;
+      if (key === "side") side = value;
+      if (key === "sha") target.sha = value;
+      if (key === "from") target.from = value;
+      if (key === "to") target.to = value;
+      if (key === "mode") target.mode = value;
+    }
+    const tab = findTab(id);
+    if (tab === null) {
+      send(res, 404, "application/json", JSON.stringify({ error: "no such tab" }));
+      return true;
+    }
+    try {
+      const got = await readMedia(tab.path, target, file, oldPath, side);
+      if (got.status !== 200) {
+        send(res, got.status, "application/json", JSON.stringify({ error: got.error }));
+        return true;
+      }
+      res.writeHead(200, {
+        "content-type": "application/octet-stream",
+        "x-content-type-options": "nosniff",
+        "content-security-policy": "sandbox; default-src 'none'",
+        "cache-control": "no-store",
+      });
+      res.end(got.bytes);
+    } catch (e) {
+      const err = e as Error;
+      send(res, 400, "application/json", JSON.stringify({ error: err.message }));
     }
     return true;
   }

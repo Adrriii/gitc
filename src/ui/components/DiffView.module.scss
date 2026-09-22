@@ -37,6 +37,33 @@ $hatch: var(--line-strong);
   color: var(--fg-bright);
   font-weight: 600;
 }
+// Selectable, and the right-click target for the copy menu.
+.pathText {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: text;
+}
+.copyPath {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius);
+  color: var(--fg-muted);
+  cursor: pointer;
+
+  &:hover {
+    background: var(--bg-3);
+    color: var(--fg);
+  }
+}
+.copied {
+  color: var(--green-fg);
+}
 .spacer {
   flex: 1;
 }

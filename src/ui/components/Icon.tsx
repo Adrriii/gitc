@@ -46,7 +46,8 @@ export type IconName =
   | "arrowUp"
   | "arrowDown"
   | "warning"
-  | "monitor";
+  | "monitor"
+  | "copy";
 
 const PATHS: Record<IconName, React.ReactNode> = {
   // Circular arrow: fetching is a round trip, not a direction.
@@ -252,6 +253,13 @@ const PATHS: Record<IconName, React.ReactNode> = {
       <path d="M12 3.5 22 20H2z" />
       <path d="M12 10v4.5" />
       <path d="M12 17.4v.2" />
+    </>
+  ),
+  // Two sheets, the front one offset: the usual "copy", in the set's strokes.
+  copy: (
+    <>
+      <path d="M9 9h11v11H9z" />
+      <path d="M5 15H4V4h11v1" />
     </>
   ),
 };

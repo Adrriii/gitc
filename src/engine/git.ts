@@ -306,6 +306,8 @@ export function gitHistory(after: number): GitCall[] {
 interface Ran {
   code: number;
   out: string;
+  /** The same stdout, undecoded - for a blob, which is not text. */
+  bytes: Buffer;
   err: string;
 }
 
@@ -369,9 +371,11 @@ function run(repo: string, args: string[], env?: Record<string, string>): Promis
     // to mean "exited AND drained" - so that condition is assembled here.
     const settle = () => {
       if (!exited || open > 0) return;
+      const bytes = Buffer.concat(out);
       resolve({
         code,
-        out: Buffer.concat(out).toString("utf8"),
+        out: bytes.toString("utf8"),
+        bytes,
         err: Buffer.concat(err).toString("utf8"),
       });
     };
@@ -442,6 +446,25 @@ export async function git(
     finish(call, started, false);
     const err = e as Error;
     throw new GitError(err.message, err.message);
+  }
+}
+
+/**
+ * Runs git and returns stdout as bytes, or null on a non-zero exit.
+ *
+ * For file contents that are not text - an image, a video - where decoding
+ * as UTF-8 would replace every invalid byte and return a different file.
+ */
+export async function gitBytes(repo: string, args: string[]): Promise<Buffer | null> {
+  const started = Date.now();
+  const call = begin(repo, args);
+  try {
+    const result = await run(repo, args);
+    finish(call, started, result.code === 0);
+    return result.code === 0 ? result.bytes : null;
+  } catch {
+    finish(call, started, false);
+    return null;
   }
 }
 

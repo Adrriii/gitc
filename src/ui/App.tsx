@@ -1920,6 +1920,7 @@ export function App() {
                 onClose={() => setOpenFile(null)}
                 onChanged={refresh}
                 version={reloadToken}
+                repoPath={activeTab.path}
               />
             )}
             <div

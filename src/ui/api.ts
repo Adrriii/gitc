@@ -163,6 +163,37 @@ export const api = {
       `/api/range?id=${encodeURIComponent(id)}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
     ),
 
+  /**
+   * One side of a file as raw bytes, for previewing an image or a video.
+   * Rejects with the engine's reason when that side does not exist - the old
+   * side of an added file - or is too large to preview.
+   */
+  media: async (
+    id: string,
+    target: DiffTarget,
+    path: string,
+    oldPath: string | null,
+    side: "old" | "new",
+  ): Promise<ArrayBuffer> => {
+    const q = new URLSearchParams({ id, path, side });
+    if (oldPath !== null) q.set("oldPath", oldPath);
+    if (target.kind === "commit") q.set("sha", target.sha);
+    if (target.kind === "range") {
+      q.set("from", target.from);
+      q.set("to", target.to);
+    }
+    if (target.kind === "wip") q.set("mode", target.staged ? "staged" : "wip");
+    const url = `/api/media?${q.toString()}`;
+    const res = await fetch(url, { headers: tabHeader(url) });
+    if (!res.ok) {
+      const body = (await res.json().catch(() => ({ error: res.statusText }))) as {
+        error?: string;
+      };
+      throw new Error(body.error ?? res.statusText);
+    }
+    return res.arrayBuffer();
+  },
+
   diff: (id: string, target: DiffTarget, path: string, whole: boolean) => {
     const q = new URLSearchParams({ id, path, whole: whole ? "1" : "0" });
     if (target.kind === "commit") q.set("sha", target.sha);
