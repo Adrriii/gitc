@@ -89,6 +89,14 @@ import { loadSession, saveSession, touchRecent } from "./state.ts";
 import { at } from "./engine/safe.ts";
 import { allowedRequest } from "./engine/origin.ts";
 import { cleanTempDir } from "./engine/paths.ts";
+import {
+  recordCrash,
+  listCrashes,
+  clearCrashes,
+  crashDir,
+  markRunning,
+  reportStaleMarkers,
+} from "./engine/crashes.ts";
 import type { Session, Tab } from "./state.ts";
 import { bakedAsset } from "./generated/assets.ts";
 
@@ -1146,6 +1154,8 @@ const LOCAL_ONLY = [
   "/api/remote",
   "/api/update",
   "/api/changelog",
+  "/api/crash",
+  "/api/crashes",
 ];
 
 function isLocalOnly(path: string): boolean {
@@ -1671,6 +1681,30 @@ async function handleApi(
       return true;
     }
     sendJson(res, JSON.stringify(await checkUpdate(updateChannel, updateStream)));
+    return true;
+  }
+
+  // Crash reports, for Preferences. Always this machine's: a remote tab's
+  // engine keeps its own on its own disk, and the list is about the gitc
+  // somebody is looking at, not the one they happen to be connected to.
+  if (path === "/api/crashes") {
+    sendJson(res, JSON.stringify({ dir: crashDir(), reports: listCrashes() }));
+    return true;
+  }
+
+  if (path === "/api/crashes/clear") {
+    const body = JSON.parse(await readBody(req)) as { id: string };
+    clearCrashes(body.id);
+    sendJson(res, JSON.stringify({ dir: crashDir(), reports: listCrashes() }));
+    return true;
+  }
+
+  // The window's own errors. It cannot write a file, so it posts them here.
+  // Trimmed, because the body is whatever the page says it is.
+  if (path === "/api/crash") {
+    const body = JSON.parse(await readBody(req)) as { message: string; detail: string };
+    recordCrash("window", body.message.substring(0, 2000), body.detail.substring(0, 20000));
+    sendJson(res, JSON.stringify({ ok: true }));
     return true;
   }
 
@@ -2301,6 +2335,18 @@ function openDialogWindow(url: string, size: string): boolean {
 // ----------------------------------------------------------------- main
 
 async function main(): Promise<void> {
+  // Registering this replaces the runtime's own handling, which printed one
+  // line to a console nobody has and exited. The report is the point; the
+  // exit is kept, because an engine that carries on past a failure nobody
+  // planned for is in a state nobody planned for either.
+  process.on("unhandledRejection", (reason: unknown) => {
+    const msg = reason instanceof Error ? reason.message : String(reason);
+    const name = reason instanceof Error ? reason.name : "thrown value";
+    recordCrash("engine", msg, name + " in a promise nothing was waiting on; the engine exited");
+    console.error("Unhandled promise rejection: " + msg);
+    process.exit(1);
+  });
+
   // Dev mode: serve the API only. `npm run dev` pairs this with Vite on 5173,
   // which proxies /api here - so the UI hot-reloads against a live engine
   // instead of needing the binary rebuilt for every style tweak.
@@ -2591,6 +2637,15 @@ async function main(): Promise<void> {
         })
         .catch((e: unknown) => {
           const msg = e instanceof Error ? e.message : String(e);
+          // Nothing inside handleApi expected this - the endpoints catch what
+          // git can reasonably do to them - so it is a bug, and worth keeping.
+          // The query is left off: it is file paths and ids, and the
+          // endpoint is what says where to look.
+          const q = path.indexOf("?");
+          const where = (req.method === undefined ? "GET" : req.method) + " " +
+            (q === -1 ? path : path.substring(0, q));
+          const name = e instanceof Error ? e.name : "thrown value";
+          recordCrash("engine", msg, name + " answering " + where);
           send(res, 500, "text/plain", msg);
         });
       return;
@@ -2672,6 +2727,13 @@ async function main(): Promise<void> {
 
   server.listen(port, "127.0.0.1", () => {
     const url = "http://127.0.0.1:" + port + "/";
+
+    // Only once the port is ours: an engine that loses the bind or hands off
+    // to a running one never started, so it has nothing to leave a marker
+    // for - and a marker left on this port by anybody else is now certainly
+    // dead, because this process holds it.
+    markRunning(port);
+    void reportStaleMarkers(port, running);
 
     // The token goes out only once this engine actually owns the port.
     //

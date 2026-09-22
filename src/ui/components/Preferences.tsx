@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import type { ReleaseNotes, UpdateInfo } from "../types";
+import type { CrashList, CrashReport, ReleaseNotes, UpdateInfo } from "../types";
+import { since } from "../ago";
 import {
   FETCH_INTERVALS,
   REMOTE_HOLDS,
@@ -94,19 +95,89 @@ function Notes({ lines }: { lines: Line[] }) {
   );
 }
 
-type Section = "theme" | "editor" | "repository" | "commands" | "about";
+type Section = "theme" | "editor" | "repository" | "commands" | "crashes" | "about";
 
 const SECTIONS: {
   id: Section;
   label: string;
-  icon: "eye" | "edit" | "repo" | "fetch" | "branch";
+  icon: "eye" | "edit" | "repo" | "fetch" | "branch" | "warning";
 }[] = [
   { id: "theme", label: "Theme", icon: "eye" },
   { id: "editor", label: "Editor", icon: "edit" },
   { id: "repository", label: "Repository", icon: "fetch" },
   { id: "commands", label: "Command log", icon: "branch" },
+  { id: "crashes", label: "Crash reports", icon: "warning" },
   { id: "about", label: "About", icon: "repo" },
 ];
+
+const SOURCE_LABELS = new Map<string, string>([
+  ["engine", "Engine"],
+  ["window", "Window"],
+  ["stopped", "Stopped"],
+]);
+
+/** The report as text, for pasting into an issue. */
+function reportText(r: CrashReport): string {
+  return [
+    `gitc ${r.version} on ${r.platform}`,
+    `${r.time} - ${SOURCE_LABELS.get(r.source) ?? r.source}`,
+    "",
+    r.message,
+    "",
+    r.detail,
+  ].join("\n");
+}
+
+/**
+ * One report: a line that says what and when, opening onto the whole thing.
+ *
+ * Collapsed by default because the detail of a window error is a component
+ * stack, and fifty of those open at once is not a list anybody can read.
+ */
+function Crash({ report, onDelete }: { report: CrashReport; onDelete: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const when = new Date(report.time);
+  return (
+    <div className={`${s.crash} ${open ? s.crashOpen : ""}`}>
+      <button className={s.crashHead} onClick={() => setOpen(!open)}>
+        <Icon
+          name={open ? "chevronDown" : "chevronRight"}
+          size={11}
+          className={s.crashChevron}
+        />
+        <span className={`${s.crashSource} ${report.source === "stopped" ? s.crashStopped : ""}`}>
+          {SOURCE_LABELS.get(report.source) ?? report.source}
+        </span>
+        <span className={s.crashMessage}>{report.message}</span>
+        <span className={s.crashWhen} title={when.toLocaleString()}>
+          {since(Date.now() - when.getTime())}
+        </span>
+      </button>
+      {open && (
+        <div className={s.crashBody}>
+          <pre className={s.crashText}>{reportText(report)}</pre>
+          <div className={s.crashActions}>
+            <button
+              className={s.resetAll}
+              onClick={() => {
+                void navigator.clipboard.writeText(reportText(report)).then(() => {
+                  setCopied(true);
+                  window.setTimeout(() => setCopied(false), 1500);
+                });
+              }}
+            >
+              {copied ? "Copied" : "Copy report"}
+            </button>
+            <button className={s.resetAll} onClick={onDelete}>
+              Delete
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 /** One labelled control. The label column is right-aligned, as in the reference. */
 function Row({
@@ -192,6 +263,30 @@ export function Preferences({
    * the browser's storage. Loaded on arrival, because a machine approved a
    * minute ago is the one somebody is here to look at.
    */
+  /**
+   * Crash reports. Read on arrival rather than when the tab opens, so the
+   * count beside it in the list is there before anybody goes looking - and
+   * again on every change of tab, so returning to it shows the latest.
+   */
+  const [crashes, setCrashes] = useState<CrashList | null>(null);
+  const [crashesFailed, setCrashesFailed] = useState("");
+  useEffect(() => {
+    let live = true;
+    api
+      .crashes()
+      .then((c) => live && setCrashes(c))
+      .catch((e: Error) => live && setCrashesFailed(e.message));
+    return () => {
+      live = false;
+    };
+  }, [section]);
+  const clearCrashes = (id: string) => {
+    api
+      .clearCrashes(id)
+      .then(setCrashes)
+      .catch((e: Error) => setCrashesFailed(e.message));
+  };
+
   const [remotes, setRemotes] = useState<string[]>([]);
   useEffect(() => {
     let live = true;
@@ -221,6 +316,9 @@ export function Preferences({
           >
             <Icon name={entry.icon} size={14} className={s.navIco} />
             {entry.label}
+            {entry.id === "crashes" && crashes !== null && crashes.reports.length > 0 && (
+              <span className={s.navCount}>{crashes.reports.length}</span>
+            )}
           </button>
         ))}
       </div>
@@ -448,6 +546,38 @@ export function Preferences({
                 </div>
               )}
             </Row>
+          </>
+        )}
+
+        {section === "crashes" && (
+          <>
+            <h1>Crash reports</h1>
+            <Row
+              label="Reports"
+              hint="Kept when something in gitc fails in a way nothing planned for: a request the engine could not answer, an error in this window, or an engine that stopped without shutting down. The newest 50 are kept, on this machine only - nothing is sent anywhere. Copy one into an issue to report it."
+            >
+              {crashesFailed.length > 0 ? (
+                <span className={s.hint}>{crashesFailed}</span>
+              ) : crashes === null ? (
+                <span className={s.hint}>reading…</span>
+              ) : crashes.reports.length === 0 ? (
+                <span className={s.value}>None</span>
+              ) : (
+                <div className={s.crashes}>
+                  {crashes.reports.map((r) => (
+                    <Crash key={r.id} report={r} onDelete={() => clearCrashes(r.id)} />
+                  ))}
+                  <button className={s.resetAll} onClick={() => clearCrashes("")}>
+                    Delete all
+                  </button>
+                </div>
+              )}
+            </Row>
+            {crashes !== null && (
+              <Row label="Folder" hint="One JSON file per report, named by the time it happened.">
+                <span className={s.value}>{crashes.dir}</span>
+              </Row>
+            )}
           </>
         )}
 

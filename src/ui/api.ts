@@ -17,6 +17,7 @@ import type {
   SshHost,
   RemotePlan,
   ReleaseNotes,
+  CrashList,
 } from "./types";
 import type { DiffTarget } from "./components/DiffView";
 
@@ -195,6 +196,29 @@ export const api = {
 
   /** What changed in the version that is running. */
   changelog: () => json<ReleaseNotes>("/api/changelog"),
+
+  /** Crash reports kept by this machine's engine, newest first. */
+  crashes: () => json<CrashList>("/api/crashes"),
+
+  /** Deletes one report, or every one when `id` is empty. */
+  clearCrashes: (id: string) => post<CrashList>("/api/crashes/clear", { id }),
+
+  /**
+   * Hands one of the window's own errors to the engine to keep.
+   *
+   * Plain fetch with its failure swallowed: this runs while something is
+   * already going wrong, and an error from reporting an error would only
+   * report itself.
+   */
+  reportCrash: (message: string, detail: string) =>
+    fetch("/api/crash", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ message, detail }),
+    }).then(
+      () => undefined,
+      () => undefined,
+    ),
 
   /** Asks whether a newer gitc has been released. */
   checkUpdate: () => json<UpdateInfo>("/api/update"),

@@ -160,6 +160,26 @@ export interface UpdateInfo {
   streams: string[];
 }
 
+/** One crash report, as engine/crashes.ts writes it. */
+export interface CrashReport {
+  id: string;
+  /** ISO 8601, UTC. */
+  time: string;
+  version: string;
+  platform: string;
+  /** "engine", "window", or "stopped" for an engine that vanished. */
+  source: string;
+  message: string;
+  detail: string;
+}
+
+export interface CrashList {
+  /** Where the reports are, so they can be attached to an issue. */
+  dir: string;
+  /** Newest first. */
+  reports: CrashReport[];
+}
+
 /** The notes published with the version that is running. */
 export interface ReleaseNotes {
   version: string;
