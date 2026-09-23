@@ -35,9 +35,11 @@ function git(cwd: string, ...args: string[]): string {
   }).trim();
 }
 
-// realpath: on macOS the temp directory is behind a symlink, and git reports
-// the resolved path.
-const root = realpathSync(mkdtempSync(join(tmpdir(), "gitc-worktrees-test-")));
+// The native realpath, because git writes paths fully resolved. On macOS the
+// temp directory is behind a symlink; on a Windows CI runner it is an 8.3
+// short name (C:\Users\RUNNER~1\...), which only the native call expands -
+// the plain one left it short, and every path git wrote failed to match.
+const root = realpathSync.native(mkdtempSync(join(tmpdir(), "gitc-worktrees-test-")));
 const main = join(root, "main");
 git(root, "init", "-q", "-b", "master", "main");
 git(main, "commit", "-q", "--allow-empty", "-m", "first");
