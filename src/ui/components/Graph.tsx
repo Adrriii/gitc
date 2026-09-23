@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
-import type { Commit, GraphPayload, GraphRow, Person } from "../types";
+import type { Commit, GraphPayload, GraphRow, Person, Worktree } from "../types";
 import { Avatar } from "./Avatar";
 import { Icon } from "./Icon";
 import { groupRefs } from "../refGroups";
-import type { RefGroup } from "../refGroups";
+import type { RefGroup, WorktreeLabels } from "../refGroups";
+import { branchesElsewhere, changeCounts, findWorktree, isWip, wipWorktree, worktreeLabel } from "../worktrees";
 import s from "./Graph.module.scss";
 
 // Measured against a reference implementation over CDP, not guessed - see
@@ -280,11 +281,19 @@ function CommitNode({
   );
 }
 
-/** Where a branch of this name exists: on disk, and on which remotes. */
+/**
+ * Where a branch of this name exists: on disk, on which remotes, and checked
+ * out in which other worktree.
+ */
 function Where({ group }: { group: RefGroup }) {
-  if (group.kind === "tag") return null;
+  if (group.kind !== "branch") return null;
   return (
     <>
+      {group.elsewhere.length > 0 && (
+        <span title={"checked out in worktree " + group.elsewhere}>
+          <Icon name="worktree" size={11} className={s.whereIco} />
+        </span>
+      )}
       {group.local && (
         <Icon name="monitor" size={11} className={s.whereIco} />
       )}
@@ -319,11 +328,23 @@ function GroupChip({
   onCheckout: (kind: string, name: string) => void;
 }) {
   const cls =
-    group.kind === "tag" ? s.chipTag : group.local ? s.chipLocal : s.chipRemote;
+    group.kind === "tag" || group.kind === "worktree"
+      ? s.chipTag
+      : group.local
+        ? s.chipLocal
+        : s.chipRemote;
   const where =
     group.kind === "tag"
       ? "tag"
-      : [group.local ? "local" : null, ...group.remotes].filter(Boolean).join(", ");
+      : group.kind === "worktree"
+        ? "worktree, detached"
+        : [group.local ? "local" : null, ...group.remotes].filter(Boolean).join(", ");
+  // What a double-click does, which for a branch held by another worktree is
+  // not a checkout - git would refuse one.
+  const act =
+    group.kind === "worktree" || group.elsewhere.length > 0
+      ? "double-click to open that worktree"
+      : "double-click to check out";
   return (
     <span
       className={`${s.chip} ${cls} ${group.isHead ? s.chipHead : ""}`}
@@ -345,8 +366,12 @@ function GroupChip({
         // on top of the one the chip is now made of.
         boxShadow: group.isHead ? `0 0 0 1px ${laneColor}` : undefined,
       }}
-      title={`${group.name} — ${where}${group.isHead ? " — checked out" : ""}
-double-click to check out, right-click for actions`}
+      title={`${group.name} — ${where}${group.isHead ? " — checked out" : ""}${
+        group.kind === "branch" && group.elsewhere.length > 0
+          ? " — checked out in worktree " + group.elsewhere
+          : ""
+      }
+${act}, right-click for actions`}
       onDoubleClick={() => onCheckout(group.actionKind, group.actionName)}
       onContextMenu={(e) => {
         e.preventDefault();
@@ -358,6 +383,7 @@ double-click to check out, right-click for actions`}
       {!group.isHead && group.kind === "tag" && (
         <Icon name="tag" size={11} className={s.chipIco} />
       )}
+      {group.kind === "worktree" && <Icon name="worktree" size={11} className={s.chipIco} />}
       <span className={s.chipName}>{group.name}</span>
       <Where group={group} />
       {/*
@@ -441,12 +467,14 @@ function RefCell({
   labels,
   laneColor,
   headBranch,
+  worktrees,
   menuOpen,
   onContext,
   onCheckout,
 }: {
   width: number;
   labels: string[];
+  worktrees: WorktreeLabels;
   /** The lane colour of the commit these chips name. */
   laneColor: string;
   /** Stash selector to display name. */
@@ -456,7 +484,10 @@ function RefCell({
   onContext: (kind: string, name: string, x: number, y: number) => void;
   onCheckout: (kind: string, name: string) => void;
 }) {
-  const groups = useMemo(() => groupRefs(labels, headBranch), [labels, headBranch]);
+  const groups = useMemo(
+    () => groupRefs(labels, headBranch, worktrees),
+    [labels, headBranch, worktrees],
+  );
   const [hovered, setHovered] = useState(false);
   // Right-clicking an entry opens a menu, which moves the pointer off the
   // list. On plain :hover the list would vanish underneath the menu it just
@@ -498,7 +529,11 @@ function RefCell({
             <div
               key={g.kind + g.name}
               className={`${s.popRow} ${g.isHead ? s.popRowHead : ""}`}
-              title={`${g.name} — double-click to check out, right-click for actions`}
+              title={`${g.name} — ${
+                g.kind === "worktree" || g.elsewhere.length > 0
+                  ? "double-click to open that worktree"
+                  : "double-click to check out"
+              }, right-click for actions`}
               onDoubleClick={() => onCheckout(g.actionKind, g.actionName)}
               onContextMenu={(e) => {
                 e.preventDefault();
@@ -538,6 +573,9 @@ function bucket(date: number, now: number): string {
   const years = Math.floor(days / 365);
   return years === 1 ? "a year ago" : `${years} years ago`;
 }
+
+/** Stable, so the memo in Graph is not rebuilt for a payload without worktrees. */
+const NO_WORKTREES: Worktree[] = [];
 
 export function Graph({
   data,
@@ -580,6 +618,15 @@ export function Graph({
   // newer than it, which is the only reason it should be there.
   const total = data.commits.length;
 
+  const worktrees = data.worktrees ?? NO_WORKTREES;
+  const worktreeLabels = useMemo<WorktreeLabels>(() => {
+    const byBranch = new Map<string, string>();
+    for (const [branch, w] of branchesElsewhere(worktrees)) byBranch.set(branch, worktreeLabel(w));
+    const byName = new Map<string, string>();
+    for (const w of worktrees) byName.set(w.name, worktreeLabel(w));
+    return { byBranch, byName };
+  }, [worktrees]);
+
   const markers = useMemo(() => {
     // Even in date order the list is not strictly chronological: a child must
     // still be listed above its parent, and a rebase or a skewed clock can
@@ -593,7 +640,7 @@ export function Graph({
     data.commits.forEach((c, i) => {
       // The WIP row is dated now and would open the column with a "now"
       // marker above work that has not happened yet.
-      if (c.hash === "WIP") return;
+      if (isWip(c.hash)) return;
       const age = now - c.date;
       if (age > deepest) {
         const b = bucket(c.date, now);
@@ -758,6 +805,64 @@ export function Graph({
     const row = data.rows[i];
     if (!c || !row) continue;
 
+    // Another worktree's uncommitted work. Drawn like this checkout's WIP row -
+    // same dashed node, same counts - but read-only: no commit box, and the
+    // branch column names the worktree, so the row says whose work it is.
+    const other = wipWorktree(c.hash);
+    if (other !== null) {
+      const w = findWorktree(worktrees, other);
+      if (w === undefined) continue;
+      const counts = changeCounts(w);
+      const color = data.colors[row.color % data.colors.length];
+      rows.push(
+        <div
+          key={c.hash}
+          className={`${s.row} ${s.wip} ${selectedSet.has(c.hash) ? s.sel : ""}`}
+          style={{ top: i * ROW_H }}
+          title={`${worktreeLabel(w)} — ${w.path}\nclick to look at its changes, double-click the chip to open it`}
+          onClick={() => onSelect(c.hash, false, false)}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            onContext(c.hash, e.clientX, e.clientY);
+          }}
+        >
+          <div
+            className={s.refLine}
+            style={{
+              left: chipsWidth - CHIPS_PAD_R,
+              width: laneX(row.lane) + CHIPS_PAD_R,
+              background: color,
+            }}
+          />
+          <RefCell
+            width={chipsWidth}
+            labels={["worktree:" + w.name]}
+            laneColor={color}
+            headBranch={null}
+            worktrees={worktreeLabels}
+            menuOpen={menuOpen}
+            onContext={onRefContext}
+            onCheckout={onRefCheckout}
+          />
+          <div className={s.graphCell} style={{ width: graphWidth }}>
+            <RowGraph row={row} colors={data.colors} wip />
+          </div>
+          <div className={s.strip} style={{ background: "transparent" }} />
+          <div className={s.msg}>
+            <span className={s.subject}>
+              {"// WIP"}
+              {w.branch !== null && !w.detached ? " on " + w.branch : ""}
+            </span>
+            <span className={s.wipCounts}>
+              {counts.modified > 0 && <span className={s.wipMod}>&#9998; {counts.modified}</span>}
+              {counts.added > 0 && <span className={s.wipAdd}>+ {counts.added}</span>}
+            </span>
+          </div>
+        </div>,
+      );
+      continue;
+    }
+
     // Its lane, colour and crossings all come from the walk now, so the row
     // only has to look different - a dashed node and an input where a subject
     // would go.
@@ -844,6 +949,7 @@ export function Graph({
           labels={c.refs}
           laneColor={data.colors[row.color % data.colors.length]}
           headBranch={data.head.branch}
+          worktrees={worktreeLabels}
           menuOpen={menuOpen}
           onContext={onRefContext}
           onCheckout={onRefCheckout}

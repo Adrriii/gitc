@@ -14,6 +14,7 @@ import type {
   ConflictState,
   ConflictVersions,
   Submodule,
+  Worktree,
   SshHost,
   RemotePlan,
   ReleaseNotes,
@@ -158,6 +159,13 @@ export const api = {
   submodules: (id: string) =>
     json<{ submodules: Submodule[] }>(`/api/submodules?id=${encodeURIComponent(id)}`),
 
+  /**
+   * The worktree list, fresh - for a decision that the last graph refresh
+   * is too old to make, like whether somebody is working in one right now.
+   */
+  worktrees: (id: string) =>
+    json<{ worktrees: Omit<Worktree, "status">[] }>(`/api/worktrees?id=${encodeURIComponent(id)}`),
+
   rangeFiles: (id: string, from: string, to: string) =>
     json<{ files: FileChange[] }>(
       `/api/range?id=${encodeURIComponent(id)}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
@@ -182,7 +190,10 @@ export const api = {
       q.set("from", target.from);
       q.set("to", target.to);
     }
-    if (target.kind === "wip") q.set("mode", target.staged ? "staged" : "wip");
+    if (target.kind === "wip") {
+      q.set("mode", target.staged ? "staged" : "wip");
+      if (target.worktree !== undefined) q.set("wt", target.worktree);
+    }
     const url = `/api/media?${q.toString()}`;
     const res = await fetch(url, { headers: tabHeader(url) });
     if (!res.ok) {
@@ -204,6 +215,7 @@ export const api = {
     if (target.kind === "wip") {
       q.set("mode", target.staged ? "staged" : "wip");
       if (target.untracked) q.set("untracked", "1");
+      if (target.worktree !== undefined) q.set("wt", target.worktree);
     }
     return json<FileDiff>(`/api/diff?${q.toString()}`);
   },

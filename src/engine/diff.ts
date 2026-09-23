@@ -252,6 +252,12 @@ export async function diffWorkingFile(
   staged: boolean,
   context: number,
   untracked: boolean,
+  /**
+   * For a worktree that is not the tab's own: `git diff` refreshes the index
+   * when it can, and doing that in a worktree an agent is working in can
+   * make its next `git add` fail on our lock. See readStatus.
+   */
+  quiet: boolean = false,
 ): Promise<FileDiff> {
   // `git status` already told us this file is untracked, so take the caller's
   // word for it and read the file directly. This matters on big repos: the
@@ -261,7 +267,17 @@ export async function diffWorkingFile(
   // third rather than removing any.
   if (untracked && !staged) return newFileDiff(repo, path, context);
 
-  const args = ["diff", contextArg(context), "--no-color"];
+  const args: string[] = [];
+  if (quiet) args.push("--no-optional-locks");
+  // `git diff` against the working tree refreshes the index and writes it
+  // back whatever --no-optional-locks says - measured on git 2.34: a touched
+  // but unchanged file was enough to make it rewrite an agent's index on
+  // every look. `diff-files` is the plumbing under it, with the same output
+  // and no refresh, so it is what a read of someone else's worktree uses.
+  // The index-only diff (`--cached`) never refreshes, so it stays as it is.
+  args.push(quiet && !staged ? "diff-files" : "diff");
+  if (quiet && !staged) args.push("-p");
+  args.push(contextArg(context), "--no-color");
   if (staged) args.push("--cached");
   args.push("--", path);
 

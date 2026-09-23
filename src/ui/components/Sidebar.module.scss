@@ -351,3 +351,62 @@
   background: var(--bg-3);
   color: var(--fg-muted);
 }
+
+// A worktree's branch, when its name does not already say it. Faint and
+// allowed to shrink first: the worktree's own name is what the row is for.
+.wtBranch {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 10px;
+  color: var(--fg-faint);
+}
+
+// Something moved in there within the last half-minute - usually an agent.
+// A dot rather than a word: it is a hint, and it changes while you watch.
+.wtActive {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--green);
+}
+
+.wtBadge {
+  flex: none;
+}
+
+// View and edit. Same box as the eye and the kebab, and revealed the same
+// way; they take the badge's place on hover rather than pushing the name.
+.wtBtn {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border-radius: var(--radius);
+  border: none;
+  background: none;
+  color: var(--fg-faint);
+
+  svg {
+    flex: none;
+  }
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.09);
+    color: var(--fg);
+  }
+}
+
+.ref:hover .wtBtn {
+  display: flex;
+}
+
+.ref:hover .wtBadge {
+  display: none;
+}

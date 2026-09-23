@@ -16,7 +16,16 @@ import s from "./DiffView.module.scss";
 export type DiffTarget =
   | { kind: "commit"; sha: string }
   | { kind: "range"; from: string; to: string }
-  | { kind: "wip"; staged: boolean; untracked: boolean };
+  | {
+      kind: "wip";
+      staged: boolean;
+      untracked: boolean;
+      /**
+       * Another worktree's changes, by name - read-only, so nothing that
+       * stages, unstages or discards is offered. Absent for this tab's own.
+       */
+      worktree?: string;
+    };
 
 type Mode = "unified" | "inline" | "split";
 
@@ -407,7 +416,7 @@ export function DiffView({
                 whole-file view is one hunk covering everything, where "stage
                 this hunk" would quietly mean "stage the file".
               */}
-              {canApplyHunks(diff) && target.kind === "wip" && (
+              {canApplyHunks(diff) && target.kind === "wip" && target.worktree === undefined && (
                 <span className={s.hunkActions}>
                   {target.staged ? (
                     <button
@@ -578,13 +587,17 @@ export function DiffView({
       </div>
 
       <div className={s.toolbar}>
-        <button
-          className={s.btn}
-          onClick={() => void openInEditor()}
-          title="Open this file in your editor"
-        >
-          &#9998; Edit This File
-        </button>
+        {/* Not for another worktree's file: the engine would open this tab's
+            copy of it, and editing is what that worktree's own tab is for. */}
+        {!(target.kind === "wip" && target.worktree !== undefined) && (
+          <button
+            className={s.btn}
+            onClick={() => void openInEditor()}
+            title="Open this file in your editor"
+          >
+            &#9998; Edit This File
+          </button>
+        )}
         {editError !== null && <span className={s.editError}>{editError}</span>}
         <span className={s.spacer} />
 

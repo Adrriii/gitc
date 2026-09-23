@@ -11,6 +11,7 @@ import type {
   PushRefusal,
   UpdateInfo,
   UpdateProgress,
+  Worktree,
 } from "./types";
 import { api } from "./api";
 import { VERSION } from "../generated/version";
@@ -58,6 +59,15 @@ import {
   useUpdateLevel,
 } from "./settings";
 import { shouldPrompt, versionChip } from "./version";
+import {
+  branchesElsewhere,
+  findWorktree,
+  isActive,
+  isWip,
+  wipHash,
+  wipWorktree,
+  worktreeLabel,
+} from "./worktrees";
 import { chainBetween, rangeSelect, toggleSelect } from "./selection";
 import { nextAfter, stagedFiles, unstagedFiles } from "./staging";
 import s from "./App.module.scss";
@@ -81,6 +91,9 @@ const DEEP_LIMIT = 50000;
  * that. Anything long enough to notice would make "fetch on focus" a lie.
  */
 const FETCH_ON_ARRIVE_COOLDOWN_MS = 15000;
+
+/** Stable, so memos keyed on the list survive a payload that has none. */
+const NO_WORKTREES: Worktree[] = [];
 
 interface MenuState {
   x: number;
@@ -831,16 +844,156 @@ export function App() {
     }
   }, []);
 
+  // --- worktrees ------------------------------------------------------------
+  //
+  // Two ways into another checkout, and the difference is ownership. VIEW
+  // stays in this tab and only reads: its WIP row is selected, and the panel
+  // lists its changes with nothing that stages, discards or commits. EDIT
+  // opens it as a tab of its own, which is a deliberate step - with coding
+  // agents, the checkout next door is usually somebody else's work in
+  // progress.
+
+  const worktrees = data?.worktrees ?? NO_WORKTREES;
+  const elsewhere = useMemo(() => branchesElsewhere(worktrees), [worktrees]);
+
+  /** Looks at another worktree without leaving this tab. */
+  const viewWorktree = useCallback(
+    (w: Worktree) => {
+      if (w.current) return;
+      if (w.prunable) {
+        setError(`${worktreeLabel(w)} is gone from disk - nothing left to look at`);
+        return;
+      }
+      // A clean worktree has no WIP row: nothing it has done is uncommitted,
+      // so where it stands is the whole story.
+      if (w.status.length > 0) revealCommit(wipHash(w.name));
+      else if (w.hash !== null) revealCommit(w.hash);
+    },
+    [revealCommit],
+  );
+
+  /**
+   * Opens another worktree as a tab of its own, or brings its tab forward.
+   *
+   * Asks first when it looks like somebody is in there - its HEAD or index
+   * moved within the last few seconds, or it is locked - measured fresh
+   * rather than from the last graph load, which may be a minute old.
+   */
+  const editWorktree = useCallback(
+    async (w: Worktree) => {
+      if (activeTab === null || w.current) return;
+      if (w.prunable) {
+        setError(`${worktreeLabel(w)} is gone from disk - it can only be pruned`);
+        return;
+      }
+      const tab = activeTab;
+      const go = () => void open(w.path, tab.host ?? undefined);
+
+      let fresh: Omit<Worktree, "status"> = w;
+      try {
+        const now = await api.worktrees(tab.id);
+        fresh = now.worktrees.find((x) => x.name === w.name) ?? w;
+      } catch {
+        // The last known state will do; the question is a courtesy.
+      }
+      const active = isActive({ ...fresh, status: w.status });
+      if (!active && !fresh.locked) {
+        go();
+        return;
+      }
+      const label = worktreeLabel(w);
+      setConfirm({
+        title: `Open ${label} for editing?`,
+        body: (
+          <>
+            {active && (
+              <p>
+                Something changed in <b>{label}</b> {Math.round(fresh.idleMs / 1000)} seconds ago.
+                If an agent is working there, changing things underneath it will confuse it.
+              </p>
+            )}
+            {fresh.locked && (
+              <p>
+                It is locked{fresh.lockReason.length > 0 ? <>: <i>{fresh.lockReason}</i></> : ""}.
+              </p>
+            )}
+            <p>Looking at its changes from this tab is always safe.</p>
+          </>
+        ),
+        confirmLabel: "Open anyway",
+        onConfirm: () => {
+          setConfirm(null);
+          go();
+        },
+      });
+    },
+    [activeTab, open, setConfirm],
+  );
+
+  const worktreeMenu = useCallback(
+    (w: Worktree, x: number, y: number) => {
+      const label = worktreeLabel(w);
+      const items: MenuItem[] = [];
+      if (!w.current) {
+        items.push({
+          label: w.status.length > 0 ? `Look at ${label}'s changes` : `Show where ${label} is`,
+          hint: "read-only, in this tab",
+          action: () => viewWorktree(w),
+        });
+        items.push({
+          label: `Open ${label} to edit`,
+          hint: "in a tab of its own",
+          action: () => void editWorktree(w),
+        });
+        items.push({ separator: true });
+      }
+      items.push({
+        label: "Copy path",
+        action: () => {
+          void navigator.clipboard.writeText(w.path);
+          setNotice("copied " + w.path);
+          setMenu(null);
+        },
+      });
+      setMenu({ x, y, items });
+    },
+    [viewWorktree, editWorktree],
+  );
+
+  /**
+   * A checkout, unless another worktree already has that branch - git would
+   * refuse, so the double-click opens that worktree instead, which is what
+   * wanting to be on that branch means now.
+   */
+  const checkoutRef = useCallback(
+    (kind: string, name: string) => {
+      if (kind === "worktree") {
+        const w = findWorktree(worktrees, name);
+        if (w !== undefined) void editWorktree(w);
+        return;
+      }
+      const holder = kind === "local" ? elsewhere.get(name) : undefined;
+      if (holder !== undefined) {
+        void editWorktree(holder);
+        return;
+      }
+      void runOp({ op: "checkout", ref: name });
+    },
+    [worktrees, elsewhere, editWorktree, runOp],
+  );
+
   const onSelect = useCallback(
     (hash: string, additive: boolean, range: boolean) => {
       if (!data) return;
-      if (hash === "WIP") {
-        setSelected(["WIP"]);
+      // A WIP row - this checkout's or another's - is only ever selected
+      // alone: a range across uncommitted work means nothing.
+      if (isWip(hash)) {
+        setSelected([hash]);
         setAnchor(null);
         return;
       }
       setSelected((prev) => {
-        if (prev.includes("WIP")) {
+        if (prev.some(isWip)) {
           setAnchor(hash);
           return [hash];
         }
@@ -876,7 +1029,12 @@ export function App() {
     }
 
     const staged = openFile.target.staged;
-    const files = staged ? stagedFiles(data.status) : unstagedFiles(data.status);
+    // Another worktree's lists when it is that worktree's file being read, so
+    // the view follows its changes the same way it follows this one's.
+    const wt = openFile.target.worktree;
+    const source =
+      wt === undefined ? data.status : (findWorktree(worktrees, wt)?.status ?? []);
+    const files = staged ? stagedFiles(source) : unstagedFiles(source);
     const paths = files.map((f) => f.path);
 
     if (paths.includes(openFile.path)) {
@@ -893,17 +1051,28 @@ export function App() {
     const file = files.find((f) => f.path === next);
     setOpenFile({
       path: next,
-      target: { kind: "wip", staged, untracked: file !== undefined && file.untracked },
-      label: staged ? "staged changes" : "the working tree",
+      target: {
+        kind: "wip",
+        staged,
+        untracked: file !== undefined && file.untracked,
+        worktree: wt,
+      },
+      label: openFile.label,
     });
-  }, [data, openFile]);
+  }, [data, openFile, worktrees]);
 
   const onOpenFile = useCallback(
     (path: string, staged: boolean, untracked: boolean) => {
       if (!data) return;
       let target: DiffTarget;
       let label: string;
-      if (selected.includes("WIP")) {
+      const other = selected.length === 1 ? wipWorktree(selected[0]) : null;
+      const otherTree = other === null ? undefined : findWorktree(worktrees, other);
+      if (otherTree !== undefined) {
+        target = { kind: "wip", staged, untracked, worktree: otherTree.name };
+        // Read after "in ", as the tab's own are: "in agent-7".
+        label = worktreeLabel(otherTree) + (staged ? "'s staged changes" : "");
+      } else if (selected.includes("WIP")) {
         target = { kind: "wip", staged, untracked };
         label = staged ? "staged changes" : "the working tree";
       } else if (selected.length > 1) {
@@ -918,7 +1087,7 @@ export function App() {
       }
       setOpenFile({ path, target, label });
     },
-    [data, selected],
+    [data, selected, worktrees],
   );
 
   useEffect(() => {
@@ -948,6 +1117,18 @@ export function App() {
 
   const commitMenu = useCallback(
     (hash: string, x: number, y: number): void => {
+      // Another worktree's WIP row is not a commit, and nothing on the commit
+      // menu applies to it.
+      const other = wipWorktree(hash);
+      if (other !== null) {
+        const w = findWorktree(worktrees, other);
+        if (w !== undefined) {
+          setSelected([hash]);
+          setAnchor(null);
+          worktreeMenu(w, x, y);
+        }
+        return;
+      }
       // Right-clicking outside the selection moves to that commit; inside it
       // keeps the run, so the menu can act on all of it.
       setSelected((prev) => {
@@ -956,7 +1137,7 @@ export function App() {
         return [hash];
       });
 
-      const chosen = selected.includes(hash) ? selected.filter((h) => h !== "WIP") : [hash];
+      const chosen = selected.includes(hash) ? selected.filter((h) => !isWip(h)) : [hash];
       const many = chosen.length > 1;
       const short = hash.substring(0, 7);
       const on = branch ?? "HEAD";
@@ -1216,7 +1397,7 @@ export function App() {
         ],
       });
     },
-    [selected, branch, runOp, data],
+    [selected, branch, runOp, data, worktrees, worktreeMenu],
   );
 
   /**
@@ -1269,6 +1450,7 @@ export function App() {
   const refMenu = useCallback(
     (ref: Ref, x: number, y: number): void => {
       const isCurrent = ref.kind === "local" && ref.short === branch;
+      const holder = ref.kind === "local" ? elsewhere.get(ref.short) : undefined;
       const hiddenNow = (data?.hidden ?? []).includes(ref.short);
       const items: MenuItem[] = [];
 
@@ -1298,10 +1480,20 @@ export function App() {
         });
       } else {
         if (!isCurrent) {
-          items.push({
-            label: `Checkout ${ref.short}`,
-            action: () => void runOp({ op: "checkout", ref: ref.short }),
-          });
+          // git will not check out a branch another worktree has, so the item
+          // that would fail becomes the one that gets you there.
+          items.push(
+            holder === undefined
+              ? {
+                  label: `Checkout ${ref.short}`,
+                  action: () => void runOp({ op: "checkout", ref: ref.short }),
+                }
+              : {
+                  label: `Open ${worktreeLabel(holder)}`,
+                  hint: `${ref.short} is checked out in that worktree`,
+                  action: () => void editWorktree(holder),
+                },
+          );
           items.push({
             label: `Merge ${ref.short} into ${branch ?? "HEAD"}`,
             action: () => void runOp({ op: "merge", ref: ref.short }),
@@ -1350,8 +1542,12 @@ export function App() {
           items.push({
             // A branch cannot be deleted while it is checked out; saying so is
             // better than offering an action that always fails.
-            label: isCurrent ? "Delete (checked out)" : `Delete ${ref.short}`,
-            action: isCurrent
+            label: isCurrent
+              ? "Delete (checked out)"
+              : holder !== undefined
+                ? `Delete (checked out in ${worktreeLabel(holder)})`
+                : `Delete ${ref.short}`,
+            action: isCurrent || holder !== undefined
               ? undefined
               : () =>
                   setConfirm({
@@ -1420,7 +1616,7 @@ export function App() {
 
       setMenu({ x, y, items });
     },
-    [branch, data?.hidden, runOp, setHidden],
+    [branch, data?.hidden, runOp, setHidden, elsewhere, editWorktree],
   );
 
   /**
@@ -1690,11 +1886,17 @@ export function App() {
         stashMenu(name, x, y);
         return;
       }
+      // Nor is a worktree: the chip names a checkout, not a ref.
+      if (kind === "worktree") {
+        const w = findWorktree(worktrees, name);
+        if (w !== undefined) worktreeMenu(w, x, y);
+        return;
+      }
       const ref = data.refs.find((r) => r.kind === kind && r.short === name);
       if (ref === undefined) return;
       refMenu(ref, x, y);
     },
-    [data, refMenu, stashMenu],
+    [data, refMenu, stashMenu, worktrees, worktreeMenu],
   );
 
   // --- toolbar --------------------------------------------------------------
@@ -1843,13 +2045,16 @@ export function App() {
               submodules={submodules ?? data.submodules}
               onContext={refMenu}
               onSelectRef={(r) => revealCommit(r.hash)}
-              onCheckout={(ref) => void runOp({ op: "checkout", ref })}
+              onCheckout={(ref) => checkoutRef("local", ref)}
               onRemoteContext={remoteMenu}
               onFolderContext={folderMenu}
               onSetHidden={(refs, hide) => void setHidden(refs, hide)}
               onOpenSubmodule={(sub) => void openSubmodule(sub)}
               onSubmoduleContext={submoduleMenu}
               onStashContext={stashMenu}
+              onViewWorktree={viewWorktree}
+              onEditWorktree={(w) => void editWorktree(w)}
+              onWorktreeContext={worktreeMenu}
               onAddRemote={addRemote}
               onNewBranch={() =>
                 setPrompt({
@@ -1897,9 +2102,7 @@ export function App() {
                 onSelect={onSelect}
                 onContext={commitMenu}
                 onRefContext={chipMenu}
-                onRefCheckout={(kind, name) =>
-                  void runOp({ op: kind === "tag" ? "checkout" : "checkout", ref: name })
-                }
+                onRefCheckout={checkoutRef}
                 menuOpen={menu !== null}
                 reveal={reveal}
                 onQuickCommit={(summary) => {
@@ -1920,7 +2123,11 @@ export function App() {
                 onClose={() => setOpenFile(null)}
                 onChanged={refresh}
                 version={reloadToken}
-                repoPath={activeTab.path}
+                repoPath={
+                  openFile.target.kind === "wip" && openFile.target.worktree !== undefined
+                    ? (findWorktree(worktrees, openFile.target.worktree)?.path ?? activeTab.path)
+                    : activeTab.path
+                }
               />
             )}
             <div
@@ -1953,6 +2160,7 @@ export function App() {
                 onChanged={refresh}
                 onCommitted={() => setOpenFile(null)}
                 onReword={(hash, message) => void runOp({ op: "reword", shas: [hash], message })}
+                onEditWorktree={(w) => void editWorktree(w)}
               />
             )}
           </div>

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { Commit, FileChange, GraphPayload, Person } from "../types";
+import type { Commit, FileChange, GraphPayload, Person, Worktree } from "../types";
+import { findWorktree, isWip, wipWorktree, worktreeLabel } from "../worktrees";
 import { buildTree, countItems, type TreeNode } from "../pathTree";
 import { chainBetween } from "../selection";
 import {
@@ -300,6 +301,7 @@ export function Panel({
   onChanged,
   onCommitted,
   onReword,
+  onEditWorktree,
 }: {
   data: GraphPayload;
   tabId: string;
@@ -311,6 +313,8 @@ export function Panel({
   onCommitted: () => void;
   /** A new message for one commit, as git wants it: subject, blank line, body. */
   onReword: (hash: string, message: string) => void;
+  /** Opens another worktree in its own tab, from its read-only view. */
+  onEditWorktree: (w: Worktree) => void;
 }) {
   const [files, setFiles] = useState<FileChange[]>([]);
   const [filesError, setFilesError] = useState<string | null>(null);
@@ -349,7 +353,7 @@ export function Panel({
 
   const single = selected.length === 1 ? selected[0] : null;
   const commit: Commit | undefined =
-    single && single !== "WIP" ? data.commits.find((c) => c.hash === single) : undefined;
+    single && !isWip(single) ? data.commits.find((c) => c.hash === single) : undefined;
 
   // The selection is a contiguous run on one branch (see selection.ts), so
   // newest and oldest are just its ends in graph order.
@@ -480,6 +484,32 @@ export function Panel({
       ...editing.coAuthors,
     ]);
   }, [data.commits, editing?.coAuthors, commit?.hash, commit?.email, commit?.author, editing !== null]);
+
+  // Another worktree's uncommitted work: the same panel as this checkout's,
+  // with everything that would change anything taken out of it.
+  const otherName = single === null ? null : wipWorktree(single);
+  const other =
+    otherName === null ? undefined : findWorktree(data.worktrees ?? [], otherName);
+  if (other !== undefined) {
+    return (
+      <div className={`${s.panel} ${s.panelFlush}`}>
+        <StagingPanel
+          tabId={tabId}
+          status={other.status}
+          branch={other.detached ? "detached" : (other.branch ?? "detached")}
+          onOpenFile={onOpenFile}
+          openPath={openPath}
+          onCommitted={onCommitted}
+          onChanged={onChanged}
+          readOnly={{
+            label: worktreeLabel(other),
+            path: other.path,
+            onEdit: () => onEditWorktree(other),
+          }}
+        />
+      </div>
+    );
+  }
 
   if (single === "WIP") {
     return (

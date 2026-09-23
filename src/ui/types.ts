@@ -343,7 +343,39 @@ export interface GraphPayload {
   submodules: Submodule[];
   /** Newest first, the order `git stash list` gives them. */
   stashes: StashRef[];
+  /**
+   * Every checkout of this repository, this tab's included; main first.
+   * Absent from a remote engine older than worktree support.
+   */
+  worktrees?: Worktree[];
   colors: string[];
+}
+
+/**
+ * One checkout of the repository. See src/engine/worktrees.ts.
+ *
+ * Its uncommitted work is a graph row of its own, hashed "WIP:" + name, when
+ * it has any and is not this tab's - `wipHash` in worktrees.ts.
+ */
+export interface Worktree {
+  /** How requests name it; "" for the main working tree. */
+  name: string;
+  path: string;
+  main: boolean;
+  /** The one this tab has open. */
+  current: boolean;
+  branch: string | null;
+  hash: string | null;
+  detached: boolean;
+  locked: boolean;
+  lockReason: string;
+  /** Registered, but its directory is gone. */
+  prunable: boolean;
+  /** An operation in progress there; "" when idle. */
+  pending: string;
+  /** Since its HEAD or index last moved, as the engine measured it; -1 unknown. */
+  idleMs: number;
+  status: WorkingFile[];
 }
 
 export type LineKind = "context" | "add" | "del" | "meta";

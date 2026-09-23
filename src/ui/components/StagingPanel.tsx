@@ -96,6 +96,7 @@ export function StagingPanel({
   openPath,
   onChanged,
   onCommitted,
+  readOnly,
 }: {
   tabId: string;
   status: WorkingFile[];
@@ -106,7 +107,15 @@ export function StagingPanel({
   onChanged: () => void;
   /** After a commit lands, so the view can get out of the way of the graph. */
   onCommitted: () => void;
+  /**
+   * Another worktree's changes rather than this tab's. Everything that
+   * stages, discards or commits is left out - that worktree is somebody
+   * else's, often an agent's - and the commit box becomes the way to open it
+   * for editing instead.
+   */
+  readOnly?: { label: string; path: string; onEdit: () => void };
 }) {
+  const ro = readOnly !== undefined;
   const [summary, setSummary] = useState("");
   const [description, setDescription] = useState("");
   const [amend, setAmend] = useState(false);
@@ -181,18 +190,25 @@ export function StagingPanel({
   return (
     <div className={s.panel}>
       <div className={s.head}>
-        <button
-          className={`${s.iconBtn} ${s.btnDanger}`}
-          title="Discard all changes"
-          disabled={busy || status.length === 0}
-          onClick={() => askDiscard(status)}
-        >
-          <Icon name="trash" size={13} />
-        </button>
+        {!ro && (
+          <button
+            className={`${s.iconBtn} ${s.btnDanger}`}
+            title="Discard all changes"
+            disabled={busy || status.length === 0}
+            onClick={() => askDiscard(status)}
+          >
+            <Icon name="trash" size={13} />
+          </button>
+        )}
         <span>
           {status.length} file change{status.length === 1 ? "" : "s"} on
         </span>
         <span className={s.branchChip}>{branch}</span>
+        {readOnly !== undefined && (
+          <span className={s.roWhere} title={readOnly.path}>
+            in {readOnly.label}
+          </span>
+        )}
       </div>
 
       {error !== null && <div className={s.error}>{error}</div>}
@@ -208,13 +224,13 @@ export function StagingPanel({
               <Icon name="chevronDown" size={11} className={s.caret} />
               Unstaged Files ({unstaged.length})
             </span>
-          <button
+          {!ro && <button
             className={s.stageAll}
             disabled={busy || unstaged.length === 0}
             onClick={() => run(() => api.stage(tabId, []))}
           >
             Stage All Changes
-          </button>
+          </button>}
         </div>
         <div className={s.fileList}>
           {unstaged.length === 0 && <div className={s.emptyList}>Nothing unstaged</div>}
@@ -225,8 +241,8 @@ export function StagingPanel({
               staged={false}
               active={openPath === f.path}
               onOpen={() => onOpenFile(f.path, false, f.untracked)}
-              onStage={() => run(() => api.stage(tabId, [f.path]))}
-              onDiscard={() => askDiscard([f])}
+              onStage={ro ? undefined : () => run(() => api.stage(tabId, [f.path]))}
+              onDiscard={ro ? undefined : () => askDiscard([f])}
             />
           ))}
         </div>
@@ -236,13 +252,13 @@ export function StagingPanel({
               <Icon name="chevronDown" size={11} className={s.caret} />
               Staged Files ({staged.length})
             </span>
-          <button
+          {!ro && <button
             className={s.unstageAll}
             disabled={busy || staged.length === 0}
             onClick={() => run(() => api.unstage(tabId, []))}
           >
             Unstage All Changes
-          </button>
+          </button>}
         </div>
         <div className={s.fileList}>
           {staged.length === 0 && <div className={s.emptyList}>Nothing staged</div>}
@@ -253,12 +269,25 @@ export function StagingPanel({
               staged
               active={openPath === f.path}
               onOpen={() => onOpenFile(f.path, true, false)}
-              onUnstage={() => run(() => api.unstage(tabId, [f.path]))}
+              onUnstage={ro ? undefined : () => run(() => api.unstage(tabId, [f.path]))}
             />
           ))}
         </div>
       </div>
 
+      {readOnly !== undefined ? (
+        <div className={s.commitBox}>
+          <div className={s.roNote}>
+            <Icon name="eye" size={13} />
+            <span>
+              Read-only. <b>{readOnly.label}</b> is another worktree - nothing here changes it.
+            </span>
+          </div>
+          <button className={s.commitBtn} onClick={readOnly.onEdit} title={readOnly.path}>
+            Open {readOnly.label} to Edit
+          </button>
+        </div>
+      ) : (
       <div className={s.commitBox}>
         <label className={s.amend}>
           <input type="checkbox" checked={amend} onChange={(e) => setAmend(e.target.checked)} />
@@ -316,6 +345,7 @@ export function StagingPanel({
           {commitLabel}
         </button>
       </div>
+      )}
 
       {confirm !== null && (
         <Confirm

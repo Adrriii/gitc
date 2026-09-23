@@ -333,3 +333,27 @@
 .confirmLine {
   color: var(--fg-dim);
 }
+
+// Another worktree's changes, read-only. Its name beside the branch, since
+// "on topic" alone would not say that this is not your checkout.
+.roWhere {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-muted);
+}
+
+.roNote {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--fg-dim);
+  line-height: 1.4;
+
+  svg {
+    flex: none;
+    margin-top: 1px;
+  }
+}

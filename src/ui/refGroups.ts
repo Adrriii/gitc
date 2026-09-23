@@ -14,7 +14,7 @@
 export interface RefGroup {
   /** Display name with any remote prefix stripped: "main", not "origin/main". */
   name: string;
-  kind: "branch" | "tag";
+  kind: "branch" | "tag" | "worktree";
   /** A local branch of this name exists. */
   local: boolean;
   /** Remotes carrying this name, in the order encountered. */
@@ -27,9 +27,23 @@ export interface RefGroup {
    * always what is meant, and it is the safe default - checking out a remote
    * ref detaches HEAD.
    */
-  actionKind: "local" | "remote" | "tag";
+  actionKind: "local" | "remote" | "tag" | "worktree";
   actionName: string;
+  /**
+   * The other worktree this branch is checked out in, by label, or "" when
+   * none is. For a "worktree" group - a detached checkout with no branch to
+   * hang on - the worktree it stands for.
+   */
+  elsewhere: string;
 }
+
+/** How a chip learns about other worktrees: their labels, by branch and by name. */
+export interface WorktreeLabels {
+  byBranch: Map<string, string>;
+  byName: Map<string, string>;
+}
+
+const NO_WORKTREES: WorktreeLabels = { byBranch: new Map(), byName: new Map() };
 
 /**
  * Groups the `kind:name` labels the API sends for a commit.
@@ -38,7 +52,14 @@ export interface RefGroup {
  * always survives the collapse, then local branches, then remote-only ones,
  * then tags.
  */
-export function groupRefs(labels: string[], headBranch: string | null): RefGroup[] {
+/** Branches, then the worktrees standing where no branch does, then tags. */
+const KIND_ORDER = ["branch", "worktree", "tag"];
+
+export function groupRefs(
+  labels: string[],
+  headBranch: string | null,
+  worktrees: WorktreeLabels = NO_WORKTREES,
+): RefGroup[] {
   const byKey = new Map<string, RefGroup>();
 
   for (const label of labels) {
@@ -55,6 +76,23 @@ export function groupRefs(labels: string[], headBranch: string | null): RefGroup
     // square and which stash to act on.
     if (kind === "stash") continue;
 
+    // Another worktree's HEAD, detached and clean - the engine only sends
+    // one then, since a branch or a WIP row would otherwise say it.
+    if (kind === "worktree") {
+      const label = worktrees.byName.get(short) ?? short;
+      byKey.set("worktree:" + short, {
+        name: label,
+        kind: "worktree",
+        local: false,
+        remotes: [],
+        isHead: false,
+        actionKind: "worktree",
+        actionName: short,
+        elsewhere: label,
+      });
+      continue;
+    }
+
     if (kind === "tag") {
       byKey.set("tag:" + short, {
         name: short,
@@ -64,6 +102,7 @@ export function groupRefs(labels: string[], headBranch: string | null): RefGroup
         isHead: false,
         actionKind: "tag",
         actionName: short,
+        elsewhere: "",
       });
       continue;
     }
@@ -89,6 +128,7 @@ export function groupRefs(labels: string[], headBranch: string | null): RefGroup
         isHead: kind === "local" && name === headBranch,
         actionKind: kind === "local" ? "local" : "remote",
         actionName: kind === "local" ? name : short,
+        elsewhere: kind === "local" ? (worktrees.byBranch.get(name) ?? "") : "",
       });
       continue;
     }
@@ -99,6 +139,7 @@ export function groupRefs(labels: string[], headBranch: string | null): RefGroup
       // A local branch outranks a remote one as the thing to act on.
       existing.actionKind = "local";
       existing.actionName = name;
+      existing.elsewhere = worktrees.byBranch.get(name) ?? "";
     } else if (remote !== null && !existing.remotes.includes(remote)) {
       existing.remotes.push(remote);
     }
@@ -107,7 +148,7 @@ export function groupRefs(labels: string[], headBranch: string | null): RefGroup
   const groups = [...byKey.values()];
   groups.sort((a, b) => {
     if (a.isHead !== b.isHead) return a.isHead ? -1 : 1;
-    if (a.kind !== b.kind) return a.kind === "branch" ? -1 : 1;
+    if (a.kind !== b.kind) return KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind);
     if (a.local !== b.local) return a.local ? -1 : 1;
     return a.name.localeCompare(b.name);
   });

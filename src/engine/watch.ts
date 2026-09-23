@@ -21,7 +21,8 @@ import { existsSync, statSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { git } from "./git.ts";
-import { gitDir } from "./refs.ts";
+import { commonDir, gitDir } from "./refs.ts";
+import { listWorktrees, otherStatuses } from "./worktrees.ts";
 
 /** git's -z output separator. */
 const NUL = String.fromCharCode(0);
@@ -87,7 +88,14 @@ function refsFingerprint(dir: string, depth: number): string {
  * person actually wants.
  */
 export function lastFetch(repo: string): number {
-  const path = join(gitDir(repo), "FETCH_HEAD");
+  // FETCH_HEAD is per worktree, but what it dates - the remote-tracking refs -
+  // is shared: a fetch run in the main checkout freshens every worktree of
+  // it. So whichever of the two moved last.
+  return Math.max(fetchedIn(gitDir(repo)), fetchedIn(commonDir(repo)));
+}
+
+function fetchedIn(dir: string): number {
+  const path = join(dir, "FETCH_HEAD");
   if (!existsSync(path)) return 0;
   try {
     return statSync(path).mtimeMs;
@@ -108,6 +116,10 @@ export async function fingerprint(repo: string): Promise<string> {
   if (cached !== undefined && now - cached.at < CACHE_MS) return cached.value;
 
   const dir = gitDir(repo);
+  // Branches and tags are shared by every worktree, so they are watched where
+  // they live: a commit made in another worktree moves a ref here and nothing
+  // at all in this one's own directory.
+  const common = commonDir(repo);
 
   // The cheap half: HEAD, the index, the in-progress markers and the refs.
   // This alone catches commits, checkouts, staging, merges and rebases.
@@ -120,10 +132,11 @@ export async function fingerprint(repo: string): Promise<string> {
       text += "?|";
     }
   }
-  for (const name of ["index", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "packed-refs"]) {
+  for (const name of ["index", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"]) {
     text += name + "=" + mtimeOf(join(dir, name)) + ";";
   }
-  text += refsFingerprint(join(dir, "refs"), 0);
+  text += "packed-refs=" + mtimeOf(join(common, "packed-refs")) + ";";
+  text += refsFingerprint(join(common, "refs"), 0);
   text += "rebase=" + mtimeOf(join(dir, "rebase-merge")) + ";";
 
   // The expensive half: what the working tree looks like. Nothing in .git
@@ -161,6 +174,25 @@ export async function fingerprint(repo: string): Promise<string> {
     const file = entry.substring(3);
     if (file.length === 0) continue;
     text += file + "@" + mtimeOf(join(repo, file)) + ";";
+  }
+
+  // The other worktrees, which the graph shows too: one appearing, going,
+  // moving its HEAD or changing what is uncommitted in it. Their statuses are
+  // cached for longer than this one's (see worktreeStatus), so several agents
+  // editing at once cost a `git status` each every few seconds, not every poll.
+  const worktrees = listWorktrees(repo);
+  for (const w of worktrees) {
+    if (w.current) continue;
+    text += "wt:" + w.name + "=" + String(w.hash) + "," + String(w.branch) + "," +
+      w.pending + "," + String(w.locked) + "," + String(w.prunable) + ";";
+  }
+  const others = await otherStatuses(worktrees);
+  for (const w of worktrees) {
+    const files = others.get(w.name);
+    if (files === undefined) continue;
+    for (const f of files) {
+      text += w.name + ":" + f.index + f.worktree + f.path + "@" + mtimeOf(join(w.path, f.path)) + ";";
+    }
   }
 
   const value = hash(text);

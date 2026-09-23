@@ -6,7 +6,7 @@
 // stable, and documented, which is not true of most of git's output.
 
 import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 export interface Ref {
   /** Full ref name, e.g. refs/heads/main. */
@@ -32,6 +32,13 @@ export interface Head {
  * `.git` is usually a directory, but it is a file containing `gitdir: <path>`
  * for worktrees and submodules - both of which this user has, so it is not a
  * theoretical case.
+ *
+ * This is the directory holding what belongs to ONE working tree: HEAD, the
+ * index, and the markers of a rebase or merge in progress. Branches, tags,
+ * packed-refs and the config are shared by every worktree of a repository and
+ * live in `commonDir` - reading those from here finds a linked worktree with
+ * no branches and no remotes, and a HEAD pointing at a branch that resolves
+ * to nothing.
  */
 export function gitDir(repo: string): string {
   const dot = join(repo, ".git");
@@ -40,14 +47,58 @@ export function gitDir(repo: string): string {
   if (st.isDirectory()) return dot;
   const content = readFileSync(dot, "utf8").trim();
   if (content.startsWith("gitdir:")) {
-    const target = content.substring("gitdir:".length).trim();
-    return target;
+    // Relative to the working tree when git was asked for relative paths
+    // (`worktree.useRelativePaths`, git 2.48), absolute otherwise; resolve()
+    // leaves an absolute one alone.
+    return resolve(repo, content.substring("gitdir:".length).trim());
   }
   return dot;
 }
 
+/**
+ * The directory every worktree of this repository shares.
+ *
+ * A linked worktree's git directory names it in a `commondir` file, usually
+ * as "../.." relative to itself. Anything else - an ordinary repository, a
+ * submodule - has no such file, and its git directory is the common one.
+ */
+export function commonDir(repo: string): string {
+  return commonDirOf(gitDir(repo));
+}
+
+/** `commonDir`, starting from a git directory rather than a working tree. */
+export function commonDirOf(dir: string): string {
+  const pointer = join(dir, "commondir");
+  if (!existsSync(pointer)) return dir;
+  try {
+    const target = readFileSync(pointer, "utf8").trim();
+    if (target.length === 0) return dir;
+    return resolve(dir, target);
+  } catch {
+    return dir;
+  }
+}
+
+/**
+ * Where a ref lives: with the worktree, or with the repository.
+ *
+ * git's rule is that everything under refs/ is shared except these three
+ * families, which each worktree keeps for itself.
+ */
+function refHome(dir: string, common: string, name: string): string {
+  const own = name.startsWith("refs/bisect/") ||
+    name.startsWith("refs/worktree/") ||
+    name.startsWith("refs/rewritten/");
+  return own ? dir : common;
+}
+
 export function readHead(repo: string): Head {
-  const path = join(gitDir(repo), "HEAD");
+  return readHeadOf(gitDir(repo));
+}
+
+/** `readHead` for a git directory - how another worktree's HEAD is read. */
+export function readHeadOf(dir: string): Head {
+  const path = join(dir, "HEAD");
   if (!existsSync(path)) return { branch: null, hash: null, detached: false };
   const raw = readFileSync(path, "utf8").trim();
   if (raw.startsWith("ref: ")) {
@@ -55,15 +106,16 @@ export function readHead(repo: string): Head {
     const branch = name.startsWith("refs/heads/")
       ? name.substring("refs/heads/".length)
       : name;
-    return { branch, hash: resolveRef(repo, name), detached: false };
+    return { branch, hash: resolveRef(dir, name), detached: false };
   }
   return { branch: null, hash: raw, detached: true };
 }
 
-function resolveRef(repo: string, name: string): string | null {
-  const loose = join(gitDir(repo), name);
+function resolveRef(dir: string, name: string): string | null {
+  const common = commonDirOf(dir);
+  const loose = join(refHome(dir, common, name), name);
   if (existsSync(loose)) return readFileSync(loose, "utf8").trim();
-  for (const ref of readPackedRefs(repo)) {
+  for (const ref of readPackedRefsIn(common)) {
     if (ref.name === name) return ref.hash;
   }
   return null;
@@ -103,8 +155,8 @@ function classify(name: string): Ref | null {
   return null;
 }
 
-function readPackedRefs(repo: string): Ref[] {
-  const path = join(gitDir(repo), "packed-refs");
+function readPackedRefsIn(common: string): Ref[] {
+  const path = join(common, "packed-refs");
   if (!existsSync(path)) return [];
   const out: Ref[] = [];
   for (const line of readFileSync(path, "utf8").split("\n")) {
@@ -154,7 +206,7 @@ function walkLoose(dir: string, prefix: string, out: Ref[]): void {
 
 /** All refs, loose and packed, deduped with loose winning. */
 export function readRefs(repo: string): Ref[] {
-  const dir = gitDir(repo);
+  const dir = commonDir(repo);
   const loose: Ref[] = [];
   walkLoose(join(dir, "refs", "heads"), "refs/heads", loose);
   walkLoose(join(dir, "refs", "remotes"), "refs/remotes", loose);
@@ -167,7 +219,7 @@ export function readRefs(repo: string): Ref[] {
     seen.add(ref.name);
     out.push(ref);
   }
-  for (const ref of readPackedRefs(repo)) {
+  for (const ref of readPackedRefsIn(dir)) {
     if (seen.has(ref.name)) continue;
     out.push(ref);
   }
@@ -206,7 +258,11 @@ export interface Pending {
 }
 
 export function readPending(repo: string): Pending {
-  const dir = gitDir(repo);
+  return readPendingOf(gitDir(repo));
+}
+
+/** `readPending` for a git directory, which is per worktree like the markers. */
+export function readPendingOf(dir: string): Pending {
   const has = (name: string): boolean => existsSync(join(dir, name));
 
   let kind = "";
@@ -244,7 +300,9 @@ export interface RemoteInfo {
 }
 
 export function readRemotes(repo: string): RemoteInfo {
-  const path = join(gitDir(repo), "config");
+  // Shared: a linked worktree has no config of its own unless
+  // extensions.worktreeConfig is on, and even then remotes live here.
+  const path = join(commonDir(repo), "config");
   const out: RemoteInfo = { remotes: [], detail: [], upstreams: new Map<string, string>() };
   if (!existsSync(path)) return out;
 

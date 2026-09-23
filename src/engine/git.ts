@@ -524,6 +524,12 @@ export async function readCommits(
    * is shorter, because there is always less of it.
    */
   hide: RefFilter = { branches: [], remotes: [], tags: [] },
+  /**
+   * Other worktrees' HEADs, as hashes. A worktree on a detached HEAD - which
+   * is how some agents work - has commits no branch reaches, and without
+   * naming its HEAD here they are simply not in the graph.
+   */
+  heads: string[] = [],
 ): Promise<RawCommit[]> {
   const fmt =
     "%x01%H%x00%P%x00%an%x00%ae%x00%at%x00%s%x00%b";
@@ -548,6 +554,11 @@ export async function readCommits(
   // HEAD is always walked, listed or not: you must be able to see where you
   // are, and hiding the branch you are standing on should not blank the graph.
   walk.push("HEAD");
+  // Read out of files, so checked to be a hash before it goes anywhere near a
+  // command line: a HEAD file holding "--output=x" would otherwise be an option.
+  for (const h of heads) {
+    if (/^[0-9a-f]{40,64}$/.test(h)) walk.push(h);
+  }
   walk.push("--date-order");
   walk.push("--max-count=" + limit);
   walk.push("--format=" + fmt);
@@ -741,8 +752,19 @@ export interface WorkingFile {
  * The dirt inside is not lost, it is reported where it belongs: the deferred
  * submodule read marks such a submodule "dirty" (see submodules.ts).
  */
-export async function readStatus(repo: string): Promise<WorkingFile[]> {
+export async function readStatus(
+  repo: string,
+  /**
+   * Read without refreshing the index. Required for any worktree that is not
+   * the tab's own: the refresh takes index.lock, and an agent working there
+   * then has its own `git add` fail on a lock gitc was holding.
+   */
+  quiet: boolean = false,
+): Promise<WorkingFile[]> {
+  const args: string[] = [];
+  if (quiet) args.push("--no-optional-locks");
   const raw = await git(repo, [
+    ...args,
     "status",
     "--porcelain=v1",
     "-z",

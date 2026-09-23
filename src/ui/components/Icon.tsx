@@ -47,7 +47,8 @@ export type IconName =
   | "arrowDown"
   | "warning"
   | "monitor"
-  | "copy";
+  | "copy"
+  | "worktree";
 
 const PATHS: Record<IconName, React.ReactNode> = {
   // Circular arrow: fetching is a round trip, not a direction.
@@ -241,6 +242,15 @@ const PATHS: Record<IconName, React.ReactNode> = {
     </>
   ),
   // "this branch exists on your machine"
+  // A folder with a fork in it: a checkout of the repository, on its own
+  // branch - the branch icon's language, inside the folder's.
+  worktree: (
+    <>
+      <path d="M3 6.5a1.5 1.5 0 0 1 1.5-1.5h4l2 2.2h8A1.5 1.5 0 0 1 20 8.7v9.8a1.5 1.5 0 0 1-1.5 1.5h-14A1.5 1.5 0 0 1 3 18.5z" />
+      <path d="M9 17v-6" />
+      <path d="M9 14a3 3 0 0 0 3-3h3" />
+    </>
+  ),
   monitor: (
     <>
       <path d="M3 5h18v11H3z" />

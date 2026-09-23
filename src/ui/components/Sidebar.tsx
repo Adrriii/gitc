@@ -1,9 +1,10 @@
 import { useMemo, useState } from "react";
-import type { GraphPayload, Ref, Submodule } from "../types";
+import type { GraphPayload, Ref, Submodule, Worktree } from "../types";
 import { buildTree, flatTree, collectItems, countItems, type TreeNode } from "../pathTree";
 import { useBranchFolders } from "../settings";
 import { stashName } from "../stashes";
 import { ago } from "../ago";
+import { changeCounts, isActive, worktreeLabel } from "../worktrees";
 import { Icon } from "./Icon";
 import s from "./Sidebar.module.scss";
 
@@ -275,6 +276,109 @@ function RefRow({
   );
 }
 
+/** What a worktree's badge says: the state that most needs noticing. */
+function worktreeBadge(w: Worktree): { text: string; tone: "warn" | "bad" | "dim" } | null {
+  if (w.prunable) return { text: "gone", tone: "dim" };
+  if (w.pending.length > 0) {
+    const conflicted = w.status.some((f) => f.index === "U" || f.worktree === "U");
+    return { text: conflicted ? "conflicts" : w.pending, tone: conflicted ? "bad" : "warn" };
+  }
+  const counts = changeCounts(w);
+  const total = counts.modified + counts.added;
+  if (total > 0) return { text: String(total) + " changed", tone: "warn" };
+  // Last: a lock says someone claimed it, which matters less than what they
+  // left in it. The reason is in the tooltip.
+  if (w.locked) return { text: "locked", tone: "dim" };
+  return null;
+}
+
+/**
+ * One checkout of the repository.
+ *
+ * Click looks (read-only, in this tab), double-click edits (its own tab) -
+ * the same click/double-click split a branch row has between finding it and
+ * checking it out. The two buttons say the same thing for anyone who does
+ * not guess it, revealed on hover like every other row's controls.
+ */
+function WorktreeRow({
+  w,
+  onView,
+  onEdit,
+  onContext,
+}: {
+  w: Worktree;
+  onView: (w: Worktree) => void;
+  onEdit: (w: Worktree) => void;
+  onContext: (w: Worktree, x: number, y: number) => void;
+}) {
+  const label = worktreeLabel(w);
+  const where = w.detached ? "detached" : (w.branch ?? "");
+  const badge = worktreeBadge(w);
+  const active = isActive(w);
+  const tip = [
+    label + " — " + w.path,
+    w.current ? "open in this tab" : w.detached ? "detached HEAD" : "on " + where,
+    w.locked ? "locked" + (w.lockReason.length > 0 ? ": " + w.lockReason : "") : "",
+    active ? "changed " + Math.round(w.idleMs / 1000) + "s ago - something may be working in it" : "",
+    w.current ? "" : "click to look at it here, double-click to open it in its own tab",
+  ]
+    .filter((line) => line.length > 0)
+    .join("\n");
+  return (
+    <div
+      className={`${s.ref} ${w.current ? s.current : ""} ${w.prunable ? s.dim : ""}`}
+      style={{ paddingLeft: 4 }}
+      title={tip}
+      onClick={() => onView(w)}
+      onDoubleClick={() => onEdit(w)}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        onContext(w, e.clientX, e.clientY);
+      }}
+    >
+      <Icon name={w.current ? "check" : "worktree"} size={12} className={s.refIco} />
+      <span className={s.refName}>{label}</span>
+      {/* The branch, unless the worktree is already named after it - which is
+          how most tools that make them name them. */}
+      {where !== label && where.length > 0 && <span className={s.wtBranch}>{where}</span>}
+      {active && <span className={s.wtActive} />}
+      {badge !== null && (
+        <span
+          className={`${s.subState} ${s.wtBadge} ${
+            badge.tone === "bad" ? s.subBad : badge.tone === "warn" ? s.subWarn : s.subDim
+          }`}
+        >
+          {badge.text}
+        </span>
+      )}
+      {!w.current && !w.prunable && (
+        <>
+          <button
+            className={s.wtBtn}
+            title="Look at its changes here - read-only"
+            onClick={(e) => {
+              e.stopPropagation();
+              onView(w);
+            }}
+          >
+            <Icon name="eye" size={13} />
+          </button>
+          <button
+            className={s.wtBtn}
+            title="Open it in its own tab to edit"
+            onClick={(e) => {
+              e.stopPropagation();
+              onEdit(w);
+            }}
+          >
+            <Icon name="edit" size={13} />
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
 /** The badge text: short enough for a 208px sidebar. */
 function shortState(sub: Submodule): string {
   // An ellipsis rather than a word: the state is a second away, and a row
@@ -318,6 +422,9 @@ export function Sidebar({
   onOpenSubmodule,
   onSubmoduleContext,
   onStashContext,
+  onViewWorktree,
+  onEditWorktree,
+  onWorktreeContext,
   onSelectRef,
 }: {
   data: GraphPayload;
@@ -338,6 +445,11 @@ export function Sidebar({
   onOpenSubmodule: (sub: Submodule) => void;
   onSubmoduleContext: (sub: Submodule, x: number, y: number) => void;
   onStashContext: (selector: string, x: number, y: number) => void;
+  /** Read-only, in this tab: selects the worktree's WIP row. */
+  onViewWorktree: (w: Worktree) => void;
+  /** Opens the worktree as a tab of its own, or brings that tab forward. */
+  onEditWorktree: (w: Worktree) => void;
+  onWorktreeContext: (w: Worktree, x: number, y: number) => void;
   /** Single click on a ref row - select its commit and scroll to it. */
   onSelectRef: (r: Ref) => void;
 }) {
@@ -365,6 +477,7 @@ export function Sidebar({
 
   const hidden = useMemo(() => new Set(data.hidden ?? []), [data.hidden]);
   const stashes = data.stashes ?? [];
+  const worktrees = data.worktrees ?? [];
 
   const { folders, set: setFolders } = useBranchFolders();
 
@@ -489,6 +602,27 @@ export function Sidebar({
         >
           <Tree {...treeProps} nodes={localTree} depth={0} scope="local" />
         </Section>
+
+        {/* Only once there is a second checkout: a lone main worktree is just
+            the repository, and a section listing it would say nothing. */}
+        {worktrees.length > 1 && (
+          <Section
+            name="WORKTREES"
+            count={worktrees.length}
+            open={expanded === "WORKTREES"}
+            onToggle={() => toggle("WORKTREES")}
+          >
+            {worktrees.map((w) => (
+              <WorktreeRow
+                key={w.name === "" ? "(main)" : w.name}
+                w={w}
+                onView={onViewWorktree}
+                onEdit={onEditWorktree}
+                onContext={onWorktreeContext}
+              />
+            ))}
+          </Section>
+        )}
 
         <Section
           name="REMOTE"

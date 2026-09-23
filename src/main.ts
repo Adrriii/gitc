@@ -33,7 +33,8 @@ import {
   unresolve,
 } from "./engine/conflicts.ts";
 import type { OpRequest } from "./engine/ops.ts";
-import type { RawCommit, RawStash, Person } from "./engine/git.ts";
+import type { RawCommit, RawStash, Person, WorkingFile } from "./engine/git.ts";
+import { listWorktrees, otherStatuses, findWorktree } from "./engine/worktrees.ts";
 import {
   stagePaths,
   stageAll,
@@ -51,7 +52,7 @@ import {
   FULL_CONTEXT,
 } from "./engine/diff.ts";
 import { readMedia } from "./engine/media.ts";
-import { readHead, readRefs, readPending, readRemotes, gitDir } from "./engine/refs.ts";
+import { readHead, readRefs, readPending, readRemotes, commonDir } from "./engine/refs.ts";
 import type { Ref } from "./engine/refs.ts";
 import { loadHidden, saveHidden } from "./engine/visibility.ts";
 import { listDir } from "./engine/browse.ts";
@@ -334,6 +335,22 @@ interface ApiCommit {
   coAuthors: ApiPerson[];
 }
 
+/**
+ * Where a read about another worktree runs.
+ *
+ * `wt` is the name the graph payload gave that worktree - null when the
+ * request did not name one, which is the tab's own. The name is looked up
+ * among the worktrees git registered, never joined onto a path, so nothing
+ * outside them is reachable this way. `quiet` is the promise not to take a
+ * lock in a checkout somebody else is working in.
+ */
+function worktreeRoot(tab: Tab, wt: string | null): { path: string; quiet: boolean } | null {
+  if (wt === null) return { path: tab.path, quiet: false };
+  const w = findWorktree(tab.path, wt);
+  if (w === null) return null;
+  return { path: w.path, quiet: !w.current };
+}
+
 function findTab(id: string): Tab | null {
   for (const t of session.tabs) {
     if (t.id === id) return t;
@@ -406,8 +423,18 @@ async function graphPayload(tab: Tab, limit: number): Promise<string> {
    * immediately - without it, one failing while another is being awaited
    * surfaces as an unhandled rejection rather than as the error it is.
    */
+  // The repository's other checkouts, with whatever is uncommitted in each.
+  // Their statuses never reject - a worktree that fails to answer is left
+  // out - so they need none of the care the two below do.
+  const worktrees = listWorktrees(tab.path);
+  const othersP = otherStatuses(worktrees);
+  const otherHeads: string[] = [];
+  for (const w of worktrees) {
+    if (!w.current && !w.prunable && w.hash !== null) otherHeads.push(w.hash);
+  }
+
   const statusP = readStatus(tab.path);
-  const historyP = readCommits(tab.path, limit, hide);
+  const historyP = readCommits(tab.path, limit, hide, otherHeads);
   // Annotated tags name a tag OBJECT, and the graph matches chips to commits -
   // so a release tagged the usual way (`git tag -a`, or a forge's release
   // button) drew no chip at all. Packed refs carry the peeled commit beside
@@ -416,7 +443,7 @@ async function graphPayload(tab: Tab, limit: number): Promise<string> {
   const peeledP = refs.some((r) => r.kind === "tag") ? peeledTags(tab.path) : null;
   // Stashes, hung off the commits they were taken from. Only where there is a
   // stash ref to list.
-  const stashesP = existsSync(join(gitDir(tab.path), "logs", "refs", "stash"))
+  const stashesP = existsSync(join(commonDir(tab.path), "logs", "refs", "stash"))
     ? readStashes(tab.path)
     : null;
 
@@ -474,6 +501,7 @@ async function graphPayload(tab: Tab, limit: number): Promise<string> {
    * where it says it does.
    */
   const walked: RawCommit[] = [];
+  const noFiles: WorkingFile[] = [];
   if (status.length > 0 && head.hash !== null) {
     // `noAuthors` rather than a bare `[]`: scriptc types an empty literal as
     // number[] and refuses to widen it (SC2002, docs/toolchain.md).
@@ -481,6 +509,28 @@ async function graphPayload(tab: Tab, limit: number): Promise<string> {
     walked.push({
       hash: WIP_HASH,
       parents: [head.hash],
+      subject: "",
+      body: "",
+      author: "",
+      email: "",
+      date: Math.floor(Date.now() / 1000),
+      coAuthors: noAuthors,
+    });
+  }
+  // The same for every other worktree with something uncommitted, each as a
+  // commit on its own HEAD - so an agent's unfinished work sits on the lane of
+  // the branch it is working on, exactly as this checkout's does. Named per
+  // worktree ("WIP:agent1"), which no real hash can collide with either.
+  const others = await othersP;
+  const otherStatus = new Map<string, WorkingFile[]>();
+  for (const w of worktrees) {
+    const files = others.get(w.name);
+    if (files === undefined || files.length === 0 || w.hash === null) continue;
+    otherStatus.set(w.name, files);
+    const noAuthors: Person[] = [];
+    walked.push({
+      hash: WIP_HASH + ":" + w.name,
+      parents: [w.hash],
       subject: "",
       body: "",
       author: "",
@@ -521,6 +571,19 @@ async function graphPayload(tab: Tab, limit: number): Promise<string> {
   // a command. Nothing else can point at a stash commit, so this never has to
   // merge with an existing list.
   for (const stash of stashes) byHash.set(stash.commit.hash, ["stash:" + stash.selector]);
+  // A worktree on a detached HEAD has no branch chip to mark, and when it is
+  // clean it has no WIP row either - this chip is then the only sign it is
+  // there. One on a branch is shown on that branch's chip instead, by the UI.
+  for (const w of worktrees) {
+    if (w.current || w.prunable || !w.detached || w.hash === null) continue;
+    if (otherStatus.has(w.name)) continue;
+    // By name, "" for the main one, as everywhere else: a linked worktree is
+    // free to be called "main" too.
+    const chip = "worktree:" + w.name;
+    const list = byHash.get(w.hash);
+    if (list === undefined) byHash.set(w.hash, [chip]);
+    else list.push(chip);
+  }
 
   const out: ApiCommit[] = [];
   for (let i = 0; i < commits.length; i++) {
@@ -581,6 +644,23 @@ async function graphPayload(tab: Tab, limit: number): Promise<string> {
     // Selector and message only: the sidebar lists them, the graph already
     // has the commits themselves.
     stashes: stashes.map((st) => ({ selector: st.selector, subject: st.commit.subject })),
+    // Every checkout of this repository, this one included, each with its
+    // uncommitted files when it has any. "status" above stays this tab's own.
+    worktrees: worktrees.map((w) => ({
+      name: w.name,
+      path: w.path,
+      main: w.main,
+      current: w.current,
+      branch: w.branch,
+      hash: w.hash,
+      detached: w.detached,
+      locked: w.locked,
+      lockReason: w.lockReason,
+      prunable: w.prunable,
+      pending: w.pending,
+      idleMs: w.idleMs,
+      status: w.current ? status : (otherStatus.get(w.name) ?? noFiles),
+    })),
     colors: [...LANE_COLORS, STASH_LANE],
   });
 }
@@ -1450,6 +1530,32 @@ async function handleApi(
    * the graph, so the section can be drawn and its entries opened long
    * before this answers.
    */
+  /**
+   * The worktree list on its own, fresh.
+   *
+   * The graph payload carries it too, but that copy is as old as the last
+   * refresh - and "has anyone touched this worktree in the last few seconds"
+   * is exactly the question that copy cannot answer when the edit button is
+   * pressed. No statuses: this is a few file reads.
+   */
+  if (path.startsWith("/api/worktrees")) {
+    const q = path.indexOf("?");
+    const params = q === -1 ? "" : path.substring(q + 1);
+    let id = "";
+    for (const pair of params.split("&")) {
+      const eq = pair.indexOf("=");
+      if (eq === -1) continue;
+      if (pair.substring(0, eq) === "id") id = decodeURIComponent(pair.substring(eq + 1));
+    }
+    const tab = findTab(id);
+    if (tab === null) {
+      send(res, 404, "application/json", JSON.stringify({ error: "no such tab" }));
+      return true;
+    }
+    sendJson(res, JSON.stringify({ worktrees: listWorktrees(tab.path) }));
+    return true;
+  }
+
   if (path.startsWith("/api/submodules")) {
     const q = path.indexOf("?");
     const params = q === -1 ? "" : path.substring(q + 1);
@@ -2079,6 +2185,7 @@ async function handleApi(
     let mode = "";
     let whole = false;
     let untracked = false;
+    let wt: string | null = null;
     for (const pair of params.split("&")) {
       const eq = pair.indexOf("=");
       if (eq === -1) continue;
@@ -2092,6 +2199,7 @@ async function handleApi(
       if (key === "mode") mode = value;
       if (key === "whole") whole = value === "1";
       if (key === "untracked") untracked = value === "1";
+      if (key === "wt") wt = value;
     }
     const tab = findTab(id);
     if (tab === null) {
@@ -2102,7 +2210,12 @@ async function handleApi(
     const context = whole ? FULL_CONTEXT : 3;
     try {
       if (mode === "wip" || mode === "staged") {
-        const d = await diffWorkingFile(tab.path, file, mode === "staged", context, untracked);
+        const where = worktreeRoot(tab, wt);
+        if (where === null) {
+          send(res, 404, "application/json", JSON.stringify({ error: "no such worktree" }));
+          return true;
+        }
+        const d = await diffWorkingFile(where.path, file, mode === "staged", context, untracked, where.quiet);
         sendJson(res, JSON.stringify(d));
       } else if (from.length > 0 && to.length > 0) {
         const d = await diffRangeFile(tab.path, from, to, file, context);
@@ -2127,6 +2240,7 @@ async function handleApi(
     let oldPath = "";
     let side = "";
     const target = { sha: "", from: "", to: "", mode: "" };
+    let wt: string | null = null;
     for (const pair of params.split("&")) {
       const eq = pair.indexOf("=");
       if (eq === -1) continue;
@@ -2140,6 +2254,7 @@ async function handleApi(
       if (key === "from") target.from = value;
       if (key === "to") target.to = value;
       if (key === "mode") target.mode = value;
+      if (key === "wt") wt = value;
     }
     const tab = findTab(id);
     if (tab === null) {
@@ -2147,7 +2262,12 @@ async function handleApi(
       return true;
     }
     try {
-      const got = await readMedia(tab.path, target, file, oldPath, side);
+      const where = worktreeRoot(tab, wt);
+      if (where === null) {
+        send(res, 404, "application/json", JSON.stringify({ error: "no such worktree" }));
+        return true;
+      }
+      const got = await readMedia(where.path, target, file, oldPath, side);
       if (got.status !== 200) {
         send(res, got.status, "application/json", JSON.stringify({ error: got.error }));
         return true;
