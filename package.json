@@ -42,5 +42,9 @@
     "highlight.js": "^11.12.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
+  },
+  "overrides": {
+    "@scriptc/llvm-darwin-x64": "0.1.0",
+    "@scriptc/runtime-darwin-x64": "0.1.0"
   }
 }
