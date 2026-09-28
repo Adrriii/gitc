@@ -111,6 +111,17 @@ eq(
   listWorktrees(main).map((w) => samePath(w.path, join(root, w.name.length > 0 ? w.name : "main"))),
   [true, true, true, true],
 );
+const adminGitdir = join(main, ".git", "worktrees", "agent", "gitdir");
+const recorded = readFileSync(adminGitdir, "utf8");
+rewrite(adminGitdir, "/elsewhere/mount/agent/.git\n");
+rewrite(dotGit, "gitdir: " + relative(agent, absolute).replace(/\\/g, "/") + "\n");
+const moved = findWorktree(main, "agent");
+eq("a worktree registered from another mount is found here", moved !== null && samePath(moved.path, agent), true);
+rewrite(dotGit, "gitdir: /elsewhere/mount/main/.git/worktrees/agent\n");
+eq("not when its own pointer is foreign too", findWorktree(main, "agent"), null);
+rewrite(dotGit, "gitdir: " + absolute + "\n");
+rewrite(adminGitdir, recorded);
+
 eq("the main checkout is current from itself", listWorktrees(main).map((w) => w.current), [true, false, false, false]);
 
 // --- the name gate -----------------------------------------------------------

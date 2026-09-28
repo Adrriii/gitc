@@ -130,9 +130,39 @@ function locate(repo: string): Located[] {
     // Relative to the admin directory under worktree.useRelativePaths.
     const pointer = readTrimmed(join(admin, "gitdir"));
     if (pointer.length === 0) continue;
-    out.push({ name, admin, path: dirname(resolve(admin, pointer)), main: false });
+    const recorded = dirname(resolve(admin, pointer));
+    out.push({ name, admin, path: relocate(recorded, admin, common), main: false });
   }
   return out;
+}
+
+/**
+ * Where a worktree registered from another machine really is.
+ *
+ * git records the absolute path the machine running `git worktree add` saw,
+ * so a worktree made on one machine reads as gone from another sharing the
+ * same repository through a different path. The recorded path's tails are tried under the common dir
+ * and its ancestors; a candidate counts only when its .git leads back to this
+ * admin directory, i.e. when git on this machine can use it too.
+ */
+function relocate(recorded: string, admin: string, common: string): string {
+  if (existsSync(recorded)) return recorded;
+  const parts = recorded.split(/[\\/]+/).filter((p) => p.length > 0);
+  for (let cut = 1; cut < parts.length; cut++) {
+    const tail = parts.slice(cut).join("/");
+    for (let base = common; ; base = dirname(base)) {
+      const candidate = join(base, tail);
+      if (pointsBack(candidate, admin)) return candidate;
+      if (dirname(base) === base) break;
+    }
+  }
+  return recorded;
+}
+
+function pointsBack(tree: string, admin: string): boolean {
+  const line = readTrimmed(join(tree, ".git"));
+  if (!line.startsWith("gitdir:")) return false;
+  return samePath(resolve(tree, line.substring("gitdir:".length).trim()), admin);
 }
 
 /** Every worktree of the repository `repo` belongs to, main first. */
