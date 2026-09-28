@@ -772,17 +772,20 @@ async function adoptUpstream(repo: string, name: string, prefer: string): Promis
  *   local branch behind check it out and fast-forward it onto the remote
  *   local branch level  check it out; there is nothing to bring across
  *   local branch ahead  check it out; the remote has nothing we lack
- *   diverged            check it out and say so - a local commit that is not
+ *   diverged            check it out and ask - a local commit that is not
  *                       on the remote would have to be destroyed to "update
  *                       to the remote version", and a double-click is not
- *                       consent to that. Rebase or reset says it properly.
+ *                       consent to that. Asked again with `mode` "rebase",
+ *                       the local commits are replayed on top of the remote
+ *                       as `git pull --rebase` would; with "reset", the
+ *                       local branch is overwritten with the remote's.
  *
  * Only remote-tracking refs take this path. A local branch, a tag or a sha is
  * passed to git untouched, including the case where a local branch is itself
  * named `origin/something` - that ref is checked first for exactly that
  * reason.
  */
-async function checkoutRef(repo: string, ref: string, note: string): Promise<OpResult> {
+async function checkoutRef(repo: string, ref: string, note: string, mode: string): Promise<OpResult> {
   const plain = () => checkoutCarryingChanges(repo, ["checkout", ref], ref, note);
   // `note` carries the "left a detached HEAD behind" warning when there is
   // one, and it outranks anything said below - so it is kept in front rather
@@ -846,23 +849,38 @@ async function checkoutRef(repo: string, ref: string, note: string): Promise<OpR
   }
 
   if (ahead > 0) {
-    return warned(
-      say(
-        "On " +
-          name +
-          ", but it has diverged from " +
-          ref +
-          " (" +
-          String(ahead) +
-          " ahead, " +
-          String(behind) +
-          " behind). Taking the remote's version would drop " +
-          commits(ahead) +
-          " of your own - rebase onto " +
-          ref +
-          ", or reset to it if you meant to discard them.",
+    if (mode === "rebase") {
+      return conflictProne(
+        repo,
+        ["-c", "core.editor=true", "rebase", "--autostash", "--fork-point", ref],
+        "Rebase",
+        say("rebased " + name + " onto " + ref + " - " + commits(ahead) + " of your own on top"),
+      );
+    }
+    if (mode === "reset") {
+      // --keep rather than --hard: changes carried across the checkout survive,
+      // and git refuses instead of overwriting one the reset would touch.
+      await git(repo, ["reset", "--keep", ref]);
+      return ok(say("reset " + name + " to " + ref + " - dropped " + commits(ahead) + " of your own"));
+    }
+    return {
+      ...warned(
+        say(
+          "On " +
+            name +
+            ", but it has diverged from " +
+            ref +
+            " (" +
+            String(ahead) +
+            " ahead, " +
+            String(behind) +
+            " behind). Taking the remote's version drops " +
+            commits(ahead) +
+            " of your own; rebasing puts them on top of it.",
+        ),
       ),
-    );
+      confirm: name + " has diverged from " + ref,
+    };
   }
 
   await git(repo, ["merge", "--ff-only", ref]);
@@ -876,7 +894,7 @@ export async function runOp(repo: string, req: OpRequest): Promise<OpResult> {
     case "checkout": {
       const ref = needRef(req.ref, "branch");
       const note = await detachedWarning(repo);
-      return checkoutRef(repo, ref, note);
+      return checkoutRef(repo, ref, note, req.mode);
     }
 
     case "checkoutCommit": {

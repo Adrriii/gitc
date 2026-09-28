@@ -552,6 +552,7 @@ export function App() {
   // cheap; acting unseen is not.
   useEffect(() => {
     setConfirmState((c) => (c !== null && c.tabId !== null && c.tabId !== activeId ? null : c));
+    setChoose(null);
     setPushRefusal(null);
   }, [activeId]);
 
@@ -802,6 +803,29 @@ export function App() {
         // git objected rather than failed, and the objection has an answer.
         // Asking here means the same operation runs again with force, so the
         // thing git told you to go and type is a button instead.
+        if (r.confirm.length > 0 && args.op === "checkout") {
+          setChoose({
+            title: r.confirm,
+            body: r.note,
+            options: [
+              {
+                value: "rebase",
+                label: `Rebase my commits onto ${args.ref ?? "the remote"}`,
+                hint: "like git pull --rebase",
+              },
+              {
+                value: "reset",
+                label: `Overwrite my branch with ${args.ref ?? "the remote"}`,
+                hint: "my local commits are dropped",
+              },
+            ],
+            onPick: (mode) => {
+              setChoose(null);
+              void runOp({ ...args, mode });
+            },
+          });
+          return;
+        }
         if (r.confirm.length > 0) {
           setConfirm({
             title: r.confirm,
