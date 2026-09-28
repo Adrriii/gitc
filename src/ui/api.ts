@@ -19,6 +19,8 @@ import type {
   RemotePlan,
   ReleaseNotes,
   CrashList,
+  LineCounts,
+  WorktreeChanges,
 } from "./types";
 import type { DiffTarget } from "./components/DiffView";
 
@@ -167,7 +169,7 @@ export const api = {
     json<{ worktrees: Omit<Worktree, "status">[] }>(`/api/worktrees?id=${encodeURIComponent(id)}`),
 
   rangeFiles: (id: string, from: string, to: string) =>
-    json<{ files: FileChange[] }>(
+    json<{ files: FileChange[] } & LineCounts>(
       `/api/range?id=${encodeURIComponent(id)}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
     ),
 
@@ -372,7 +374,10 @@ export const api = {
     ),
 
   commitFiles: (id: string, sha: string) =>
-    json<{ files: FileChange[] }>(
+    json<{ files: FileChange[] } & LineCounts>(
       `/api/commit?id=${encodeURIComponent(id)}&sha=${encodeURIComponent(sha)}`,
     ),
+
+  /** How far a tab's working tree is from HEAD, for the mark on the tab. */
+  changes: (id: string) => json<WorktreeChanges>(`/api/changes?id=${encodeURIComponent(id)}`),
 };

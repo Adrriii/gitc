@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { Commit, FileChange, GraphPayload, Person, Worktree } from "../types";
+import type { Commit, FileChange, GraphPayload, LineCounts, Person, Worktree } from "../types";
 import { findWorktree, isWip, wipWorktree, worktreeLabel } from "../worktrees";
 import { buildTree, countItems, type TreeNode } from "../pathTree";
 import { chainBetween } from "../selection";
@@ -147,10 +147,13 @@ function FileTree({
 
 function Files({
   files,
+  lines,
   onOpen,
   activePath,
 }: {
   files: FileChange[];
+  /** Lines added and removed across all of them, when known. */
+  lines?: LineCounts | null;
   onOpen?: (path: string) => void;
   activePath?: string | null;
 }) {
@@ -176,6 +179,13 @@ function Files({
         {added > 0 && <span className={s.add}>+ {added} added</span>}
         {deleted > 0 && <span className={s.del}>− {deleted} deleted</span>}
         {renamed > 0 && <span className={s.ren}>→ {renamed} renamed</span>}
+        {lines && (lines.added > 0 || lines.removed > 0) && (
+          <span className={s.lines} title="Lines added and removed">
+            {lines.added > 0 && <span className={s.add}>+{lines.added}</span>}
+            {lines.added > 0 && lines.removed > 0 && " "}
+            {lines.removed > 0 && <span className={s.del}>−{lines.removed}</span>}
+          </span>
+        )}
         <div className={s.toggle}>
           <button className={mode === "path" ? s.on : ""} onClick={() => setMode("path")}>
             Path
@@ -317,6 +327,7 @@ export function Panel({
   onEditWorktree: (w: Worktree) => void;
 }) {
   const [files, setFiles] = useState<FileChange[]>([]);
+  const [lines, setLines] = useState<LineCounts | null>(null);
   const [filesError, setFilesError] = useState<string | null>(null);
   const [editing, setEditing] = useState<Editing | null>(null);
   const [editError, setEditError] = useState<string | null>(null);
@@ -368,6 +379,7 @@ export function Panel({
   useEffect(() => {
     if (!commit && !isRange) {
       setFiles([]);
+      setLines(null);
       return;
     }
     let live = true;
@@ -379,11 +391,14 @@ export function Panel({
       : api.commitFiles(tabId, commit!.hash);
     request
       .then((r) => {
-        if (live) setFiles(r.files);
+        if (!live) return;
+        setFiles(r.files);
+        setLines({ added: r.added, removed: r.removed });
       })
       .catch((e: Error) => {
         if (!live) return;
         setFiles([]);
+        setLines(null);
         setFilesError(e.message);
       });
     return () => {
@@ -549,7 +564,7 @@ export function Panel({
         {filesError !== null ? (
           <div className={s.empty}>Could not read the combined diff: {filesError}</div>
         ) : (
-          <Files files={files} onOpen={(p) => onOpenFile(p, false, false)} activePath={openPath} />
+          <Files files={files} lines={lines} onOpen={(p) => onOpenFile(p, false, false)} activePath={openPath} />
         )}
       </div>
     );
@@ -794,7 +809,7 @@ export function Panel({
       {filesError !== null ? (
         <div className={s.empty}>Could not read changes: {filesError}</div>
       ) : (
-        <Files files={files} onOpen={(p) => onOpenFile(p, false, false)} activePath={openPath} />
+        <Files files={files} lines={lines} onOpen={(p) => onOpenFile(p, false, false)} activePath={openPath} />
       )}
     </div>
   );

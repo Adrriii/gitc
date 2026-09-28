@@ -268,6 +268,18 @@ export interface FileChange {
   oldPath: string | null;
 }
 
+/** Lines added and removed. */
+export interface LineCounts {
+  added: number;
+  removed: number;
+}
+
+/** How far a working tree is from HEAD. */
+export interface WorktreeChanges extends LineCounts {
+  /** Changed files, untracked ones included. 0 means clean. */
+  files: number;
+}
+
 export interface Pending {
   /** merge | cherry-pick | revert | rebase | bisect, or "" when idle. */
   kind: string;

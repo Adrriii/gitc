@@ -14,7 +14,10 @@ import {
   readCommits,
   readStatus,
   readCommitFiles,
+  readCommitLines,
   readRangeFiles,
+  readRangeLines,
+  worktreeChanges,
   isRepo,
   repoRoot,
   gitHistory,
@@ -1523,6 +1526,32 @@ async function handleApi(
     return true;
   }
 
+  // How far the working tree is from HEAD, for the mark on the tab. Every
+  // local tab asks on a timer, so it is its own call rather than part of the
+  // watch poll, which the active tab makes far more often.
+  if (path.startsWith("/api/changes")) {
+    const q = path.indexOf("?");
+    const params = q === -1 ? "" : path.substring(q + 1);
+    let id = "";
+    for (const pair of params.split("&")) {
+      const eq = pair.indexOf("=");
+      if (eq === -1) continue;
+      if (pair.substring(0, eq) === "id") id = pair.substring(eq + 1);
+    }
+    const tab = findTab(id);
+    if (tab === null) {
+      send(res, 404, "application/json", JSON.stringify({ error: "no such tab" }));
+      return true;
+    }
+    try {
+      sendJson(res, JSON.stringify(await worktreeChanges(tab.path)));
+    } catch (e) {
+      const err = e as Error;
+      send(res, 500, "application/json", JSON.stringify({ error: err.message }));
+    }
+    return true;
+  }
+
   /**
    * Live submodule state, asked for separately.
    *
@@ -2310,7 +2339,8 @@ async function handleApi(
     }
     try {
       const files = await readRangeFiles(tab.path, from, to);
-      sendJson(res, JSON.stringify({ files }));
+      const lines = await readRangeLines(tab.path, from, to);
+      sendJson(res, JSON.stringify({ files, added: lines.added, removed: lines.removed }));
     } catch (e) {
       const err = e as Error;
       send(res, 500, "application/json", JSON.stringify({ error: err.message }));
@@ -2338,7 +2368,8 @@ async function handleApi(
     }
     try {
       const files = await readCommitFiles(tab.path, sha);
-      sendJson(res, JSON.stringify({ files }));
+      const lines = await readCommitLines(tab.path, sha);
+      sendJson(res, JSON.stringify({ files, added: lines.added, removed: lines.removed }));
     } catch (e) {
       const err = e as Error;
       send(res, 500, "application/json", JSON.stringify({ error: err.message }));

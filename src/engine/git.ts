@@ -727,14 +727,88 @@ export async function readRangeFiles(
   oldestHash: string,
   newestHash: string,
 ): Promise<FileChange[]> {
-  // `oldest^` has no meaning for a root commit, so fall back to diffing
-  // against the empty tree - which is exactly what "everything it added" means.
-  let base = oldestHash + "^";
-  const probe = await gitOrNull(repo, ["rev-parse", "--verify", base]);
-  if (probe === null) base = EMPTY_TREE;
-
-  const raw = await git(repo, ["diff", "--name-status", "-z", base, newestHash]);
+  const raw = await git(repo, ["diff", "--name-status", "-z", await rangeBase(repo, oldestHash), newestHash]);
   return parseNameStatus(raw);
+}
+
+/**
+ * What a run is diffed against. `oldest^` has no meaning for a root commit,
+ * so that falls back to the empty tree - which is exactly what "everything it
+ * added" means.
+ */
+export async function rangeBase(repo: string, oldestHash: string): Promise<string> {
+  const base = oldestHash + "^";
+  const probe = await gitOrNull(repo, ["rev-parse", "--verify", base]);
+  return probe === null ? EMPTY_TREE : base;
+}
+
+/** Lines added and removed. */
+export interface LineCounts {
+  added: number;
+  removed: number;
+}
+
+/**
+ * Reads `--shortstat`'s one line: " 3 files changed, 10 insertions(+), 2
+ * deletions(-)". git leaves out either count when it is zero, and says
+ * nothing at all when nothing changed.
+ */
+export function parseShortstat(raw: string): LineCounts {
+  let added = 0;
+  let removed = 0;
+  for (const part of raw.split(",")) {
+    const n = parseInt(part.trim(), 10);
+    if (isNaN(n)) continue;
+    if (part.includes("insertion")) added = n;
+    else if (part.includes("deletion")) removed = n;
+  }
+  return { added, removed };
+}
+
+/** Lines a single commit changed, against its first parent as its files are. */
+export async function readCommitLines(repo: string, hash: string): Promise<LineCounts> {
+  return parseShortstat(
+    await git(repo, ["show", "--shortstat", "--format=", "-m", "--first-parent", hash]),
+  );
+}
+
+/** Lines a run of commits changed, net - as readRangeFiles lists its files. */
+export async function readRangeLines(
+  repo: string,
+  oldestHash: string,
+  newestHash: string,
+): Promise<LineCounts> {
+  return parseShortstat(
+    await git(repo, ["diff", "--shortstat", await rangeBase(repo, oldestHash), newestHash]),
+  );
+}
+
+/** How far a working tree is from HEAD, for the mark on its tab. */
+export interface WorktreeChanges extends LineCounts {
+  /** Changed files, untracked ones included. 0 means clean. */
+  files: number;
+}
+
+/**
+ * Asked of every open tab on a timer, so it must not touch the index.
+ *
+ * `git diff HEAD` would refresh it and write it back whatever
+ * --no-optional-locks says (see diffWorkingFile); the rewritten .git/index
+ * then changes the watch fingerprint, and the active tab would reload itself
+ * forever. `diff-index` is the plumbing under it and never refreshes. A
+ * file touched but unchanged comes out of it with no lines, which is right.
+ *
+ * Untracked files count as files but add no lines: git has nothing to diff
+ * them against, and reading each one to count is not worth a badge.
+ */
+export async function worktreeChanges(repo: string): Promise<WorktreeChanges> {
+  const files = (await readStatus(repo, true)).length;
+  if (files === 0) return { files: 0, added: 0, removed: 0 };
+  // No HEAD yet in a fresh repository: everything is untracked or staged
+  // new, and there is nothing to count lines against.
+  const stat = await gitOrNull(repo, ["--no-optional-locks", "diff-index", "--shortstat", "HEAD"]);
+  const lines = stat === null ? { added: 0, removed: 0 } : parseShortstat(stat);
+  return { files, added: lines.added, removed: lines.removed };
 }
 
 export interface WorkingFile {

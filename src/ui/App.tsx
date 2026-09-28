@@ -1964,6 +1964,7 @@ export function App() {
       <TabBar
         session={session}
         remotes={remotes}
+        refreshKey={data}
         onActivate={(id) => api.activate(id).then(setSession)}
         onClose={(id) => api.close(id).then(setSession)}
         onNew={() => setSession({ ...session, activeId: null })}

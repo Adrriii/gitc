@@ -461,6 +461,9 @@
 .ren {
   color: var(--accent);
 }
+.lines {
+  white-space: nowrap;
+}
 
 // The commit list in a multi-selection scrolls on its own, so a long run
 // can't push the combined file list off the panel.

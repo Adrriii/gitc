@@ -14,7 +14,7 @@
 
 import { readFileSync, existsSync, statSync } from "node:fs";
 
-import { git, gitOrNull } from "./git.ts";
+import { git, gitOrNull, rangeBase } from "./git.ts";
 import { inRepo } from "./paths.ts";
 import { at } from "./safe.ts";
 
@@ -221,15 +221,11 @@ export async function diffRangeFile(
   path: string,
   context: number,
 ): Promise<FileDiff> {
-  let base = oldestSha + "^";
-  const probe = await gitOrNull(repo, ["rev-parse", "--verify", base]);
-  if (probe === null) base = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
-
   const raw = await git(repo, [
     "diff",
     contextArg(context),
     "--no-color",
-    base,
+    await rangeBase(repo, oldestSha),
     newestSha,
     "--",
     path,

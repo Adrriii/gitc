@@ -48,6 +48,28 @@
   white-space: nowrap;
 }
 
+// Uncommitted changes. It keeps its width and the name gives way, as it
+// already does for the remote dot.
+.dirty {
+  flex: none;
+  display: flex;
+  gap: 3px;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.plus {
+  color: var(--green);
+}
+
+.minus {
+  color: var(--red);
+}
+
+.files {
+  color: var(--amber);
+}
+
 // Placement and visibility only. How the cross looks - its box, its colour,
 // its hover - is in CloseButton.module.scss, shared with every other close in
 // the app; a rule here would be the drift starting again.
