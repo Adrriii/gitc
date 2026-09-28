@@ -80,7 +80,8 @@ function comparePre(a: string[], b: string[]): number {
     }
     // Numeric identifiers always rank below alphanumeric ones.
     if (lNum !== rNum) return lNum ? -1 : 1;
-    if (l !== r) return l < r ? -1 : 1;
+    // `!`: scriptc's `<` ignores the narrowing above.
+    if (l !== r) return l! < r! ? -1 : 1;
   }
   return 0;
 }

@@ -327,15 +327,15 @@ interface Ran {
  * connection - had the window concluding the engine was dead while it was
  * merely busy.
  *
- * stdin stays closed rather than piped: piped stdin is a compile fence here,
- * which is also why commit messages go in through -F and rebase through
- * GIT_SEQUENCE_EDITOR.
+ * `input` is written to git's stdin - a commit message for `-F -`, a patch
+ * for `git apply`. Without it stdin is ended at once, so git reads EOF just
+ * as it would from a closed stdin and can never sit waiting on a prompt.
  */
-function run(repo: string, args: string[], env?: Record<string, string>): Promise<Ran> {
+function run(repo: string, args: string[], env?: Record<string, string>, input?: string): Promise<Ran> {
   return new Promise((resolve, reject) => {
     const child = spawn("git", args, {
       cwd: repo,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
       /**
        * On Windows this is what stops a console window flashing on every
        * single git call, and it is only needed because gitc itself no longer
@@ -380,12 +380,15 @@ function run(repo: string, args: string[], env?: Record<string, string>): Promis
       });
     };
 
+    const stdin = child.stdin;
     const stdout = child.stdout;
     const stderr = child.stderr;
-    if (stdout === null || stderr === null) {
+    if (stdin === null || stdout === null || stderr === null) {
       reject(new Error("git produced no output streams"));
       return;
     }
+    if (input !== undefined) stdin.write(input);
+    stdin.end();
 
     stdout.on("data", (chunk: Buffer) => out.push(chunk));
     stdout.on("end", () => {
@@ -424,16 +427,18 @@ export async function git(
    * Extra environment for this call.
    *
    * What interactive rebase needs: GIT_SEQUENCE_EDITOR and GIT_EDITOR have to
-   * point at something non-interactive, since a piped stdin is a compile fence
-   * here and there is no terminal for git to open an editor in.
+   * point at something non-interactive, since there is no terminal for git to
+   * open an editor in.
    */
   env?: Record<string, string>,
+  /** Written to git's stdin: a commit message for `-F -`, a patch for `apply`. */
+  input?: string,
 ): Promise<string> {
   const started = Date.now();
   const call = begin(repo, args);
 
   try {
-    const result = await run(repo, args, env);
+    const result = await run(repo, args, env, input);
     finish(call, started, result.code === 0);
     if (result.code !== 0) {
       const detail = result.err.trim().length > 0 ? result.err.trim() : "git exited with " + String(result.code);
@@ -571,9 +576,14 @@ export async function readCommits(
     const f = record.split(SEP);
     if (f.length < 7) continue;
     const extracted = extractCoAuthors(f[6]);
+    // Named, not `f[1].length > 0 ? f[1].split(" ") : []`: scriptc 0.1.x
+    // releases the hidden copy of f[1] the taken branch made at the end of
+    // every iteration, taken or not - so each root commit released the
+    // previous commit's box twice and corrupted the heap.
+    const parentField = f[1];
     commits.push({
       hash: f[0],
-      parents: f[1].length > 0 ? f[1].split(" ") : [],
+      parents: parentField.length > 0 ? parentField.split(" ") : [],
       author: f[2],
       email: f[3],
       date: parseInt(f[4], 10),
@@ -613,7 +623,7 @@ export async function readStashes(repo: string): Promise<RawStash[]> {
   const fmt = "%x01%H%x00%P%x00%an%x00%ae%x00%at%x00%gd%x00%gs";
   // Declared before the early return, not returned as a bare `[]`: scriptc
   // types an empty array literal as number[] and then refuses to widen it
-  // (SC2002). See docs/toolchain.md.
+  // (SC2002).
   const out: RawStash[] = [];
 
   // Null rather than an error when there is no stash ref at all.
@@ -624,12 +634,16 @@ export async function readStashes(repo: string): Promise<RawStash[]> {
     if (record.length === 0) continue;
     const f = record.split(SEP);
     if (f.length < 7) continue;
-    const parents = f[1].length > 0 ? f[1].split(" ") : [];
+    // Named for scriptc, as in readCommits.
+    const parentField = f[1];
+    const parents = parentField.length > 0 ? parentField.split(" ") : [];
     out.push({
       selector: f[5],
       commit: {
         hash: f[0],
-        parents: parents.length > 0 ? [parents[0]] : [],
+        // The first parent or none. slice rather than a conditional
+        // [parents[0]], which hits the same scriptc bug as above.
+        parents: parents.slice(0, 1),
         author: f[2],
         email: f[3],
         date: parseInt(f[4], 10),

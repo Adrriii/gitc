@@ -1050,7 +1050,8 @@ async function connectionFor(host: string): Promise<Connection | { error: string
   // status, submodules, the watcher - and each one arriving to find no
   // connection would otherwise start its own install and its own tunnel.
   const pending = connecting.get(host);
-  if (pending !== undefined) return await pending;
+  // `!`: scriptc's await ignores the narrowing.
+  if (pending !== undefined) return await pending!;
 
   const attempt = openConnection(host);
   connecting.set(host, attempt);
@@ -1287,7 +1288,8 @@ async function openRemoteRepo(
 
   const key = host + "\n" + path;
   const already = openingRemote.get(key);
-  if (already !== undefined) return await already;
+  // `!`: scriptc's await ignores the narrowing.
+  if (already !== undefined) return await already!;
 
   const attempt = openRemoteRepoOnce(host, path);
   openingRemote.set(key, attempt);

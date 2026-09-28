@@ -87,12 +87,6 @@ jobs:
           SCRIPTC_CC: ${{ runner.os == 'Linux' && 'zigcc' || '' }}
           SCRIPTC_TARGET: ${{ runner.os == 'Linux' && 'x86_64-linux-musl' || '' }}
 
-      # Debug info is over half the file and nothing reads it from a release:
-      # 6.0 MB down to 2.4 MB, which is what the dynamic build used to cost.
-      - name: Strip the binary
-        if: runner.os == 'Linux'
-        run: strip ${{ matrix.built }}
-
       - name: Check it is tied to no system libc
         if: runner.os == 'Linux'
         shell: bash

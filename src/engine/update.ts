@@ -764,7 +764,13 @@ export async function apply(
   let expected = "";
   for (const line of sums.split(String.fromCharCode(10))) {
     const parts = line.trim().split(/\s+/);
-    if (parts.length >= 2 && parts[1].replace(/^\*/, "") === asset) expected = parts[0];
+    // Not `parts.length >= 2 && parts[1].replace(...)`: scriptc 0.1.x would
+    // release the hidden copy of parts[1] again on every short line after a
+    // long one - a blank line at the end of the file was enough to corrupt
+    // the heap mid-update.
+    if (parts.length < 2) continue;
+    const name = parts[1];
+    if (name.replace(/^\*/, "") === asset) expected = parts[0];
   }
   if (expected.length === 0) {
     rmSync(temp, { force: true });

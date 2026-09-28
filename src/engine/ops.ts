@@ -334,7 +334,7 @@ async function creditsFor(repo: string, shas: string[], author: Person): Promise
   const seen = new Set<string>();
   seen.add(personKey(author));
   // Declared before the early return: a bare `[]` has no element type to infer
-  // from here, and scriptc reads it as number[] (docs/toolchain.md).
+  // from here, and scriptc reads it as number[].
   const credits: Person[] = [];
 
   // --no-walk so the listed commits are the ONLY ones read: without it git
@@ -974,9 +974,8 @@ export async function runOp(repo: string, req: OpRequest): Promise<OpResult> {
 
     case "rebaseOnto": {
       needRef(req.ref, "target");
-      // core.editor=true makes any editor git wants a no-op that succeeds.
-      // We cannot drive an editor: writing to a child's stdin is a compile
-      // fence in scriptc (docs/toolchain.md).
+      // core.editor=true makes any editor git wants a no-op that succeeds:
+      // there is no terminal for one to open in.
       return conflictProne(
         repo,
         ["-c", "core.editor=true", "rebase", req.ref],
@@ -1245,21 +1244,16 @@ export async function runOp(repo: string, req: OpRequest): Promise<OpResult> {
       const isHead = head !== null && head.trim() === sha;
 
       if (isHead) {
-        const path = tempFile("reword-" + String(Date.now()) + ".txt");
-        writeFileSync(path, message + String.fromCharCode(10), "utf8");
-        try {
-          // --allow-empty because an empty commit is being kept exactly as
-          // empty as it was. Without it git refuses to amend one at all,
-          // offering to delete it instead - which is not what renaming it
-          // asked for.
-          await git(repo, ["commit", "--amend", "--only", "--allow-empty", "-F", path]);
-        } finally {
-          try {
-            if (existsSync(path)) unlinkSync(path);
-          } catch {
-            // A leftover temp file is not worth failing the operation over.
-          }
-        }
+        // --allow-empty because an empty commit is being kept exactly as
+        // empty as it was. Without it git refuses to amend one at all,
+        // offering to delete it instead - which is not what renaming it
+        // asked for.
+        await git(
+          repo,
+          ["commit", "--amend", "--only", "--allow-empty", "-F", "-"],
+          undefined,
+          message + String.fromCharCode(10),
+        );
         return ok("reworded " + sha.substring(0, 7));
       }
 
@@ -1397,9 +1391,6 @@ export async function runOp(repo: string, req: OpRequest): Promise<OpResult> {
      * only that part; unstaging is the same patch reversed; discarding is the
      * reverse applied to the working tree instead of the index. git does the
      * work - the patch simply says which lines are meant.
-     *
-     * Through a file because piped stdin is a compile fence here, the same
-     * reason commit messages go in with -F.
      */
     case "applyPatch": {
       const patch = req.patch;
@@ -1417,13 +1408,8 @@ export async function runOp(repo: string, req: OpRequest): Promise<OpResult> {
       // every REVERSE apply fail to find its text ("patch does not apply"),
       // which is unstaging and discarding both.
 
-      const file = tempFile("hunk-" + String(Date.now()) + ".patch");
-      writeFileSync(file, patch, "utf8");
-      try {
-        await git(repo, args.concat([file]));
-      } finally {
-        if (existsSync(file)) unlinkSync(file);
-      }
+      // No file argument: git apply reads the patch from stdin.
+      await git(repo, args, undefined, patch);
 
       if (req.mode === "stage") return ok("staged the hunk");
       if (req.mode === "unstage") return ok("unstaged the hunk");
@@ -1627,8 +1613,8 @@ export async function runOp(repo: string, req: OpRequest): Promise<OpResult> {
 
     case "continue": {
       const kind = needRef(req.ref, "operation");
-      // --no-edit keeps git from opening an editor we cannot drive: stdin to
-      // a child is a compile fence here (docs/toolchain.md).
+      // --no-edit keeps git from opening an editor: there is no terminal for
+      // one to open in.
       if (kind === "rebase") {
         return conflictProne(
           repo,

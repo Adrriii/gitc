@@ -261,8 +261,7 @@ export async function planRemote(host: string): Promise<RemotePlan> {
  * connection is not a direction: a Linux workstation reaching a Windows agent
  * is the same feature as the reverse, and the first version of this got it
  * wrong by assuming the pair. Whatever the remote needs is fetched here first,
- * because this side is the one with the internet, and sent on with scp - which
- * needs no stdin, and piping into a child's stdin is a compile fence.
+ * because this side is the one with the internet, and sent on with scp.
  *
  * Versions must match exactly. The UI and the engine are one program split
  * across a socket, and a mismatch is a field the window reads that the engine
@@ -365,8 +364,7 @@ function localRun(cmd: string, args: string[]): Promise<Ran> {
  * A Windows install has no Linux binary to send, so it is fetched here first -
  * this machine has the internet the remote lacks, which is the entire point of
  * the fallback - checked against the published checksum, and copied over with
- * scp. scp rather than `ssh host "cat > file"` because piping into a child's
- * stdin is a compile fence in scriptc.
+ * scp.
  *
  * It lands beside the real name and is moved into place afterwards, so a
  * transfer that dies halfway cannot leave a half-written binary that the next

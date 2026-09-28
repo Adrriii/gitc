@@ -2,8 +2,8 @@
 //
 // An interactive rebase asks two things of an editor: rewrite the todo list,
 // and accept the combined commit message. Both are normally a human in $EDITOR.
-// gitc cannot pipe a todo list in - stdin to a child is a compile fence here -
-// and there is no terminal to open an editor in anyway.
+// git reads neither from stdin - it opens the file in an editor - and there
+// is no terminal to open an editor in.
 //
 // So gitc points GIT_SEQUENCE_EDITOR and GIT_EDITOR at ITSELF. git appends the
 // file it wants edited to the command, gitc rewrites that file and exits, and
