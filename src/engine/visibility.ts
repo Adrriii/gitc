@@ -14,6 +14,7 @@
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { configDir } from "./paths.ts";
 
 interface RepoVisibility {
   /** Work-tree root, as the tab records it. */
@@ -24,14 +25,6 @@ interface RepoVisibility {
 
 interface VisibilityFile {
   repos: RepoVisibility[];
-}
-
-function configDir(): string {
-  const appData = process.env["APPDATA"];
-  if (appData !== undefined && appData.length > 0) return join(appData, "gitc");
-  const home = process.env["HOME"];
-  if (home !== undefined && home.length > 0) return join(home, ".config", "gitc");
-  return ".gitc";
 }
 
 function filePath(): string {

@@ -228,17 +228,6 @@ export function readRefs(repo: string): Ref[] {
   return out.filter((r) => !r.short.endsWith("/HEAD"));
 }
 
-/** Refs grouped by the hash they point at, for drawing chips on graph rows. */
-export function refsByHash(refs: Ref[]): Map<string, Ref[]> {
-  const map = new Map<string, Ref[]>();
-  for (const ref of refs) {
-    const list = map.get(ref.hash);
-    if (list === undefined) map.set(ref.hash, [ref]);
-    else list.push(ref);
-  }
-  return map;
-}
-
 /**
  * An operation git is part-way through.
  *

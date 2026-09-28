@@ -7,9 +7,9 @@ import type { RefGroup, WorktreeLabels } from "../refGroups";
 import { branchesElsewhere, changeCounts, findWorktree, isWip, wipWorktree, worktreeLabel } from "../worktrees";
 import s from "./Graph.module.scss";
 
-// Measured against a reference implementation over CDP, not guessed - see
-// docs/ui-spec.md. Row pitch 28, lane pitch 22, commit node 22px with a 2px
-// ring; merge commits get a smaller solid dot instead.
+// Measured against a reference implementation over CDP, not guessed. Row pitch
+// 28, lane pitch 22, commit node 22px with a 2px ring; merge commits get a
+// smaller solid dot instead.
 const ROW_H = 26;
 const LANE_W = 22;
 const NODE_R = 10;
@@ -307,7 +307,7 @@ function Where({ group }: { group: RefGroup }) {
 /**
  * Chip fill, as an alpha suffix on the commit's lane colour.
  *
- * Sampled from the reference (docs/ui-spec.md): an ordinary chip is the lane
+ * Sampled from the reference: an ordinary chip is the lane
  * colour at 25% over the graph background, the checked-out one at 50%. `40`
  * and `80` are those two as hex alpha - the same trick `tintOf` uses for the
  * lane band, so a chip and its band cannot drift out of agreement.

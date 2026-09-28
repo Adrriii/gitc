@@ -1,4 +1,4 @@
-import { buildTree, collectItems, countItems, folderPaths } from "../pathTree.ts";
+import { buildTree, collectItems, countItems } from "../pathTree.ts";
 import type { Ref } from "../types.ts";
 
 const ref = (short: string): Ref => ({
@@ -82,12 +82,6 @@ eq(
 );
 
 eq("an empty list gives an empty tree", buildTree([], name), []);
-
-eq(
-  "folderPaths lists every expandable node, nested ones included",
-  folderPaths(buildTree([ref("a/b/c"), ref("d")], name)),
-  ["a", "a/b"],
-);
 
 eq("countItems counts branches, not nodes", countItems(buildTree([ref("a/b/c"), ref("a/d"), ref("e")], name)), 3);
 

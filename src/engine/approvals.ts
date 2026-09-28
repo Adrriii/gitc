@@ -18,22 +18,11 @@
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { configDir } from "./paths.ts";
 
 interface ApprovalFile {
   /** ssh destinations, spelled exactly as they were connected to. */
   hosts: string[];
-}
-
-// The same directory as session.json and hidden.json, and the same three-line
-// spelling of it. Kept local rather than shared: each of these files is
-// standalone, and a module that only exists to hold this function would be
-// read by more places than it saves.
-function configDir(): string {
-  const appData = process.env["APPDATA"];
-  if (appData !== undefined && appData.length > 0) return join(appData, "gitc");
-  const home = process.env["HOME"];
-  if (home !== undefined && home.length > 0) return join(home, ".config", "gitc");
-  return ".gitc";
 }
 
 function filePath(): string {

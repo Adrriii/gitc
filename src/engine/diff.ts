@@ -1,6 +1,6 @@
 // Unified-diff parsing.
 //
-// All three view modes in docs/ui-spec.md render from this one structure:
+// All three view modes render from this one structure:
 //
 //   Unified  - the hunks as they come, each under its @@ header
 //   Inline   - the whole file, changes in place

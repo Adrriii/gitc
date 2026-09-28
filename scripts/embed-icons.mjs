@@ -6,8 +6,7 @@
 //
 // They are embedded as base64 text rather than byte arrays: text compiles
 // quickly and stays readable in a diff as one line, and the engine decodes it
-// with a few lines of arithmetic (see engine/base64.ts) rather than relying on
-// a runtime decoder.
+// with Buffer.from(text, "base64").
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";

@@ -1,8 +1,8 @@
 // gitc entry point.
 //
 // Serves the UI over loopback and opens a Chromium browser in --app mode,
-// which gives a chromeless window without needing a GUI toolkit - see
-// docs/toolchain.md for why that is the shape of this program.
+// which gives a chromeless window without needing a GUI toolkit: scriptc has
+// no windowing and no user-facing FFI, so that is the shape of this program.
 
 import { randomBytes } from "node:crypto";
 import { createServer, request } from "node:http";
@@ -93,7 +93,7 @@ import { NAME, VERSION } from "./generated/version.ts";
 import { loadSession, saveSession, touchRecent } from "./state.ts";
 import { at } from "./engine/safe.ts";
 import { allowedRequest } from "./engine/origin.ts";
-import { cleanTempDir } from "./engine/paths.ts";
+import { cleanTempDir, configDir } from "./engine/paths.ts";
 import {
   recordCrash,
   listCrashes,
@@ -205,23 +205,8 @@ const QUIT_GRACE_MS = 3000;
 // --------------------------------------------------------------- avatars
 
 /** Where a user drops images to override an author's avatar. */
-/**
- * Where gitc keeps everything that belongs to this user.
- *
- * The same directory the session and the hidden-ref state already live in -
- * per-user by construction on every platform, which is the property the
- * browser profile below needs and did not have.
- */
-function stateDir(): string {
-  const appData = process.env["APPDATA"];
-  if (appData !== undefined && appData.length > 0) return join(appData, "gitc");
-  const home = process.env["HOME"];
-  if (home !== undefined && home.length > 0) return join(home, ".config", "gitc");
-  return ".gitc";
-}
-
 function avatarDir(): string {
-  return join(stateDir(), "avatars");
+  return join(configDir(), "avatars");
 }
 
 function avatarType(file: string): string {
@@ -353,6 +338,20 @@ function worktreeRoot(tab: Tab, wt: string | null): { path: string; quiet: boole
   if (w === null) return null;
   return { path: w.path, quiet: !w.current };
 }
+
+/** A request's query string, decoded. */
+function query(path: string): URLSearchParams {
+  const q = path.indexOf("?");
+  return new URLSearchParams(q === -1 ? "" : path.substring(q + 1));
+}
+
+/** The tab a request names, or null once a 404 has gone back for it. */
+function tabFor(id: string, res: import("node:http").ServerResponse): Tab | null {
+  const tab = findTab(id);
+  if (tab === null) send(res, 404, "application/json", JSON.stringify({ error: "no such tab" }));
+  return tab;
+}
+
 
 function findTab(id: string): Tab | null {
   for (const t of session.tabs) {
@@ -507,7 +506,7 @@ async function graphPayload(tab: Tab, limit: number): Promise<string> {
   const noFiles: WorkingFile[] = [];
   if (status.length > 0 && head.hash !== null) {
     // `noAuthors` rather than a bare `[]`: scriptc types an empty literal as
-    // number[] and refuses to widen it (SC2002, docs/toolchain.md).
+    // number[] and refuses to widen it (SC2002).
     const noAuthors: Person[] = [];
     walked.push({
       hash: WIP_HASH,
@@ -548,7 +547,7 @@ async function graphPayload(tab: Tab, limit: number): Promise<string> {
 
   // Started with the others above; collected here, where they are first
   // needed. `noStashes` rather than a bare [] - scriptc types an empty
-  // literal as number[] and will not widen it (docs/toolchain.md).
+  // literal as number[] and will not widen it.
   const noStashes: RawStash[] = [];
   const stashes = stashesP === null ? noStashes : await stashesP;
   const spliced = spliceStashes(
@@ -672,9 +671,8 @@ function send(res: import("node:http").ServerResponse, code: number, type: strin
   res.writeHead(code, { "content-type": type, "cache-control": "no-store" });
   // Encoded to bytes explicitly. Handing res.end a string emits one byte per
   // code unit - a folder called "Cafe-Munster" arrived with a bare 0xe9 where
-  // the accent belongs, which is Latin-1, not UTF-8. Buffer.from(body, "utf8")
-  // does not fix it either: the encoding argument is ignored here. TextEncoder
-  // is the one that genuinely produces UTF-8.
+  // the accent belongs, which is Latin-1, not UTF-8. (scriptc 0.0.35 also
+  // ignored Buffer.from's encoding argument, which is why this is TextEncoder.)
   //
   // Every string this server sends is affected - commit subjects and author
   // names as much as paths - so it is fixed once, here.
@@ -1476,14 +1474,8 @@ async function handleApi(
   // face that Gravatar has never heard of - bots and agents mostly - without
   // gitc shipping anyone else's logo.
   if (path.startsWith("/api/avatar")) {
-    const q = path.indexOf("?");
-    const params = q === -1 ? "" : path.substring(q + 1);
-    let email = "";
-    for (const pair of params.split("&")) {
-      const eq = pair.indexOf("=");
-      if (eq === -1) continue;
-      if (pair.substring(0, eq) === "email") email = decodeURIComponent(pair.substring(eq + 1));
-    }
+    const p = query(path);
+    const email = p.get("email") ?? "";
     const file = findAvatarOverride(email);
     if (file === null) {
       send(res, 404, "text/plain", "no override");
@@ -1501,19 +1493,10 @@ async function handleApi(
   // changes whenever the repository does, so the UI can refresh on edits made
   // anywhere - an editor, a terminal, a build - not only its own actions.
   if (path.startsWith("/api/watch")) {
-    const q = path.indexOf("?");
-    const params = q === -1 ? "" : path.substring(q + 1);
-    let id = "";
-    for (const pair of params.split("&")) {
-      const eq = pair.indexOf("=");
-      if (eq === -1) continue;
-      if (pair.substring(0, eq) === "id") id = pair.substring(eq + 1);
-    }
-    const tab = findTab(id);
-    if (tab === null) {
-      send(res, 404, "application/json", JSON.stringify({ error: "no such tab" }));
-      return true;
-    }
+    const p = query(path);
+    const id = p.get("id") ?? "";
+    const tab = tabFor(id, res);
+    if (tab === null) return true;
     lastPing = Date.now();
     sawFirstPing = true;
     try {
@@ -1530,19 +1513,10 @@ async function handleApi(
   // local tab asks on a timer, so it is its own call rather than part of the
   // watch poll, which the active tab makes far more often.
   if (path.startsWith("/api/changes")) {
-    const q = path.indexOf("?");
-    const params = q === -1 ? "" : path.substring(q + 1);
-    let id = "";
-    for (const pair of params.split("&")) {
-      const eq = pair.indexOf("=");
-      if (eq === -1) continue;
-      if (pair.substring(0, eq) === "id") id = pair.substring(eq + 1);
-    }
-    const tab = findTab(id);
-    if (tab === null) {
-      send(res, 404, "application/json", JSON.stringify({ error: "no such tab" }));
-      return true;
-    }
+    const p = query(path);
+    const id = p.get("id") ?? "";
+    const tab = tabFor(id, res);
+    if (tab === null) return true;
     try {
       sendJson(res, JSON.stringify(await worktreeChanges(tab.path)));
     } catch (e) {
@@ -1570,37 +1544,19 @@ async function handleApi(
    * pressed. No statuses: this is a few file reads.
    */
   if (path.startsWith("/api/worktrees")) {
-    const q = path.indexOf("?");
-    const params = q === -1 ? "" : path.substring(q + 1);
-    let id = "";
-    for (const pair of params.split("&")) {
-      const eq = pair.indexOf("=");
-      if (eq === -1) continue;
-      if (pair.substring(0, eq) === "id") id = decodeURIComponent(pair.substring(eq + 1));
-    }
-    const tab = findTab(id);
-    if (tab === null) {
-      send(res, 404, "application/json", JSON.stringify({ error: "no such tab" }));
-      return true;
-    }
+    const p = query(path);
+    const id = p.get("id") ?? "";
+    const tab = tabFor(id, res);
+    if (tab === null) return true;
     sendJson(res, JSON.stringify({ worktrees: listWorktrees(tab.path) }));
     return true;
   }
 
   if (path.startsWith("/api/submodules")) {
-    const q = path.indexOf("?");
-    const params = q === -1 ? "" : path.substring(q + 1);
-    let id = "";
-    for (const pair of params.split("&")) {
-      const eq = pair.indexOf("=");
-      if (eq === -1) continue;
-      if (pair.substring(0, eq) === "id") id = decodeURIComponent(pair.substring(eq + 1));
-    }
-    const tab = findTab(id);
-    if (tab === null) {
-      send(res, 404, "application/json", JSON.stringify({ error: "no such tab" }));
-      return true;
-    }
+    const p = query(path);
+    const id = p.get("id") ?? "";
+    const tab = tabFor(id, res);
+    if (tab === null) return true;
     sendJson(res, JSON.stringify({ submodules: await readSubmodules(tab.path) }));
     return true;
   }
@@ -1716,14 +1672,8 @@ async function handleApi(
   // of it. The window asks this before it browses a machine, so an install can
   // be agreed to rather than noticed afterwards.
   if (path.startsWith("/api/remote/plan")) {
-    const q = path.indexOf("?");
-    const params = q === -1 ? "" : path.substring(q + 1);
-    let host = "";
-    for (const pair of params.split("&")) {
-      const eq = pair.indexOf("=");
-      if (eq === -1) continue;
-      if (pair.substring(0, eq) === "host") host = decodeURIComponent(pair.substring(eq + 1));
-    }
+    const p = query(path);
+    const host = p.get("host") ?? "";
     const plan = await planRemote(host);
     sendJson(res, JSON.stringify({ ...plan, approved: isApprovedRemote(host) }));
     return true;
@@ -1856,17 +1806,8 @@ async function handleApi(
   // The git commands gitc has run. `after` is the highest id the caller
   // already holds, so the common poll returns an empty list.
   if (path.startsWith("/api/gitlog")) {
-    const q = path.indexOf("?");
-    const params = q === -1 ? "" : path.substring(q + 1);
-    let after = 0;
-    for (const pair of params.split("&")) {
-      const eq = pair.indexOf("=");
-      if (eq === -1) continue;
-      if (pair.substring(0, eq) === "after") {
-        const n = parseInt(pair.substring(eq + 1), 10);
-        if (!isNaN(n)) after = n;
-      }
-    }
+    const p = query(path);
+    const after = parseInt(p.get("after") ?? "", 10) || 0;
     sendJson(res, JSON.stringify({ calls: gitHistory(after) }));
     return true;
   }
@@ -1901,17 +1842,9 @@ async function handleApi(
   // Directory listing for the repository picker: completion and the browser
   // both read from this.
   if (path.startsWith("/api/ls")) {
-    const q = path.indexOf("?");
-    const params = q === -1 ? "" : path.substring(q + 1);
-    let dir = "";
-    let host = "";
-    for (const pair of params.split("&")) {
-      const eq = pair.indexOf("=");
-      if (eq === -1) continue;
-      const key = pair.substring(0, eq);
-      if (key === "path") dir = decodeURIComponent(pair.substring(eq + 1));
-      if (key === "host") host = decodeURIComponent(pair.substring(eq + 1));
-    }
+    const p = query(path);
+    const dir = p.get("path") ?? "";
+    const host = p.get("host") ?? "";
 
     // Browsing a machine you have not opened anything on yet. This is the one
     // repository call that cannot route by tab, because its whole job is to
@@ -1936,11 +1869,8 @@ async function handleApi(
 
   if (path === "/api/hidden") {
     const body = JSON.parse(await readBody(req)) as HiddenRequest;
-    const tab = findTab(body.id);
-    if (tab === null) {
-      send(res, 404, "application/json", JSON.stringify({ error: "no such tab" }));
-      return true;
-    }
+    const tab = tabFor(body.id, res);
+    if (tab === null) return true;
     saveHidden(tab.path, body.hidden);
     sendJson(res, await graphPayload(tab, DEFAULT_LIMIT));
     return true;
@@ -1957,23 +1887,11 @@ async function handleApi(
   }
 
   if (path.startsWith("/api/graph")) {
-    const q = path.indexOf("?");
-    const params = q === -1 ? "" : path.substring(q + 1);
-    let id = "";
-    let limit = DEFAULT_LIMIT;
-    for (const pair of params.split("&")) {
-      const eq = pair.indexOf("=");
-      if (eq === -1) continue;
-      const key = pair.substring(0, eq);
-      const value = pair.substring(eq + 1);
-      if (key === "id") id = value;
-      if (key === "limit") limit = parseInt(value, 10);
-    }
-    const tab = findTab(id);
-    if (tab === null) {
-      send(res, 404, "application/json", JSON.stringify({ error: "no such tab" }));
-      return true;
-    }
+    const p = query(path);
+    const id = p.get("id") ?? "";
+    const limit = parseInt(p.get("limit") ?? String(DEFAULT_LIMIT), 10);
+    const tab = tabFor(id, res);
+    if (tab === null) return true;
     try {
       sendJson(res, await graphPayload(tab, limit));
     } catch (e) {
@@ -1990,11 +1908,8 @@ async function handleApi(
 
   if (path === "/api/stage" || path === "/api/unstage") {
     const body = JSON.parse(await readBody(req)) as PathsRequest;
-    const tab = findTab(body.id);
-    if (tab === null) {
-      send(res, 404, "application/json", JSON.stringify({ error: "no such tab" }));
-      return true;
-    }
+    const tab = tabFor(body.id, res);
+    if (tab === null) return true;
     try {
       const all = body.paths.length === 0;
       if (path === "/api/stage") {
@@ -2015,11 +1930,8 @@ async function handleApi(
 
   if (path === "/api/discard") {
     const body = JSON.parse(await readBody(req)) as DiscardRequest;
-    const tab = findTab(body.id);
-    if (tab === null) {
-      send(res, 404, "application/json", JSON.stringify({ error: "no such tab" }));
-      return true;
-    }
+    const tab = tabFor(body.id, res);
+    if (tab === null) return true;
     try {
       await discardPaths(tab.path, body.tracked, body.untracked);
       const status = await readStatus(tab.path);
@@ -2032,19 +1944,10 @@ async function handleApi(
   }
 
   if (path.startsWith("/api/conflicts")) {
-    const q = path.indexOf("?");
-    const params = q === -1 ? "" : path.substring(q + 1);
-    let id = "";
-    for (const pair of params.split("&")) {
-      const eq = pair.indexOf("=");
-      if (eq === -1) continue;
-      if (pair.substring(0, eq) === "id") id = pair.substring(eq + 1);
-    }
-    const tab = findTab(id);
-    if (tab === null) {
-      send(res, 404, "application/json", JSON.stringify({ error: "no such tab" }));
-      return true;
-    }
+    const p = query(path);
+    const id = p.get("id") ?? "";
+    const tab = tabFor(id, res);
+    if (tab === null) return true;
     try {
       const pending = readPending(tab.path);
       const state = await readConflictState(tab.path, pending.kind);
@@ -2057,23 +1960,10 @@ async function handleApi(
   }
 
   if (path.startsWith("/api/conflict?")) {
-    const q = path.indexOf("?");
-    const params = path.substring(q + 1);
-    let id = "";
-    let file = "";
-    for (const pair of params.split("&")) {
-      const eq = pair.indexOf("=");
-      if (eq === -1) continue;
-      const key = pair.substring(0, eq);
-      const value = decodeURIComponent(pair.substring(eq + 1));
-      if (key === "id") id = value;
-      if (key === "path") file = value;
-    }
-    const tab = findTab(id);
-    if (tab === null) {
-      send(res, 404, "application/json", JSON.stringify({ error: "no such tab" }));
-      return true;
-    }
+    const p = query(path);
+    const file = p.get("path") ?? "";
+    const tab = tabFor(p.get("id") ?? "", res);
+    if (tab === null) return true;
     try {
       sendJson(res, JSON.stringify(await readConflictVersions(tab.path, file)));
     } catch (e) {
@@ -2085,11 +1975,8 @@ async function handleApi(
 
   if (path === "/api/resolve") {
     const body = JSON.parse(await readBody(req)) as ResolveRequest;
-    const tab = findTab(body.id);
-    if (tab === null) {
-      send(res, 404, "application/json", JSON.stringify({ error: "no such tab" }));
-      return true;
-    }
+    const tab = tabFor(body.id, res);
+    if (tab === null) return true;
     try {
       if (body.paths.length > 0) {
         await markAllResolved(tab.path, body.paths);
@@ -2111,11 +1998,8 @@ async function handleApi(
 
   if (path === "/api/op") {
     const body = JSON.parse(await readBody(req)) as GitOpRequest;
-    const tab = findTab(body.id);
-    if (tab === null) {
-      send(res, 404, "application/json", JSON.stringify({ error: "no such tab" }));
-      return true;
-    }
+    const tab = tabFor(body.id, res);
+    if (tab === null) return true;
     const opReq: OpRequest = {
       op: body.op,
       ref: body.ref,
@@ -2141,11 +2025,8 @@ async function handleApi(
 
   if (path === "/api/commit") {
     const body = JSON.parse(await readBody(req)) as CommitRequest;
-    const tab = findTab(body.id);
-    if (tab === null) {
-      send(res, 404, "application/json", JSON.stringify({ error: "no such tab" }));
-      return true;
-    }
+    const tab = tabFor(body.id, res);
+    if (tab === null) return true;
     try {
       const result = await commit(tab.path, body.summary, body.description, body.amend);
       sendJson(res, JSON.stringify(result));
@@ -2157,19 +2038,10 @@ async function handleApi(
   }
 
   if (path.startsWith("/api/headmessage")) {
-    const q = path.indexOf("?");
-    const params = q === -1 ? "" : path.substring(q + 1);
-    let id = "";
-    for (const pair of params.split("&")) {
-      const eq = pair.indexOf("=");
-      if (eq === -1) continue;
-      if (pair.substring(0, eq) === "id") id = pair.substring(eq + 1);
-    }
-    const tab = findTab(id);
-    if (tab === null) {
-      send(res, 404, "application/json", JSON.stringify({ error: "no such tab" }));
-      return true;
-    }
+    const p = query(path);
+    const id = p.get("id") ?? "";
+    const tab = tabFor(id, res);
+    if (tab === null) return true;
     const msg = await headMessage(tab.path);
     sendJson(res, JSON.stringify(msg === null ? { summary: "", description: "" } : msg));
     return true;
@@ -2179,23 +2051,11 @@ async function handleApi(
   // carries - see commitMessage(). Read when a reword starts, so what gets
   // edited is what is actually in the commit.
   if (path.startsWith("/api/message")) {
-    const q = path.indexOf("?");
-    const params = q === -1 ? "" : path.substring(q + 1);
-    let id = "";
-    let sha = "";
-    for (const pair of params.split("&")) {
-      const eq = pair.indexOf("=");
-      if (eq === -1) continue;
-      const key = pair.substring(0, eq);
-      const value = decodeURIComponent(pair.substring(eq + 1));
-      if (key === "id") id = value;
-      if (key === "sha") sha = value;
-    }
-    const tab = findTab(id);
-    if (tab === null) {
-      send(res, 404, "application/json", JSON.stringify({ error: "no such tab" }));
-      return true;
-    }
+    const p = query(path);
+    const id = p.get("id") ?? "";
+    const sha = p.get("sha") ?? "";
+    const tab = tabFor(id, res);
+    if (tab === null) return true;
     if (sha.trim().length === 0) {
       send(res, 400, "application/json", JSON.stringify({ error: "no commit given" }));
       return true;
@@ -2206,37 +2066,18 @@ async function handleApi(
   }
 
   if (path.startsWith("/api/diff")) {
-    const q = path.indexOf("?");
-    const params = q === -1 ? "" : path.substring(q + 1);
-    let id = "";
-    let sha = "";
-    let from = "";
-    let to = "";
-    let file = "";
-    let mode = "";
-    let whole = false;
-    let untracked = false;
-    let wt: string | null = null;
-    for (const pair of params.split("&")) {
-      const eq = pair.indexOf("=");
-      if (eq === -1) continue;
-      const key = pair.substring(0, eq);
-      const value = decodeURIComponent(pair.substring(eq + 1));
-      if (key === "id") id = value;
-      if (key === "sha") sha = value;
-      if (key === "from") from = value;
-      if (key === "to") to = value;
-      if (key === "path") file = value;
-      if (key === "mode") mode = value;
-      if (key === "whole") whole = value === "1";
-      if (key === "untracked") untracked = value === "1";
-      if (key === "wt") wt = value;
-    }
-    const tab = findTab(id);
-    if (tab === null) {
-      send(res, 404, "application/json", JSON.stringify({ error: "no such tab" }));
-      return true;
-    }
+    const p = query(path);
+    const id = p.get("id") ?? "";
+    const sha = p.get("sha") ?? "";
+    const from = p.get("from") ?? "";
+    const to = p.get("to") ?? "";
+    const file = p.get("path") ?? "";
+    const mode = p.get("mode") ?? "";
+    const whole = p.get("whole") === "1";
+    const untracked = p.get("untracked") === "1";
+    const wt = p.get("wt");
+    const tab = tabFor(id, res);
+    if (tab === null) return true;
     // Inline and Split need the entire file; Unified only wants the hunks.
     const context = whole ? FULL_CONTEXT : 3;
     try {
@@ -2265,33 +2106,19 @@ async function handleApi(
   // One side of a file, as bytes, for the diff view to preview an image or a
   // video. See engine/media.ts for how the two halves keep that safe.
   if (path.startsWith("/api/media?")) {
-    const params = path.substring(path.indexOf("?") + 1);
-    let id = "";
-    let file = "";
-    let oldPath = "";
-    let side = "";
-    const target = { sha: "", from: "", to: "", mode: "" };
-    let wt: string | null = null;
-    for (const pair of params.split("&")) {
-      const eq = pair.indexOf("=");
-      if (eq === -1) continue;
-      const key = pair.substring(0, eq);
-      const value = decodeURIComponent(pair.substring(eq + 1));
-      if (key === "id") id = value;
-      if (key === "path") file = value;
-      if (key === "oldPath") oldPath = value;
-      if (key === "side") side = value;
-      if (key === "sha") target.sha = value;
-      if (key === "from") target.from = value;
-      if (key === "to") target.to = value;
-      if (key === "mode") target.mode = value;
-      if (key === "wt") wt = value;
-    }
-    const tab = findTab(id);
-    if (tab === null) {
-      send(res, 404, "application/json", JSON.stringify({ error: "no such tab" }));
-      return true;
-    }
+    const p = query(path);
+    const file = p.get("path") ?? "";
+    const oldPath = p.get("oldPath") ?? "";
+    const side = p.get("side") ?? "";
+    const target = {
+      sha: p.get("sha") ?? "",
+      from: p.get("from") ?? "",
+      to: p.get("to") ?? "",
+      mode: p.get("mode") ?? "",
+    };
+    const wt = p.get("wt");
+    const tab = tabFor(p.get("id") ?? "", res);
+    if (tab === null) return true;
     try {
       const where = worktreeRoot(tab, wt);
       if (where === null) {
@@ -2318,25 +2145,12 @@ async function handleApi(
   }
 
   if (path.startsWith("/api/range")) {
-    const q = path.indexOf("?");
-    const params = q === -1 ? "" : path.substring(q + 1);
-    let id = "";
-    let from = "";
-    let to = "";
-    for (const pair of params.split("&")) {
-      const eq = pair.indexOf("=");
-      if (eq === -1) continue;
-      const key = pair.substring(0, eq);
-      const value = pair.substring(eq + 1);
-      if (key === "id") id = value;
-      if (key === "from") from = value;
-      if (key === "to") to = value;
-    }
-    const tab = findTab(id);
-    if (tab === null) {
-      send(res, 404, "application/json", JSON.stringify({ error: "no such tab" }));
-      return true;
-    }
+    const p = query(path);
+    const id = p.get("id") ?? "";
+    const from = p.get("from") ?? "";
+    const to = p.get("to") ?? "";
+    const tab = tabFor(id, res);
+    if (tab === null) return true;
     try {
       const files = await readRangeFiles(tab.path, from, to);
       const lines = await readRangeLines(tab.path, from, to);
@@ -2349,23 +2163,11 @@ async function handleApi(
   }
 
   if (path.startsWith("/api/commit")) {
-    const q = path.indexOf("?");
-    const params = q === -1 ? "" : path.substring(q + 1);
-    let id = "";
-    let sha = "";
-    for (const pair of params.split("&")) {
-      const eq = pair.indexOf("=");
-      if (eq === -1) continue;
-      const key = pair.substring(0, eq);
-      const value = pair.substring(eq + 1);
-      if (key === "id") id = value;
-      if (key === "sha") sha = value;
-    }
-    const tab = findTab(id);
-    if (tab === null) {
-      send(res, 404, "application/json", JSON.stringify({ error: "no such tab" }));
-      return true;
-    }
+    const p = query(path);
+    const id = p.get("id") ?? "";
+    const sha = p.get("sha") ?? "";
+    const tab = tabFor(id, res);
+    if (tab === null) return true;
     try {
       const files = await readCommitFiles(tab.path, sha);
       const lines = await readCommitLines(tab.path, sha);
@@ -2457,7 +2259,7 @@ function openWindow(
   // decide what the browser loads, and the window it configures is the one
   // holding an unauthenticated connection to this engine. A directory beside
   // the session file is per-user by construction.
-  const profile = join(stateDir(), profileName);
+  const profile = join(configDir(), profileName);
   // Chromium makes the profile itself, but not a missing parent.
   try {
     mkdirSync(profile, { recursive: true });

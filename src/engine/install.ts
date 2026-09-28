@@ -14,7 +14,6 @@ import { copyFileSync, existsSync, mkdirSync, writeFileSync, chmodSync, rmSync }
 import { homedir, tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 
-import { fromBase64 } from "./base64.ts";
 import { powershell } from "./quirks.ts";
 import { ICO_BASE64, PNG_BASE64 } from "../generated/icons.ts";
 import { NAME, VERSION } from "../generated/version.ts";
@@ -44,11 +43,6 @@ export function installDir(): string {
 
 export function installedBinary(): string {
   return join(installDir(), windows ? "gitc.exe" : "gitc");
-}
-
-/** True when gitc is running from where an install would have put it. */
-export function isInstalled(): boolean {
-  return existsSync(installedBinary());
 }
 
 export function runningFromInstall(): boolean {
@@ -193,7 +187,7 @@ function writeLinuxDesktop(target: string, lines: string[]): void {
   for (const icon of PNG_BASE64) {
     const dir = join(share, "icons", "hicolor", `${icon.size}x${icon.size}`, "apps");
     ensureDir(dir);
-    writeFileSync(join(dir, "gitc.png"), fromBase64(icon.data));
+    writeFileSync(join(dir, "gitc.png"), Buffer.from(icon.data, "base64"));
   }
   lines.push("  icons     " + join(share, "icons", "hicolor"));
 
@@ -258,7 +252,7 @@ export function install(): InstallReport {
 
   if (windows) {
     const ico = join(dir, "gitc.ico");
-    writeFileSync(ico, fromBase64(ICO_BASE64));
+    writeFileSync(ico, Buffer.from(ICO_BASE64, "base64"));
     lines.push("  icon      " + ico);
     if (writeWindowsShortcut(target, ico)) {
       lines.push("  shortcut  Start Menu");

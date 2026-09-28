@@ -927,22 +927,6 @@ export async function peeledTags(repo: string): Promise<Map<string, string>> {
   return out;
 }
 
-/** Ahead/behind counts against the current branch's upstream, if any. */
-export async function readAheadBehind(
-  repo: string,
-): Promise<{ ahead: number; behind: number } | null> {
-  const raw = await gitOrNull(repo, [
-    "rev-list",
-    "--left-right",
-    "--count",
-    "HEAD...@{upstream}",
-  ]);
-  if (raw === null) return null;
-  const f = raw.trim().split("\t");
-  if (f.length < 2) return null;
-  return { ahead: parseInt(f[0], 10), behind: parseInt(f[1], 10) };
-}
-
 /** Verifies a directory is inside a work tree before we adopt it as a tab. */
 export async function isRepo(path: string): Promise<boolean> {
   const raw = await gitOrNull(path, ["rev-parse", "--is-inside-work-tree"]);

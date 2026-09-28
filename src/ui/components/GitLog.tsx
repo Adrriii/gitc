@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { GitCall } from "../types";
-import { commandType } from "../settings";
+import { commandType } from "../gitCommand";
 import { Icon } from "./Icon";
 import { CloseButton } from "./CloseButton";
 import s from "./GitLog.module.scss";

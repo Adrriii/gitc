@@ -7,6 +7,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { at } from "./engine/safe.ts";
+import { configDir } from "./engine/paths.ts";
 
 export interface Tab {
   id: string;
@@ -31,14 +32,6 @@ export interface Session {
 }
 
 const MAX_RECENTS = 30;
-
-function configDir(): string {
-  const appData = process.env["APPDATA"];
-  if (appData !== undefined && appData.length > 0) return join(appData, "gitc");
-  const home = process.env["HOME"];
-  if (home !== undefined && home.length > 0) return join(home, ".config", "gitc");
-  return ".gitc";
-}
 
 function statePath(): string {
   return join(configDir(), "session.json");

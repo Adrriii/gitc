@@ -132,21 +132,6 @@ function sortTree<T>(nodes: TreeNode<T>[], recencyOf?: (item: T) => number): voi
   for (const node of nodes) sortTree(node.children, recencyOf);
 }
 
-/** Every folder path in the tree - what "expand all" needs to open. */
-export function folderPaths<T>(nodes: TreeNode<T>[]): string[] {
-  const out: string[] = [];
-  const walk = (list: TreeNode<T>[]) => {
-    for (const node of list) {
-      if (node.children.length > 0) {
-        out.push(node.path);
-        walk(node.children);
-      }
-    }
-  };
-  walk(nodes);
-  return out;
-}
-
 /**
  * Every item at or below these nodes.
  *

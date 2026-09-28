@@ -47,8 +47,8 @@ import { useDragWidth } from "./useDragWidth";
 import { useTheme } from "./theme";
 import { useGitLog } from "./useGitLog";
 import { useToasts } from "./useToasts";
+import { commandType } from "./gitCommand";
 import {
-  commandType,
   useFetchInterval,
   useFetchOnFocus,
   useHiddenCommands,

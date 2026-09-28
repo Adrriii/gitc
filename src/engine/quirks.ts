@@ -35,7 +35,7 @@ import { createServer } from "node:http";
  * anything. Three routes were tried:
  *
  *  - SetForegroundWindow directly. scriptc has no user-facing FFI and no
- *    windowing (docs/toolchain.md), so native calls are not reachable.
+ *    windowing, so native calls are not reachable.
  *  - PowerShell, which can reach it through Add-Type. This worked and was
  *    what gitc shipped, but see powershell() below: it flashes a console
  *    window every time, which on an app that has just failed to appear looks

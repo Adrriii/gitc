@@ -2,7 +2,6 @@ import { useCallback, useEffect, useState } from "react";
 import { UPDATE_LEVELS, type Bump } from "./version";
 import { VERSION } from "../generated/version";
 
-export { commandType } from "./gitCommand";
 
 /**
  * The settings that live in the preferences screen.

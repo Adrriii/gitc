@@ -281,3 +281,16 @@ export function cleanTempDir(): void {
   }
   privateDir = null;
 }
+
+/**
+ * Where gitc keeps everything that belongs to this user: the session, hidden
+ * refs, approved remotes, crash reports, avatar overrides, the browser
+ * profile. Per-user on every platform.
+ */
+export function configDir(): string {
+  const appData = process.env["APPDATA"];
+  if (appData !== undefined && appData.length > 0) return join(appData, "gitc");
+  const home = process.env["HOME"];
+  if (home !== undefined && home.length > 0) return join(home, ".config", "gitc");
+  return ".gitc";
+}

@@ -42,6 +42,7 @@ import { join } from "node:path";
 
 import { VERSION } from "../generated/version.ts";
 import { at } from "./safe.ts";
+import { configDir } from "./paths.ts";
 
 export interface CrashReport {
   /** The file name without its extension; what the window deletes by. */
@@ -61,16 +62,6 @@ const KEEP = 50;
 
 /** Report files are named by us; anything else in the directory is not one. */
 const ID_SHAPE = /^[0-9TZ-]+-[a-z]+(-[0-9]+)?$/;
-
-// The same directory as session.json, spelled the same way - see the note in
-// approvals.ts on why each of these files keeps its own copy.
-function configDir(): string {
-  const appData = process.env["APPDATA"];
-  if (appData !== undefined && appData.length > 0) return join(appData, "gitc");
-  const home = process.env["HOME"];
-  if (home !== undefined && home.length > 0) return join(home, ".config", "gitc");
-  return ".gitc";
-}
 
 /** Where reports are written. Shown in Preferences so they can be attached. */
 export function crashDir(): string {
