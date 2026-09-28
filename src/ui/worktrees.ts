@@ -82,6 +82,19 @@ export function findWorktree(worktrees: Worktree[], name: string): Worktree | un
   return worktrees.find((w) => w.name === name);
 }
 
+/**
+ * Whether two paths name the same directory, as a tab's and a worktree's
+ * would: git on Windows reports backslashes where a tab has slashes, and a
+ * drive path's case means nothing. A POSIX path keeps its case.
+ */
+export function samePath(a: string, b: string): boolean {
+  const norm = (p: string) => {
+    const s = p.replace(/\\/g, "/").replace(/\/+$/, "");
+    return /^[A-Za-z]:/.test(s) ? s.toLowerCase() : s;
+  };
+  return norm(a) === norm(b);
+}
+
 /** The summary the row and the list both show: "3 changed, 1 new". */
 export function changeCounts(w: Worktree): { modified: number; added: number } {
   return {

@@ -64,6 +64,7 @@ import {
   findWorktree,
   isActive,
   isWip,
+  samePath,
   wipHash,
   wipWorktree,
   worktreeLabel,
@@ -782,6 +783,10 @@ export function App() {
     };
   }, [activeId, fetchMinutes, fetchOnFocus, refresh, fetchedRef, checkedRef]);
 
+  const worktreesRef = useRef<Worktree[]>(NO_WORKTREES);
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
+
   /** Runs a repository operation and folds the outcome back into the UI. */
   const runOp = useCallback(
     async (args: OpArgs) => {
@@ -839,6 +844,16 @@ export function App() {
           });
           return;
         }
+        // A tab open on a worktree that no longer exists would only fail. Here
+        // rather than where the removal is asked for, so the forced second
+        // attempt after "remove anyway?" closes it too.
+        if (r.ok && args.op === "removeWorktree") {
+          const gone = worktreesRef.current.find((w) => w.name === args.name);
+          for (const t of sessionRef.current?.tabs ?? []) {
+            if (gone === undefined || t.host !== activeTab.host || !samePath(t.path, gone.path)) continue;
+            void api.close(t.id).then(setSession);
+          }
+        }
         if (!r.ok) {
           if (r.pending.length > 0) setWarning(r.note);
           else setError(r.note);
@@ -878,6 +893,7 @@ export function App() {
   // progress.
 
   const worktrees = data?.worktrees ?? NO_WORKTREES;
+  worktreesRef.current = worktrees;
   const elsewhere = useMemo(() => branchesElsewhere(worktrees), [worktrees]);
 
   /** Looks at another worktree without leaving this tab. */
@@ -954,6 +970,62 @@ export function App() {
     [activeTab, open, setConfirm],
   );
 
+  /**
+   * Deletes another checkout's directory and git's record of it, after saying
+   * what goes with it. Always asked: even a clean worktree holds ignored
+   * files - an .env, a node_modules - that nothing else has a copy of.
+   */
+  const removeWorktree = useCallback(
+    (w: Worktree) => {
+      if (w.current || w.main) return;
+      const label = worktreeLabel(w);
+      const dirty = w.status.length > 0;
+      setConfirm({
+        title: `Remove worktree ${label}?`,
+        body: (
+          <>
+            {w.prunable ? (
+              <p>Its directory is already gone; this clears git's record of it.</p>
+            ) : (
+              <p>
+                Deletes <b>{w.path}</b>, ignored files included.
+                {w.branch !== null && !w.detached && (
+                  <>
+                    {" "}The branch <b>{w.branch}</b> stays.
+                  </>
+                )}
+              </p>
+            )}
+            {dirty && (
+              <p>
+                It has {w.status.length} uncommitted {w.status.length === 1 ? "file" : "files"}, which
+                will be lost.
+              </p>
+            )}
+            {isActive(w) && (
+              <p>
+                Something changed there {Math.round(w.idleMs / 1000)} seconds ago. If an agent is
+                working in it, it will lose its checkout.
+              </p>
+            )}
+            {w.locked && (
+              <p>
+                It is locked{w.lockReason.length > 0 ? <>: <i>{w.lockReason}</i></> : ""}.
+              </p>
+            )}
+          </>
+        ),
+        confirmLabel: "Remove",
+        destructive: true,
+        onConfirm: () => {
+          setConfirm(null);
+          void runOp({ op: "removeWorktree", name: w.name, force: dirty || w.locked });
+        },
+      });
+    },
+    [runOp, setConfirm],
+  );
+
   const worktreeMenu = useCallback(
     (w: Worktree, x: number, y: number) => {
       const label = worktreeLabel(w);
@@ -979,9 +1051,21 @@ export function App() {
           setMenu(null);
         },
       });
+      if (!w.current && !w.main) {
+        items.push({ separator: true });
+        items.push({
+          label: `Remove ${label}`,
+          hint: w.prunable ? "clear git's record" : "delete its directory",
+          danger: true,
+          action: () => {
+            setMenu(null);
+            removeWorktree(w);
+          },
+        });
+      }
       setMenu({ x, y, items });
     },
-    [viewWorktree, editWorktree],
+    [viewWorktree, editWorktree, removeWorktree],
   );
 
   /**

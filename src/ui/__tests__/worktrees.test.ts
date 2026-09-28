@@ -2,6 +2,7 @@ import {
   branchesElsewhere,
   isActive,
   isWip,
+  samePath,
   wipHash,
   wipWorktree,
   worktreeLabel,
@@ -99,6 +100,13 @@ console.log("chips");
   );
   eq("no worktrees, no marks", groupRefs(["local:topic"], null).map((g) => g.elsewhere), [""]);
 }
+
+// A worktree's path as git reports it, against a tab's.
+eq("Windows separators are one", samePath("C:\\Code\\repo\\agent", "C:/Code/repo/agent"), true);
+eq("and a drive path's case is not", samePath("c:/code/Repo/agent", "C:/Code/repo/agent"), true);
+eq("a trailing separator is not", samePath("/work/agent/", "/work/agent"), true);
+eq("a POSIX path keeps its case", samePath("/work/Agent", "/work/agent"), false);
+eq("a different directory is different", samePath("/work/agent", "/work/agent2"), false);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 // exitCode, not exit(): exit() can abort a queued stdout write on Windows.

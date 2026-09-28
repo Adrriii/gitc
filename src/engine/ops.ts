@@ -14,6 +14,7 @@ import { extractCoAuthors, git, gitOrNull } from "./git.ts";
 import type { Person } from "./git.ts";
 import { needInRepo, safeArgument, safeRemoteUrl, tempFile } from "./paths.ts";
 import { readPending, readRemotes } from "./refs.ts";
+import { listWorktrees } from "./worktrees.ts";
 import { at, atOr } from "./safe.ts";
 
 export interface OpRequest {
@@ -964,6 +965,49 @@ export async function runOp(repo: string, req: OpRequest): Promise<OpResult> {
           confirm: "Delete " + req.ref + " anyway?",
         };
       }
+    }
+
+    /**
+     * Removes another checkout of this repository: its directory and git's
+     * record of it. The branch it had checked out stays.
+     *
+     * By name, looked up among the worktrees git registered - never a path
+     * from the request - so this can only ever delete a directory git itself
+     * calls a worktree. Gone-from-disk ones included: removing those only
+     * clears the record, which is most of why anyone would want this.
+     *
+     * Without `force` git refuses uncommitted changes and a lock, and that
+     * refusal comes back as a question. With it: --force for the changes,
+     * and a second one for the lock, which is how git spells "I mean it".
+     */
+    case "removeWorktree": {
+      const w = listWorktrees(repo).find((x) => x.name === req.name);
+      if (w === undefined || req.name.length === 0) throw new Error("no such worktree");
+      if (w.main) throw new Error("the main worktree cannot be removed");
+      if (w.current) throw new Error("that is the worktree this tab is in");
+      const args = ["worktree", "remove"];
+      if (req.force) args.push("--force");
+      if (req.force && w.locked) args.push("--force");
+      // git's own record of the path, absolute, so it cannot read as an option.
+      args.push(w.path);
+      try {
+        await git(repo, args);
+      } catch (e) {
+        const message = (e as Error).message;
+        if (req.force) throw e;
+        if (!message.includes("modified or untracked") && !message.includes("locked")) throw e;
+        return {
+          ok: false,
+          note: message.includes("locked")
+            ? req.name + " is locked" + (w.lockReason.length > 0 ? ": " + w.lockReason : "") + "."
+            : req.name + " has uncommitted changes. Removing it deletes them.",
+          pending: "",
+          refusal: NO_REFUSAL,
+          warn: false,
+          confirm: "Remove " + req.name + " anyway?",
+        };
+      }
+      return ok("removed worktree " + req.name);
     }
 
     case "deleteRemoteBranch": {
