@@ -96,6 +96,8 @@ import { allowedRequest } from "./engine/origin.ts";
 import { cleanTempDir, configDir } from "./engine/paths.ts";
 import {
   recordCrash,
+  recordFatal,
+  superviseEngine,
   listCrashes,
   clearCrashes,
   crashDir,
@@ -2346,7 +2348,7 @@ async function main(): Promise<void> {
   process.on("unhandledRejection", (reason: unknown) => {
     const msg = reason instanceof Error ? reason.message : String(reason);
     const name = reason instanceof Error ? reason.name : "thrown value";
-    recordCrash("engine", msg, name + " in a promise nothing was waiting on; the engine exited");
+    recordFatal("engine", msg, name + " in a promise nothing was waiting on; the engine exited");
     console.error("Unhandled promise rejection: " + msg);
     process.exit(1);
   });
@@ -2428,6 +2430,23 @@ async function main(): Promise<void> {
     spawn(report.target, args, { stdio: "ignore" });
     process.exit(0);
   }
+
+  // From here on this is an application launch, and it runs as the child of
+  // a supervisor that reports how it ends - see superviseEngine. Only after
+  // the self-install above, so it is the installed copy that is supervised.
+  // Headless engines are left alone: the dev loop has its terminal, and a
+  // serving engine's stderr already goes back to the gitc that started it.
+  if (!headless && !process.argv.includes("--supervised")) {
+    superviseEngine();
+    return;
+  }
+
+  // A logout, a shutdown, a `kill`, a Ctrl+C: all orderly ways to end, and
+  // they get the orderly exit. Without these the runtime died on the spot,
+  // leaving the tunnels open and the marker behind - and every machine that
+  // was shut down with gitc open reported a crash on its next start.
+  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", shutdown);
 
   // An update leaves the previous binary beside the new one, because Windows
   // will not delete a running executable. This is the next start.

@@ -8,19 +8,29 @@
 //
 // Three sources, because this runtime offers no single hook:
 //
-//   engine   an API request threw something nobody caught, or a promise
-//            rejected with nothing listening
+//   engine   an API request threw something nobody caught, a promise
+//            rejected with nothing listening, or the engine died on an
+//            uncaught throw - seen by the process supervising it
 //   window   the UI's own errors, posted here by the window
-//   stopped  a previous engine vanished without exiting - found on the next
-//            start, from the marker it left behind
+//   stopped  an engine killed by a signal - seen by its supervisor, or found
+//            on the next start from the marker it left behind
 //
-// The last exists because a fatal throw in scriptc exits 127 straight away:
-// no uncaughtException event, and the `exit` hook does not run (measured
-// 2026-09-22). So each engine writes a marker when it starts and removes it
-// on every exit the runtime does report. A marker still there, belonging to
-// an engine that no longer answers, is an engine that died - or was killed,
-// which from here looks the same. The message is lost in that case; the time
-// and version are not.
+// scriptc has no uncaughtException event, so a fatal error cannot be caught
+// from inside the process it kills. Under scriptc 0.1.7 an uncaught throw
+// prints "Uncaught <Name>: <message>" to stderr and exits 1, running the
+// `exit` hook; a stack overflow is a SIGSEGV, the out-of-memory killer a
+// SIGKILL, and neither runs anything (measured 2026-09-29; 0.1.0 exited 127
+// on a throw, without the hook). So a window launch runs the engine as a
+// child of a small supervisor - see superviseEngine - which keeps the tail of
+// its stderr and reports any abnormal end the moment it happens.
+//
+// The marker is the fallback for when there is no supervisor to see it, or
+// the supervisor went down too: each engine writes one when it starts and
+// removes it on a clean exit. A marker still there, belonging to an engine
+// that no longer answers, is an engine that died - or was killed, which from
+// here looks the same. The message is lost in that case; the version and the
+// start time are not, and the report is dated when the marker was found, not
+// when the engine died.
 //
 // No stack traces in the engine's reports: scriptc does not capture them. The
 // window's reports carry the browser's, which are real.
@@ -30,6 +40,7 @@
 // each other's copy, and a report is written from the moment things are going
 // wrong, which is the worst time to read-modify-write anything.
 
+import { spawn } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -83,12 +94,107 @@ function ensureDir(): string {
  */
 const written = new Set<string>();
 
+/** Set once this process has reported why it is about to exit non-zero. */
+let fatalRecorded = false;
+
+/** Characters of the engine's stderr kept for a report: the end is where a fatal error is. */
+const STDERR_TAIL = 8000;
+
 /** Writes one report. Never throws: failing to log must not become the crash. */
 export function recordCrash(source: string, message: string, detail: string): void {
   const key = source + "|" + message + "|" + detail;
   if (written.has(key)) return;
   written.add(key);
   writeReport(new Date().toISOString(), VERSION, source, message, detail);
+}
+
+/**
+ * Records the reason for the non-zero exit that follows.
+ *
+ * The marker then goes as on a clean exit: the report is already written, and
+ * leaving the marker would have the supervisor, or the next start, report the
+ * same death a second time with less to say about it.
+ */
+export function recordFatal(source: string, message: string, detail: string): void {
+  fatalRecorded = true;
+  recordCrash(source, message, detail);
+}
+
+/**
+ * Runs the engine as a child of this process and reports how it ended.
+ *
+ * scriptc offers no uncaughtException: an uncaught throw prints one line to
+ * stderr and exits 1, a stack overflow is a SIGSEGV, and the kernel's OOM
+ * killer sends SIGKILL. None of these can be caught from inside the engine,
+ * all of them can be seen from its parent.
+ *
+ * The child gets the same arguments plus --supervised, which is what stops it
+ * supervising itself. An argument rather than an environment variable: the
+ * engine's children inherit its environment, and the binary an update starts
+ * must supervise its own engine rather than believe it already has a parent.
+ *
+ * stdout is inherited so a launch from a terminal prints what it always did;
+ * stderr is passed through for the same reason, and kept. SIGTERM and SIGINT
+ * are handed to the engine so a logout or a Ctrl+C ends it cleanly, and this
+ * process then leaves with its exit code.
+ */
+export function superviseEngine(): void {
+  const child = spawn(process.execPath, [...process.argv.slice(2), "--supervised"], {
+    stdio: ["ignore", "inherit", "pipe"],
+  });
+  let tail = "";
+  child.stderr?.on("data", (d: Buffer) => {
+    process.stderr.write(d);
+    tail = (tail + d.toString()).slice(-STDERR_TAIL);
+  });
+  const stop = () => child.kill("SIGTERM");
+  process.on("SIGTERM", stop);
+  process.on("SIGINT", stop);
+  child.on("close", (code: number | null, signal: string | null) => {
+    if (child.pid !== undefined) reportEngineEnd(child.pid, code, signal, tail);
+    process.exit(code ?? 1);
+  });
+}
+
+/**
+ * Turns the marker of an engine that ended abnormally into a report with its
+ * last words.
+ *
+ * No marker means nothing to report: either the engine exited cleanly and
+ * removed it, or it never got as far as binding its port - a launch handed to
+ * the running gitc, a path that is not a repository - and whatever it had to
+ * say was a message for the terminal, not a crash.
+ */
+function reportEngineEnd(pid: number, code: number | null, signal: string | null, stderr: string): void {
+  const path = markerPath(pid);
+  if (!existsSync(path)) return;
+  let version = VERSION;
+  let started = "";
+  try {
+    const m = JSON.parse(readFileSync(path, "utf8")) as Marker;
+    version = m.version;
+    started = m.started;
+    unlinkSync(path);
+  } catch {
+    // Half-written or already gone. The death is still worth a report.
+  }
+  const lines = stderr.split("\n").filter((l) => l.trim().length > 0);
+  const last = at(lines, lines.length - 1);
+  const how = signal !== null ? "was killed by " + signal + signalHint(signal) : "exited with code " + String(code);
+  writeReport(
+    new Date().toISOString(),
+    version,
+    signal !== null ? "stopped" : "engine",
+    last ?? "gitc " + how,
+    "The engine started at " + started + " (process " + String(pid) + ") " + how + "." +
+      (stderr.length > 0 ? "\n\nIts last output:\n" + stderr : "\n\nIt wrote nothing to stderr."),
+  );
+}
+
+function signalHint(signal: string): string {
+  if (signal === "SIGSEGV") return " (a segmentation fault, usually a stack overflow from deep recursion)";
+  if (signal === "SIGKILL") return " (kill -9, or the system's out-of-memory killer)";
+  return "";
 }
 
 function writeReport(
@@ -204,8 +310,10 @@ function markerPath(pid: number): string {
 /**
  * Says "an engine is running here" until it exits in a way we get to see.
  *
- * Removed from the `exit` hook, which runs for process.exit and for a clean
- * end of the loop - every exit except the ones worth reporting.
+ * Removed from the `exit` hook on a clean exit only. The hook also runs when
+ * the engine dies on an uncaught throw, with code 1, and removing the marker
+ * then is what made those crashes vanish without a trace. A non-zero exit
+ * keeps it, unless recordFatal already said why.
  */
 export function markRunning(port: number): void {
   try {
@@ -218,7 +326,8 @@ export function markRunning(port: number): void {
     };
     const path = markerPath(process.pid);
     writeFileSync(path, JSON.stringify(m), "utf8");
-    process.on("exit", () => {
+    process.on("exit", (code: number) => {
+      if (code !== 0 && !fatalRecorded) return;
       try {
         if (existsSync(path)) unlinkSync(path);
       } catch {
