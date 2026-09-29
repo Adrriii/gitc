@@ -2060,6 +2060,8 @@ export function App() {
     ).length;
   }, [data]);
 
+  const resolving = conflicts !== null && conflicts.operation.length > 0;
+
   if (dead) {
     return <div className={s.boot}>gitc has stopped. You can close this window.</div>;
   }
@@ -2149,41 +2151,43 @@ export function App() {
               } as React.CSSProperties
             }
           >
-            <Sidebar
-              data={data}
-              submodules={submodules ?? data.submodules}
-              onContext={refMenu}
-              onSelectRef={(r) => revealCommit(r.hash)}
-              onCheckout={(ref) => checkoutRef("local", ref)}
-              onRemoteContext={remoteMenu}
-              onFolderContext={folderMenu}
-              onSetHidden={(refs, hide) => void setHidden(refs, hide)}
-              onOpenSubmodule={(sub) => void openSubmodule(sub)}
-              onSubmoduleContext={submoduleMenu}
-              onStashContext={stashMenu}
-              onViewWorktree={viewWorktree}
-              onEditWorktree={(w) => void editWorktree(w)}
-              onWorktreeContext={worktreeMenu}
-              onAddRemote={addRemote}
-              onNewBranch={() =>
-                setPrompt({
-                  title: "Create branch",
-                  label: `Branch from ${branch ?? "HEAD"}`,
-                  placeholder: "feature/my-work",
-                  confirmLabel: "Create & checkout",
-                  validate: validateRefName,
-                  onConfirm: (name) => {
-                    setPrompt(null);
-                    void runOp({ op: "createBranch", name, checkout: true });
-                  },
-                })
-              }
-            />
-            <div
-              className={s.vResizer}
-              onMouseDown={dragSidebar}
-              title="Drag to resize the sidebar"
-            />
+            <div style={{ display: resolving ? "none" : "contents" }}>
+              <Sidebar
+                data={data}
+                submodules={submodules ?? data.submodules}
+                onContext={refMenu}
+                onSelectRef={(r) => revealCommit(r.hash)}
+                onCheckout={(ref) => checkoutRef("local", ref)}
+                onRemoteContext={remoteMenu}
+                onFolderContext={folderMenu}
+                onSetHidden={(refs, hide) => void setHidden(refs, hide)}
+                onOpenSubmodule={(sub) => void openSubmodule(sub)}
+                onSubmoduleContext={submoduleMenu}
+                onStashContext={stashMenu}
+                onViewWorktree={viewWorktree}
+                onEditWorktree={(w) => void editWorktree(w)}
+                onWorktreeContext={worktreeMenu}
+                onAddRemote={addRemote}
+                onNewBranch={() =>
+                  setPrompt({
+                    title: "Create branch",
+                    label: `Branch from ${branch ?? "HEAD"}`,
+                    placeholder: "feature/my-work",
+                    confirmLabel: "Create & checkout",
+                    validate: validateRefName,
+                    onConfirm: (name) => {
+                      setPrompt(null);
+                      void runOp({ op: "createBranch", name, checkout: true });
+                    },
+                  })
+                }
+              />
+              <div
+                className={s.vResizer}
+                onMouseDown={dragSidebar}
+                title="Drag to resize the sidebar"
+              />
+            </div>
             {mergeFile !== null && conflicts !== null ? (
               <MergeEditor
                 tabId={activeTab.id}
@@ -2244,7 +2248,7 @@ export function App() {
               onMouseDown={dragPanel}
               title="Drag to resize the panel"
             />
-            {conflicts !== null && conflicts.operation.length > 0 ? (
+            {resolving ? (
               <ConflictPanel
                 tabId={activeTab.id}
                 state={conflicts}

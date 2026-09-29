@@ -70,7 +70,7 @@ export function MergeEditor({
   const outputRef = useRef<HTMLTextAreaElement>(null);
   const overlayRef = useRef<HTMLPreElement>(null);
   const gutterRef = useRef<HTMLDivElement>(null);
-  const syncing = useRef(false);
+  const echo = useRef<Partial<Record<"left" | "right", string>>>({});
 
   useEffect(() => {
     let live = true;
@@ -244,28 +244,39 @@ export function MergeEditor({
     [manual],
   );
 
+  const scrollToConflict = useCallback((idx: number, behavior: ScrollBehavior) => {
+    const pane = leftRef.current;
+    const el = regionRefs.current.get(idx);
+    if (!pane || !el) return;
+    const offset = el.getBoundingClientRect().top - pane.getBoundingClientRect().top;
+    const margin = Math.max(0, (pane.clientHeight - el.offsetHeight) / 2);
+    pane.scrollTo({ top: pane.scrollTop + offset - margin, behavior });
+  }, []);
+
+  useEffect(() => scrollToConflict(0, "auto"), [segments, scrollToConflict]);
+
   const jump = useCallback(
     (delta: number) => {
       if (total === 0) return;
       const next = (current + delta + total) % total;
       setCurrent(next);
-      regionRefs.current.get(next)?.scrollIntoView({ block: "center", behavior: "smooth" });
+      scrollToConflict(next, "smooth");
     },
-    [current, total],
+    [current, total, scrollToConflict],
   );
 
   // The panes are aligned, so they must also scroll together.
   const syncFrom = useCallback((from: "left" | "right") => {
-    if (syncing.current) return;
+    const to = from === "left" ? "right" : "left";
     const a = from === "left" ? leftRef.current : rightRef.current;
     const b = from === "left" ? rightRef.current : leftRef.current;
     if (!a || !b) return;
-    syncing.current = true;
+    const expected = echo.current[from];
+    echo.current[from] = undefined;
+    if (expected === `${a.scrollTop}:${a.scrollLeft}`) return;
     b.scrollTop = a.scrollTop;
     b.scrollLeft = a.scrollLeft;
-    requestAnimationFrame(() => {
-      syncing.current = false;
-    });
+    echo.current[to] = `${b.scrollTop}:${b.scrollLeft}`;
   }, []);
 
   const syncOutput = useCallback(() => {
