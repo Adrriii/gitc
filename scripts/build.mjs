@@ -71,7 +71,7 @@ const env = { ...process.env };
 // depend on the build machine's glibc - a binary built against glibc 2.39
 // refuses to start on anything older, which is most systems.
 const chosen = process.env.SCRIPTC_CC ?? "";
-const target = process.env.SCRIPTC_TARGET ?? "";
+let target = process.env.SCRIPTC_TARGET ?? "";
 
 if (chosen === "zigcc" || (windows && chosen === "")) {
   const zig = spawnSync("zig", ["version"], { encoding: "utf8", shell: true });
@@ -86,6 +86,17 @@ if (chosen === "zigcc" || (windows && chosen === "")) {
     process.exit(1);
   }
   env.SCRIPTC_CC = "zigcc";
+  // Name the Windows target explicitly. Without -target, `zig cc` compiles
+  // for the build machine's own CPU (-mcpu=native), and the release runner's
+  // CPU has AVX-512: the published gitc.exe died on start with an illegal
+  // instruction (0xc000001d) on every PC without it - Ryzen up to Zen 3 and
+  // most consumer Intel chips. An explicit triple makes zig use the baseline
+  // x86-64 CPU instead, so the binary runs on any 64-bit PC. Same reason the
+  // Linux release names x86_64-linux-musl.
+  if (windows && target === "") {
+    target = "x86_64-windows-gnu";
+    env.SCRIPTC_TARGET = target;
+  }
   if (target.length > 0) console.log(`building for ${target}`);
 } else {
   // Everywhere else scriptc drives clang directly. Checking here turns a
@@ -126,7 +137,7 @@ if (!existsSync(scriptc)) {
 // binary, but it inherits its parent's handles, so `gitc --version` from a
 // shell still prints. Only for a Windows binary, not a cross-build from here.
 const args = [scriptc, "build", entry, "-o", out, "--strip"];
-if (windows && target === "") args.push("--windows-subsystem", "gui");
+if (windows && (target === "" || target.includes("windows"))) args.push("--windows-subsystem", "gui");
 
 const r = spawnSync(node, args, {
   cwd: root,
