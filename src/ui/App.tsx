@@ -153,6 +153,19 @@ interface ConfirmState {
  * Not a full implementation of check-ref-format - just the mistakes someone
  * actually makes while typing a branch name into a box.
  */
+/** "origin/topic" as its remote and branch, or undefined when no known remote starts it. */
+function splitRemoteBranch(value: string, remotes: string[]): { remote: string; name: string } | undefined {
+  const v = value.trim();
+  const remote = remotes.find((r) => v.startsWith(r + "/"));
+  return remote === undefined ? undefined : { remote, name: v.substring(remote.length + 1) };
+}
+
+function remoteBranchError(value: string, remotes: string[]): string | null {
+  const dest = splitRemoteBranch(value, remotes);
+  if (dest === undefined) return `Start with a remote: ${remotes.map((r) => r + "/").join(", ")}`;
+  return validateRefName(dest.name);
+}
+
 function validateRefName(value: string): string | null {
   const v = value.trim();
   if (v.length === 0) return null;
@@ -233,7 +246,8 @@ export function App() {
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [updateProgress, setUpdateProgress] = useState<UpdateProgress | null>(null);
   /** Set when a push came back refused, and the user has to decide what to do. */
-  const [pushRefusal, setPushRefusal] = useState<PushRefusal | null>(null);
+  /** A refused push, with the request that was refused - forcing repeats it, destination included. */
+  const [pushRefusal, setPushRefusal] = useState<{ refusal: PushRefusal; args: OpArgs } | null>(null);
   const { colors: themeColors } = useTheme();
   // session, not the activeId derived further down: this runs before that is
   // in scope, and it is the same value.
@@ -786,6 +800,8 @@ export function App() {
   const worktreesRef = useRef<Worktree[]>(NO_WORKTREES);
   const sessionRef = useRef(session);
   sessionRef.current = session;
+  const remotesRef = useRef<string[]>([]);
+  remotesRef.current = data?.remotes ?? [];
 
   /** Runs a repository operation and folds the outcome back into the UI. */
   const runOp = useCallback(
@@ -799,7 +815,27 @@ export function App() {
         // A refused push is not an error either: it is a question, and the
         // whole point is that git's own message does not answer it.
         if (r.refusal.kind !== "none") {
-          setPushRefusal(r.refusal);
+          setPushRefusal({ refusal: r.refusal, args });
+          return;
+        }
+        // The engine would not guess where this push goes. Confirming runs
+        // the same push - forced or not - to what was confirmed, which then
+        // becomes the branch's upstream.
+        const pushTo = r.pushTo ?? "";
+        if (pushTo.length > 0) {
+          const remotes = remotesRef.current;
+          setPrompt({
+            title: "Push to",
+            label: r.note + " Push it to:",
+            initial: pushTo,
+            confirmLabel: args.force ? "Force push" : "Push",
+            validate: (v) => remoteBranchError(v, remotes),
+            onConfirm: (v) => {
+              setPrompt(null);
+              const dest = splitRemoteBranch(v, remotes);
+              if (dest !== undefined) void runOp({ ...args, remote: dest.remote, name: dest.name });
+            },
+          });
           return;
         }
         // A conflict comes back ok:false with a next step rather than as an
@@ -1647,6 +1683,38 @@ export function App() {
                 },
               }),
           });
+
+          // The branch a push goes to and a pull comes from. Offered with this
+          // branch's own name filled in, because the upstream that needs
+          // changing is nearly always the one it was made from - origin/main -
+          // and it does not have to exist yet: the next push creates it.
+          const tracked = data?.upstreams?.[ref.short];
+          const remotes = data?.remotes ?? [];
+          if (remotes.length > 0) {
+            items.push({
+              label: tracked === undefined ? "Set upstream" : `Change upstream (${tracked})`,
+              action: () =>
+                setPrompt({
+                  title: "Set upstream",
+                  label: `Remote branch ${ref.short} pushes to and pulls from`,
+                  initial: `${splitRemoteBranch(tracked ?? "", remotes)?.remote ?? remotes[0]}/${ref.short}`,
+                  confirmLabel: "Set upstream",
+                  validate: (v) => remoteBranchError(v, remotes),
+                  onConfirm: (v) => {
+                    setPrompt(null);
+                    const dest = splitRemoteBranch(v, remotes);
+                    if (dest === undefined) return;
+                    void runOp({ op: "setUpstream", ref: ref.short, remote: dest.remote, name: dest.name });
+                  },
+                }),
+            });
+          }
+          if (tracked !== undefined) {
+            items.push({
+              label: `Stop tracking ${tracked}`,
+              action: () => void runOp({ op: "setUpstream", ref: ref.short, remote: "" }),
+            });
+          }
           items.push({
             // A branch cannot be deleted while it is checked out; saying so is
             // better than offering an action that always fails.
@@ -1724,7 +1792,7 @@ export function App() {
 
       setMenu({ x, y, items });
     },
-    [branch, data?.hidden, runOp, setHidden, elsewhere, editWorktree],
+    [branch, data?.hidden, data?.upstreams, data?.remotes, runOp, setHidden, elsewhere, editWorktree],
   );
 
   /**
@@ -2013,28 +2081,8 @@ export function App() {
     () => ({
       onFetch: () => void runOp({ op: "fetch" }),
       onPull: () => void runOp({ op: "pull" }),
-      /**
-       * Pushing a branch that has no upstream has to pick a destination. One
-       * remote needs no question; several must not be guessed at, because
-       * publishing to the wrong one is not something you can quietly undo.
-       */
-      onPush: () => {
-        const remotes = data?.remotes ?? [];
-        const hasUpstream = (data?.upstream ?? null) !== null;
-        if (hasUpstream || remotes.length <= 1) {
-          void runOp({ op: "push" });
-          return;
-        }
-        setChoose({
-          title: "Push to which remote?",
-          body: `${branch ?? "This branch"} has no upstream yet. The remote you pick becomes its upstream.`,
-          options: remotes.map((r) => ({ value: r, label: r })),
-          onPick: (remote) => {
-            setChoose(null);
-            void runOp({ op: "push", remote });
-          },
-        });
-      },
+      // Where to is the engine's call to make or to ask about - see its push.
+      onPush: () => void runOp({ op: "push" }),
       onStash: () => void runOp({ op: "stash" }),
       onPop: () => void runOp({ op: "stashPop" }),
       onBranch: () =>
@@ -2398,10 +2446,11 @@ export function App() {
 
       {pushRefusal !== null && (
         <PushRefused
-          refusal={pushRefusal}
+          refusal={pushRefusal.refusal}
           onForce={() => {
+            const refused = pushRefusal.args;
             setPushRefusal(null);
-            void runOp({ op: "push", force: true });
+            void runOp({ ...refused, force: true });
           }}
           onPull={(mode) => {
             setPushRefusal(null);

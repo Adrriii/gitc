@@ -108,6 +108,11 @@ export interface OpResult {
    * including the great majority that git would allow without complaint.
    */
   confirm: string;
+  /**
+   * Set when a push needs its destination confirmed: the "remote/branch" to
+   * offer. See the push case - gitc never picks one on its own.
+   */
+  pushTo?: string;
 }
 
 const ok = (note: string): OpResult => ({
@@ -918,6 +923,14 @@ export async function runOp(repo: string, req: OpRequest): Promise<OpResult> {
       const start = at(req.shas, 0) ?? req.ref;
       if (start.trim().length > 0) safeArgument(start, "start point");
       const args = req.checkout ? ["checkout", "-b", req.name] : ["branch", req.name];
+      // Branching off a remote branch makes git track it, so a branch made
+      // from origin/main would push to main - which git then refuses, because
+      // the names differ. Tracking is only kept when it is the same branch:
+      // origin/feature checked out as feature.
+      const onRemote = readRemotes(repo).remotes.find((r) => start.startsWith(r + "/"));
+      if (onRemote !== undefined && start.substring(onRemote.length + 1) !== req.name) {
+        args.push("--no-track");
+      }
       if (start.trim().length > 0) args.push(start);
       await git(repo, args);
       return ok(req.checkout ? "created and checked out " + req.name : "created " + req.name);
@@ -929,6 +942,24 @@ export async function runOp(repo: string, req: OpRequest): Promise<OpResult> {
       needRef(req.ref, "branch");
       await git(repo, ["branch", "-m", req.ref, req.name]);
       return ok("renamed to " + req.name);
+    }
+
+    case "setUpstream": {
+      needRef(req.ref, "branch");
+      if (req.remote.length === 0) {
+        await git(repo, ["branch", "--unset-upstream", req.ref]);
+        return ok(req.ref + " no longer tracks anything");
+      }
+      if (!readRemotes(repo).remotes.includes(req.remote)) {
+        throw new Error("No such remote: " + req.remote);
+      }
+      needRef(req.name, "remote branch");
+      // Written as config rather than with --set-upstream-to, which wants the
+      // remote branch to exist already. The usual reason to set an upstream
+      // is a branch not published yet, and the next push creates it.
+      await git(repo, ["config", "branch." + req.ref + ".remote", req.remote]);
+      await git(repo, ["config", "branch." + req.ref + ".merge", "refs/heads/" + req.name]);
+      return ok(req.ref + " now tracks " + req.remote + "/" + req.name);
     }
 
     case "deleteBranch": {
@@ -1585,78 +1616,90 @@ export async function runOp(repo: string, req: OpRequest): Promise<OpResult> {
     }
 
     case "push": {
-      // Trimmed: git ends it with a newline, and this goes into rev-list
-      // ranges where "origin/main\n..HEAD" resolves to nothing at all.
-      const upstreamRaw = await gitOrNull(repo, ["rev-parse", "--abbrev-ref", "@{upstream}"]);
-      const upstream = upstreamRaw === null ? null : upstreamRaw.trim();
-      if (upstream !== null && upstream.length > 0) {
-        if (req.force) {
-          // --force-with-lease, never a bare --force: it refuses if the remote
-          // has moved since our last fetch, so a force decided on one view of
-          // the remote cannot land on a different one.
-          try {
-            await git(repo, ["push", "--force-with-lease"]);
-            return ok("force-pushed to " + upstream);
-          } catch (e) {
-            const message = (e as Error).message;
-            // The lease said no: somebody pushed between the decision and the
-            // act. Ask again with current numbers rather than reporting a
-            // failure - the answer may well be different now.
-            if (!isRefusal(message) && !message.includes("stale info")) throw e;
-            const refusal = await classifyRefusal(repo, upstream);
-            return {
-              ok: false,
-              note: "The remote moved while you were deciding.",
-              pending: "",
-              refusal,
-              warn: false,
-              confirm: "",
-            };
-          }
-        }
+      // Where a push goes is never guessed. Publishing to the wrong branch or
+      // the wrong remote cannot be taken back - the commits are out the moment
+      // it lands - so gitc pushes without asking only where the branch's
+      // configuration already says, unambiguously, and asks otherwise.
+      //
+      // Ambiguous is the common trap: a branch made from origin/main tracks
+      // origin/main, so its "upstream" is the branch it started from, not
+      // where its work belongs. git's default push.default=simple refuses
+      // that push; gitc asks instead, with the branch's own name filled in.
+      // A push.default set to anything else is somebody's deliberate choice,
+      // and followed.
+      const branchName = (await git(repo, ["rev-parse", "--abbrev-ref", "HEAD"])).trim();
+      if (branchName === "HEAD") throw new Error("Check out a branch to push it.");
+      const remotes = readRemotes(repo).remotes;
+      if (remotes.length === 0) throw new Error("This repository has no remotes configured.");
 
-        try {
-          await git(repo, ["push"]);
-          return ok("pushed");
-        } catch (e) {
-          const message = (e as Error).message;
-          if (!isRefusal(message)) throw e;
-          const refusal = await classifyRefusal(repo, upstream);
+      let args = ["push"];
+      let target = "";
+      if (req.remote.length > 0) {
+        // A destination the user confirmed. It becomes the upstream first, so
+        // the next push - including a forced one after a refusal - goes to
+        // the same place without asking again.
+        if (!remotes.includes(req.remote)) throw new Error("No such remote: " + req.remote);
+        needRef(req.name, "remote branch");
+        await git(repo, ["config", "branch." + branchName + ".remote", req.remote]);
+        await git(repo, ["config", "branch." + branchName + ".merge", "refs/heads/" + req.name]);
+        args = ["push", req.remote, "HEAD:refs/heads/" + req.name];
+        target = req.remote + "/" + req.name;
+      } else {
+        // Trimmed: git ends it with a newline, and this goes into rev-list
+        // ranges where "origin/main\n..HEAD" resolves to nothing at all.
+        const upstream = ((await gitOrNull(repo, ["rev-parse", "--abbrev-ref", "@{upstream}"])) ?? "").trim();
+        const remote = remotes.find((r) => upstream.startsWith(r + "/"));
+        const pushDefault = ((await gitOrNull(repo, ["config", "push.default"])) ?? "").trim();
+        const clear =
+          remote !== undefined &&
+          (upstream.substring(remote.length + 1) === branchName ||
+            (pushDefault.length > 0 && pushDefault !== "simple"));
+        if (!clear) {
+          const suggest = remote ?? (remotes.includes("origin") ? "origin" : remotes[0]);
           return {
             ok: false,
             note:
-              refusal.kind === "rewrite"
-                ? "The remote still has the old version of these commits."
-                : refusal.kind === "behind"
-                  ? "This branch is behind the remote."
-                  : "The remote has commits you do not.",
+              upstream.length === 0
+                ? branchName + " has not been pushed yet."
+                : branchName + " tracks " + upstream + ", a branch of another name.",
             pending: "",
-            refusal,
+            refusal: NO_REFUSAL,
             warn: false,
             confirm: "",
+            pushTo: suggest + "/" + branchName,
           };
         }
+        target = upstream;
       }
 
-      // No upstream yet, so one has to be chosen. Defaulting to "origin"
-      // silently picks a destination the user may not have meant when there
-      // are several - and publishing to the wrong remote is not undoable.
-      const remotes = readRemotes(repo).remotes;
-      let remote = req.remote.trim();
-      if (remote.length === 0) {
-        if (remotes.length === 0) {
-          throw new Error("This repository has no remotes configured.");
-        }
-        if (remotes.length > 1) {
-          throw new Error("Choose which remote to push to: " + remotes.join(", "));
-        }
-        remote = remotes[0];
-      } else if (!remotes.includes(remote)) {
-        throw new Error("No such remote: " + remote);
+      // --force-with-lease, never a bare --force: it refuses if the remote has
+      // moved since our last fetch, so a force decided on one view of the
+      // remote cannot land on a different one.
+      try {
+        await git(repo, req.force ? [...args, "--force-with-lease"] : args);
+        return ok((req.force ? "force-pushed to " : "pushed to ") + target);
+      } catch (e) {
+        const message = (e as Error).message;
+        // A lease that said no means somebody pushed between the decision and
+        // the act. Ask again with current numbers rather than reporting a
+        // failure - the answer may well be different now.
+        if (!isRefusal(message) && !(req.force && message.includes("stale info"))) throw e;
+        const refusal = await classifyRefusal(repo, target);
+        return {
+          ok: false,
+          note: req.force
+            ? "The remote moved while you were deciding."
+            : refusal.kind === "rewrite"
+              ? "The remote still has the old version of these commits."
+              : refusal.kind === "behind"
+                ? "This branch is behind the remote."
+                : "The remote has commits you do not.",
+          pending: "",
+          refusal,
+          warn: false,
+          confirm: "",
+        };
       }
-
-      await git(repo, ["push", "-u", remote, "HEAD"]);
-      return ok("pushed to " + remote + " and set upstream");
     }
 
     // --- finishing or abandoning an in-progress operation -----------------

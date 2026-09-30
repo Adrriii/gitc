@@ -328,6 +328,8 @@ export interface OpResult {
   warn: boolean;
   /** A question; answering yes re-runs the same operation with force. */
   confirm: string;
+  /** A push destination to confirm, as "remote/branch". */
+  pushTo?: string;
 }
 
 /** A stash entry, as the sidebar lists it. */
@@ -345,6 +347,8 @@ export interface GraphPayload {
   remoteDetail: Remote[];
   /** Upstream of the checked-out branch, as "remote/branch". */
   upstream: string | null;
+  /** Upstream of every local branch that has one. Absent from older remote engines. */
+  upstreams?: Record<string, string>;
   refs: Ref[];
   commits: Commit[];
   rows: GraphRow[];

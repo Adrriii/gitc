@@ -632,12 +632,15 @@ async function graphPayload(tab: Tab, limit: number): Promise<string> {
   const remoteInfo = readRemotes(tab.path);
   const upstream =
     head.branch === null ? null : (remoteInfo.upstreams.get(head.branch) ?? null);
+  const upstreams: Record<string, string> = {};
+  for (const [branch, tracked] of remoteInfo.upstreams) upstreams[branch] = tracked;
 
   return JSON.stringify({
     head,
     remotes: remoteInfo.remotes,
     remoteDetail: remoteInfo.detail,
     upstream,
+    upstreams,
     refs,
     commits: out,
     rows,
