@@ -474,3 +474,21 @@ export interface ConflictVersions {
   hasOurs: boolean;
   hasTheirs: boolean;
 }
+
+export interface AiProvider {
+  id: string;
+  name: string;
+  kind: string;
+  baseUrl: string;
+  key: string;
+  model: string;
+  command: string;
+}
+
+export interface AiConfig {
+  enabled: boolean;
+  features: string[];
+  providers: AiProvider[];
+  defaultId: string;
+  repos: { host: string; path: string; providerId: string }[];
+}

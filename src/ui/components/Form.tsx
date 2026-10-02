@@ -10,6 +10,8 @@ export interface Field {
   validate?: (value: string) => string | null;
   /** Blank allowed. Defaults to required. */
   optional?: boolean;
+  /** Typed into a password box. */
+  secret?: boolean;
 }
 
 /**
@@ -74,6 +76,7 @@ export function Form({
             <input
               ref={i === 0 ? first : undefined}
               className={s.input}
+              type={f.secret === true ? "password" : "text"}
               value={values[f.key] ?? ""}
               placeholder={f.placeholder}
               onChange={(e) => setValues((v) => ({ ...v, [f.key]: e.target.value }))}

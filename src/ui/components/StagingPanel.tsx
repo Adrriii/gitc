@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { WorkingFile } from "../types";
 import { api } from "../api";
+import { useAi } from "../ai";
 import { stagedFiles, unstagedFiles } from "../staging";
 import { Confirm } from "./Confirm";
 import { Icon } from "./Icon";
@@ -122,6 +123,10 @@ export function StagingPanel({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<{ tracked: string[]; untracked: string[] } | null>(null);
+  const { feature } = useAi();
+  const [writing, setWriting] = useState(false);
+  const [before, setBefore] = useState<{ summary: string; description: string } | undefined>();
+  const writeRun = useRef(0);
 
   // This panel is not remounted when the repository changes - it is handed a
   // new tabId and keeps its state - so a discard left waiting for an answer
@@ -131,6 +136,9 @@ export function StagingPanel({
   // application's own confirms, enforced there by ConfirmState.tabId.
   useEffect(() => {
     setConfirm(null);
+    writeRun.current++;
+    setWriting(false);
+    setBefore(undefined);
   }, [tabId]);
 
   // Shared with the application, which follows the same lists to decide what
@@ -176,6 +184,42 @@ export function StagingPanel({
       untracked: files.filter((f) => f.untracked).map((f) => f.path),
     });
   };
+
+  const write = () => {
+    writeRun.current++;
+    if (writing) {
+      setWriting(false);
+      return;
+    }
+    const run = writeRun.current;
+    const typed = { summary, description };
+    setWriting(true);
+    setError(null);
+    api
+      .writeCommitMessage(tabId, [summary.trim(), description.trim()].filter((t) => t.length > 0).join("\n\n"), amend)
+      .then((m) => {
+        if (run !== writeRun.current) return;
+        setBefore(typed);
+        setSummary(m.summary);
+        setDescription(m.description);
+      })
+      .catch((e: Error) => {
+        if (run === writeRun.current) setError(e.message);
+      })
+      .finally(() => {
+        if (run === writeRun.current) setWriting(false);
+      });
+  };
+
+  const undoWrite = () => {
+    if (before === undefined) return;
+    setSummary(before.summary);
+    setDescription(before.description);
+    setBefore(undefined);
+  };
+
+  const aiOn = feature("commitMessage");
+  const nothingToDescribe = staged.length === 0 && !amend;
 
   const canCommit = (staged.length > 0 || amend) && summary.trim().length > 0;
   const commitLabel =
@@ -296,11 +340,14 @@ export function StagingPanel({
 
         <div className={s.summaryRow}>
           <input
-            className={s.summary}
+            className={`${s.summary} ${aiOn ? s.summaryAi : ""} ${writing ? s.writing : ""}`}
             placeholder="Commit summary"
             value={summary}
             maxLength={200}
-            onChange={(e) => setSummary(e.target.value)}
+            onChange={(e) => {
+              setSummary(e.target.value);
+              setBefore(undefined);
+            }}
             onKeyDown={(e) => {
               // Ctrl+Enter commits, the convention everywhere else.
               if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && canCommit) {
@@ -309,6 +356,7 @@ export function StagingPanel({
                   setSummary("");
                   setDescription("");
                   setAmend(false);
+                  setBefore(undefined);
                   onCommitted();
                 });
               }
@@ -320,13 +368,34 @@ export function StagingPanel({
           >
             {SUMMARY_LIMIT - summary.length}
           </span>
+          {aiOn && (
+            <button
+              className={`${s.aiBtn} ${writing ? s.aiBusy : ""}`}
+              disabled={!writing && before === undefined && nothingToDescribe}
+              onClick={before !== undefined && !writing ? undoWrite : write}
+              title={
+                writing
+                  ? "Writing the message - click to stop waiting"
+                  : before !== undefined
+                    ? "Put back what was here before"
+                    : nothingToDescribe
+                      ? "Stage changes for AI to describe"
+                      : "Write the summary and description from the staged changes"
+              }
+            >
+              <Icon name={before !== undefined && !writing ? "undo" : "sparkle"} size={13} />
+            </button>
+          )}
         </div>
 
         <textarea
-          className={s.description}
+          className={`${s.description} ${writing ? s.writing : ""}`}
           placeholder="Description"
           value={description}
-          onChange={(e) => setDescription(e.target.value)}
+          onChange={(e) => {
+            setDescription(e.target.value);
+            setBefore(undefined);
+          }}
         />
 
         <button
@@ -338,6 +407,7 @@ export function StagingPanel({
               setSummary("");
               setDescription("");
               setAmend(false);
+              setBefore(undefined);
               onCommitted();
             })
           }

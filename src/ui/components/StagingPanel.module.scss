@@ -292,6 +292,52 @@
   color: var(--amber);
 }
 
+.summaryAi {
+  padding-right: 66px;
+}
+
+.aiBtn {
+  position: absolute;
+  right: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: var(--radius);
+  background: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+
+  &:hover:not(:disabled) {
+    background: var(--bg-3);
+    color: var(--accent-fg);
+  }
+  &:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+}
+
+.aiBusy {
+  color: var(--accent-fg);
+
+  svg {
+    animation: aiSpin 1.2s linear infinite;
+  }
+}
+
+@keyframes aiSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.writing {
+  opacity: 0.6;
+}
+
 .description {
   min-height: 66px;
   resize: vertical;

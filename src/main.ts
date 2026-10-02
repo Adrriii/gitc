@@ -58,6 +58,17 @@ import { readMedia } from "./engine/media.ts";
 import { readHead, readRefs, readPending, readRemotes, commonDir } from "./engine/refs.ts";
 import type { Ref } from "./engine/refs.ts";
 import { loadHidden, saveHidden } from "./engine/visibility.ts";
+import {
+  commitContext,
+  loadAi,
+  masked,
+  parseConfig,
+  providerFor,
+  saveAi,
+  testProvider,
+  writeCommitMessage,
+} from "./engine/ai.ts";
+import type { CommitContext } from "./engine/ai.ts";
 import { listDir } from "./engine/browse.ts";
 import { readSubmodules, listSubmodules } from "./engine/submodules.ts";
 import { install, uninstall, installedBinary, runningFromInstall } from "./engine/install.ts";
@@ -778,6 +789,38 @@ async function proxyToHost(
   }
 }
 
+async function contextFor(tab: Tab, amend: boolean): Promise<CommitContext | { error: string }> {
+  const flag = amend ? "1" : "0";
+  if (tab.host === null) {
+    try {
+      return await commitContext(tab.path, amend);
+    } catch (e) {
+      return { error: (e as Error).message };
+    }
+  }
+
+  const host = tab.host;
+  const conn = await connectionFor(host);
+  if ("error" in conn) return { error: conn.error };
+  conn.inFlight++;
+  const got = await sendThrough(conn, "/api/commit-context?id=" + encodeURIComponent(tab.id) + "&amend=" + flag, "GET", undefined, "");
+  conn.inFlight--;
+  if (!got.ok) return { error: host + ": " + got.error };
+  try {
+    const parsed = JSON.parse(got.body.toString("utf8")) as {
+      diff?: string;
+      numstat?: string;
+      recent?: string[];
+      error?: string;
+    };
+    if (parsed.error !== undefined) return { error: host + ": " + parsed.error };
+    if (parsed.diff === undefined) return { error: "the gitc on " + host + " is too old to describe changes" };
+    return { diff: parsed.diff, numstat: parsed.numstat ?? "", recent: parsed.recent ?? [] };
+  } catch {
+    return { error: "the gitc on " + host + " is too old to describe changes" };
+  }
+}
+
 /**
  * Removes a connection, but only if it is still the one on offer.
  *
@@ -1244,6 +1287,7 @@ const LOCAL_ONLY = [
   "/api/changelog",
   "/api/crash",
   "/api/crashes",
+  "/api/ai",
 ];
 
 function isLocalOnly(path: string): boolean {
@@ -2024,6 +2068,61 @@ async function handleApi(
     } catch (e) {
       const err = e as Error;
       send(res, 500, "application/json", JSON.stringify({ error: err.message }));
+    }
+    return true;
+  }
+
+  if (path === "/api/ai") {
+    if (req.method === "POST") {
+      sendJson(res, JSON.stringify(masked(saveAi(parseConfig(await readBody(req))))));
+      return true;
+    }
+    sendJson(res, JSON.stringify(masked(loadAi())));
+    return true;
+  }
+
+  if (path === "/api/ai/test") {
+    const body = JSON.parse(await readBody(req)) as { providerId: string };
+    const provider = loadAi().providers.find((p) => p.id === body.providerId);
+    if (provider === undefined) {
+      send(res, 404, "application/json", JSON.stringify({ error: "no such provider" }));
+      return true;
+    }
+    sendJson(res, JSON.stringify(await testProvider(provider)));
+    return true;
+  }
+
+  if (path === "/api/ai/commit-message") {
+    const body = JSON.parse(await readBody(req)) as { id: string; hint: string; amend: boolean };
+    const tab = tabFor(body.id, res);
+    if (tab === null) return true;
+    const provider = providerFor(loadAi(), tab.host ?? "", tab.path);
+    if (provider === undefined) {
+      send(res, 400, "application/json", JSON.stringify({ error: "No AI provider - add one in Preferences > AI" }));
+      return true;
+    }
+    const context = await contextFor(tab, body.amend);
+    if ("error" in context) {
+      send(res, 502, "application/json", JSON.stringify(context));
+      return true;
+    }
+    const message = await writeCommitMessage(provider, context, body.hint);
+    if ("error" in message) {
+      send(res, 502, "application/json", JSON.stringify(message));
+      return true;
+    }
+    sendJson(res, JSON.stringify(message));
+    return true;
+  }
+
+  if (path.startsWith("/api/commit-context")) {
+    const p = query(path);
+    const tab = tabFor(p.get("id") ?? "", res);
+    if (tab === null) return true;
+    try {
+      sendJson(res, JSON.stringify(await commitContext(tab.path, p.get("amend") === "1")));
+    } catch (e) {
+      send(res, 500, "application/json", JSON.stringify({ error: (e as Error).message }));
     }
     return true;
   }

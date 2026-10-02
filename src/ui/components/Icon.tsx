@@ -48,6 +48,8 @@ export type IconName =
   | "warning"
   | "monitor"
   | "copy"
+  | "sparkle"
+  | "undo"
   | "worktree";
 
 const PATHS: Record<IconName, React.ReactNode> = {
@@ -270,6 +272,18 @@ const PATHS: Record<IconName, React.ReactNode> = {
     <>
       <path d="M9 9h11v11H9z" />
       <path d="M5 15H4V4h11v1" />
+    </>
+  ),
+  sparkle: (
+    <>
+      <path d="M10 3.5l1.8 5.2 5.2 1.8-5.2 1.8L10 17.5l-1.8-5.2L3 10.5l5.2-1.8z" />
+      <path d="M18 15l.8 2.2 2.2.8-2.2.8L18 21l-.8-2.2-2.2-.8 2.2-.8z" />
+    </>
+  ),
+  undo: (
+    <>
+      <path d="M9 14L4 9l5-5" />
+      <path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11" />
     </>
   ),
 };

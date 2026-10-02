@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import type { CrashList, CrashReport, ReleaseNotes, UpdateInfo } from "../types";
+import type { AiConfig, AiProvider, CrashList, CrashReport, ReleaseNotes, UpdateInfo } from "../types";
+import { AI_KINDS, kindLabel, useAi } from "../ai";
+import { Form, type Field } from "./Form";
 import { since } from "../ago";
 import {
   FETCH_INTERVALS,
@@ -95,16 +97,17 @@ function Notes({ lines }: { lines: Line[] }) {
   );
 }
 
-type Section = "theme" | "editor" | "repository" | "commands" | "crashes" | "about";
+export type Section = "theme" | "editor" | "repository" | "ai" | "commands" | "crashes" | "about";
 
 const SECTIONS: {
   id: Section;
   label: string;
-  icon: "eye" | "edit" | "repo" | "fetch" | "branch" | "warning";
+  icon: "eye" | "edit" | "repo" | "fetch" | "branch" | "warning" | "sparkle";
 }[] = [
   { id: "theme", label: "Theme", icon: "eye" },
   { id: "editor", label: "Editor", icon: "edit" },
   { id: "repository", label: "Repository", icon: "fetch" },
+  { id: "ai", label: "AI", icon: "sparkle" },
   { id: "commands", label: "Command log", icon: "branch" },
   { id: "crashes", label: "Crash reports", icon: "warning" },
   { id: "about", label: "About", icon: "repo" },
@@ -200,6 +203,203 @@ function Row({
   );
 }
 
+function providerFields(p: AiProvider): Field[] {
+  const name: Field = { key: "name", label: "Name", initial: p.name, placeholder: kindLabel(p.kind) };
+  if (p.kind === "claude-code") {
+    return [
+      name,
+      { key: "model", label: "Model", initial: p.model, placeholder: "Claude Code's own choice, or sonnet, opus, haiku", optional: true },
+      { key: "command", label: "Command", initial: p.command, placeholder: "claude, found on PATH", optional: true },
+    ];
+  }
+  const key: Field = {
+    key: "key",
+    label: "API key",
+    initial: p.key,
+    placeholder: p.kind === "openai" ? "none needed for a local server" : "sk-ant-...",
+    optional: p.kind === "openai",
+    secret: true,
+  };
+  const model: Field = {
+    key: "model",
+    label: "Model",
+    initial: p.model,
+    placeholder: p.kind === "anthropic" ? "claude-opus-5-5" : "provider/model-name",
+  };
+  if (p.kind === "anthropic") return [name, key, model];
+  const baseUrl: Field = {
+    key: "baseUrl",
+    label: "Base URL",
+    initial: p.baseUrl,
+    validate: (v) => (/^https?:\/\//.test(v.trim()) ? null : "Starts with http:// or https://"),
+  };
+  return [name, baseUrl, key, model];
+}
+
+function newProvider(kind: string): AiProvider {
+  return {
+    id: Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
+    name: "",
+    kind,
+    baseUrl: kind === "openai" ? "https://openrouter.ai/api/v1" : "",
+    key: "",
+    model: kind === "anthropic" ? "claude-opus-5-5" : "",
+    command: "",
+  };
+}
+
+function AiPane() {
+  const { config, save } = useAi();
+  const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState<AiProvider | undefined>();
+  const [tests, setTests] = useState(new Map<string, string>());
+
+  if (config === undefined) {
+    return (
+      <>
+        <h1>AI</h1>
+        <span className={s.hint}>reading the AI settings...</span>
+      </>
+    );
+  }
+
+  const update = (patch: Partial<AiConfig>) => void save({ ...config, ...patch });
+  const setFeature = (name: string, on: boolean) =>
+    update({ features: on ? [...config.features.filter((f) => f !== name), name] : config.features.filter((f) => f !== name) });
+  const note = (id: string, text: string) => setTests((t) => new Map(t).set(id, text));
+  const test = (id: string) => {
+    note(id, "testing...");
+    api
+      .testAi(id)
+      .then((r) => note(id, r.error !== undefined ? r.error : `ok, ${r.ms ?? 0} ms`))
+      .catch((e: Error) => note(id, e.message));
+  };
+  const store = (p: AiProvider) => {
+    const known = config.providers.some((q) => q.id === p.id);
+    const providers = known ? config.providers.map((q) => (q.id === p.id ? p : q)) : [...config.providers, p];
+    update({ providers, defaultId: config.defaultId.length > 0 ? config.defaultId : p.id });
+  };
+
+  const empty = config.providers.length === 0;
+  const expanded = open || empty;
+  const byDefault = config.providers.find((p) => p.id === config.defaultId) ?? config.providers[0];
+
+  return (
+    <>
+      <h1>AI</h1>
+      <Row
+        label="AI features"
+        hint="Off by default. While off, none of what follows exists anywhere in gitc. Requests go straight from this machine to the provider you choose, and API keys are kept in ai.json in the settings folder."
+      >
+        <div className={s.choices}>
+          <button className={config.enabled ? s.on : ""} onClick={() => update({ enabled: true })}>
+            On
+          </button>
+          <button className={config.enabled ? "" : s.on} onClick={() => update({ enabled: false })}>
+            Off
+          </button>
+        </div>
+      </Row>
+
+      {config.enabled && (
+        <>
+          <Row
+            label="Providers"
+            hint="Every repository uses the default unless you pick another for it, from the provider shown in the status bar."
+          >
+            <div className={s.providers}>
+              <button className={s.providersHead} onClick={() => setOpen(!expanded)} disabled={empty}>
+                <Icon name={expanded ? "chevronDown" : "chevronRight"} size={11} className={s.crashChevron} />
+                {empty
+                  ? "No provider yet"
+                  : `${config.providers.length} provider${config.providers.length === 1 ? "" : "s"}, default ${byDefault?.name ?? ""}`}
+              </button>
+              {expanded && (
+                <div className={s.providersBody}>
+                  {config.providers.map((p) => (
+                    <div key={p.id} className={s.provider}>
+                      <label className={s.providerDefault} title="Used by every repository that has not picked another">
+                        <input
+                          type="radio"
+                          name="ai-default"
+                          checked={p.id === byDefault?.id}
+                          onChange={() => update({ defaultId: p.id })}
+                        />
+                        Default
+                      </label>
+                      <span className={s.providerName}>{p.name}</span>
+                      <span className={s.crashSource}>{kindLabel(p.kind)}</span>
+                      <span className={s.providerNote}>{tests.get(p.id) ?? ""}</span>
+                      <button className={s.resetAll} onClick={() => test(p.id)}>
+                        Test
+                      </button>
+                      <button className={s.resetAll} onClick={() => setEditing(p)}>
+                        Edit
+                      </button>
+                      <button
+                        className={s.resetAll}
+                        onClick={() => update({ providers: config.providers.filter((q) => q.id !== p.id) })}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ))}
+                  <div className={s.chips}>
+                    {AI_KINDS.map((k) => (
+                      <button key={k.kind} className={s.resetAll} title={k.hint} onClick={() => setEditing(newProvider(k.kind))}>
+                        Add {k.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </Row>
+
+          <Row
+            label="Commit message"
+            hint="A button inside the commit summary writes the summary and description from the staged changes, in the style of this repository's recent commits. Anything already typed in either box is taken as a hint."
+          >
+            <div className={s.choices}>
+              <button className={config.features.includes("commitMessage") ? s.on : ""} onClick={() => setFeature("commitMessage", true)}>
+                On
+              </button>
+              <button className={config.features.includes("commitMessage") ? "" : s.on} onClick={() => setFeature("commitMessage", false)}>
+                Off
+              </button>
+            </div>
+          </Row>
+        </>
+      )}
+
+      {editing !== undefined && (
+        <Form
+          title={`${config.providers.some((p) => p.id === editing.id) ? "Edit" : "Add"} ${kindLabel(editing.kind)}`}
+          body={
+            editing.kind === "claude-code"
+              ? "Runs claude with no tools, so it can only read what gitc sends it: the staged diff and recent commit messages."
+              : "The key stays on this machine. Write $NAME instead to read it from that environment variable."
+          }
+          fields={providerFields(editing)}
+          confirmLabel="Save"
+          onCancel={() => setEditing(undefined)}
+          onConfirm={(v) => {
+            store({
+              ...editing,
+              name: v["name"] ?? editing.name,
+              baseUrl: v["baseUrl"] ?? editing.baseUrl,
+              key: v["key"] ?? editing.key,
+              model: v["model"] ?? editing.model,
+              command: v["command"] ?? editing.command,
+            });
+            setEditing(undefined);
+          }}
+        />
+      )}
+    </>
+  );
+}
+
 /**
  * The update state belongs to the application, not to this screen.
  *
@@ -215,6 +415,7 @@ export function Preferences({
   updating,
   onCheck,
   onUpdate,
+  initialSection = "theme",
 }: {
   onClose: () => void;
   update: UpdateInfo | null;
@@ -222,8 +423,9 @@ export function Preferences({
   updating: boolean;
   onCheck: () => void;
   onUpdate: () => void;
+  initialSection?: Section;
 }) {
-  const [section, setSection] = useState<Section>("theme");
+  const [section, setSection] = useState<Section>(initialSection);
   const { size: tabSize, set: setTabSize } = useTabSize();
   const { wrap, set: setWrap } = useDiffWrap();
   const theme = useTheme();
@@ -513,6 +715,8 @@ export function Preferences({
             </Row>
           </>
         )}
+
+        {section === "ai" && <AiPane />}
 
         {section === "commands" && (
           <>

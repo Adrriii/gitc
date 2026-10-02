@@ -24,7 +24,9 @@ import type { DiffTarget } from "./components/DiffView";
 import { Panel } from "./components/Panel";
 import { Welcome } from "./components/Welcome";
 import { Loading } from "./components/Loading";
-import { Preferences } from "./components/Preferences";
+import { Preferences, type Section } from "./components/Preferences";
+import { Icon } from "./components/Icon";
+import { kindLabel, providerFor, useAi } from "./ai";
 import { GitLog } from "./components/GitLog";
 import { Freshness } from "./components/Freshness";
 import { Updating } from "./components/Updating";
@@ -241,6 +243,8 @@ export function App() {
   const [form, setForm] = useState<FormState | null>(null);
   const [error, setErrorState] = useState<string | null>(null);
   const [prefsOpen, setPrefsOpen] = useState(false);
+  const [prefsSection, setPrefsSection] = useState<Section>("theme");
+  const ai = useAi();
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
   const [updating, setUpdating] = useState(false);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
@@ -524,6 +528,36 @@ export function App() {
   const activeId = session?.activeId ?? null;
   const activeTab = session?.tabs.find((t) => t.id === activeId) ?? null;
   activeIdRef.current = activeId;
+
+  const aiShown = ai.config !== undefined && ai.config.enabled && ai.config.features.length > 0;
+  const aiCurrent =
+    ai.config === undefined || activeTab === null
+      ? undefined
+      : providerFor(ai.config, activeTab.host ?? "", activeTab.path);
+  const aiMenu = (e: React.MouseEvent) => {
+    const config = ai.config;
+    if (config === undefined || activeTab === null) return;
+    const host = activeTab.host ?? "";
+    const path = activeTab.path;
+    const others = config.repos.filter((r) => r.host !== host || r.path !== path);
+    const pick = (providerId?: string) =>
+      void ai.save({ ...config, repos: providerId === undefined ? others : [...others, { host, path, providerId }] });
+    const items: MenuItem[] = config.providers.map((p) => ({
+      label: p.name,
+      hint: p.id === aiCurrent?.provider.id ? "In use here" : kindLabel(p.kind),
+      action: () => pick(p.id),
+    }));
+    if (aiCurrent?.pinned === true) items.push({ label: "Use the default", action: () => pick() });
+    if (items.length > 0) items.push({ separator: true });
+    items.push({
+      label: "AI settings",
+      action: () => {
+        setPrefsSection("ai");
+        setPrefsOpen(true);
+      },
+    });
+    setMenu({ x: e.clientX, y: e.clientY, items });
+  };
 
   // What the corner says about versions. A remote tab is served by a gitc on
   // the other machine, and that is the one worth naming while you are in it.
@@ -2141,7 +2175,11 @@ export function App() {
 
       {prefsOpen ? (
         <Preferences
-          onClose={() => setPrefsOpen(false)}
+          initialSection={prefsSection}
+          onClose={() => {
+            setPrefsOpen(false);
+            setPrefsSection("theme");
+          }}
           update={update}
           checking={checkingUpdate}
           updating={updating}
@@ -2392,6 +2430,14 @@ export function App() {
               than printing 0.5.1 twice. They are only shown apart when they
               genuinely differ, which is a tunnel outliving an update.
             */}
+            {aiShown && (
+              <button className={s.aiChip} onClick={aiMenu} title="The AI provider this repository uses">
+                <Icon name="sparkle" size={11} />
+                {aiCurrent === undefined
+                  ? "No AI provider"
+                  : aiCurrent.provider.name + (aiCurrent.pinned ? "" : " (default)")}
+              </button>
+            )}
             <span className={s.version} title={versionTitle}>
               {versionLabel}
             </span>

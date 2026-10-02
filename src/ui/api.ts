@@ -21,6 +21,7 @@ import type {
   CrashList,
   LineCounts,
   WorktreeChanges,
+  AiConfig,
 } from "./types";
 import type { DiffTarget } from "./components/DiffView";
 
@@ -348,6 +349,15 @@ export const api = {
 
   discard: (id: string, tracked: string[], untracked: string[]) =>
     post<{ status: WorkingFile[] }>("/api/discard", { id, tracked, untracked }),
+
+  ai: () => json<AiConfig>("/api/ai"),
+
+  saveAi: (config: AiConfig) => post<AiConfig>("/api/ai", config),
+
+  testAi: (providerId: string) => post<{ ms?: number; error?: string }>("/api/ai/test", { providerId }),
+
+  writeCommitMessage: (id: string, hint: string, amend: boolean) =>
+    post<{ summary: string; description: string }>("/api/ai/commit-message", { id, hint, amend }),
 
   commit: (id: string, summary: string, description: string, amend: boolean) =>
     post<{ hash: string; summary: string }>("/api/commit", {

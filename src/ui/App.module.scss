@@ -54,6 +54,25 @@
   flex: 1;
 }
 
+.aiChip {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+  border: none;
+  border-radius: 3px;
+  background: none;
+  color: var(--fg-muted);
+  font-size: 11px;
+  cursor: pointer;
+
+  &:hover {
+    background: var(--bg-3);
+    color: var(--fg);
+  }
+}
+
 .path {
   overflow: hidden;
   text-overflow: ellipsis;
