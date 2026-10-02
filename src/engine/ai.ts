@@ -1,7 +1,7 @@
 // AI features: the providers someone has connected, and what gitc asks of them.
 
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { REPO } from "../generated/version.ts";
 import { git } from "./git.ts";
@@ -15,7 +15,7 @@ export interface Provider {
   baseUrl: string;
   key: string;
   model: string;
-  command: string;
+  account: string;
 }
 
 export interface RepoProvider {
@@ -47,6 +47,12 @@ export interface ClaudeStatus {
   installed: boolean;
   loggedIn: boolean;
   plan: string;
+  email: string;
+}
+
+export interface Model {
+  id: string;
+  label: string;
 }
 
 export type Answer = { text: string } | { error: string };
@@ -58,7 +64,7 @@ interface StoredProvider {
   baseUrl?: string;
   key?: string;
   model?: string;
-  command?: string;
+  account?: string;
 }
 
 interface StoredRepo {
@@ -107,7 +113,14 @@ const LOCK_FILES = [
   "flake.lock",
 ];
 
-const QUIET_CLAUDE = { CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", DISABLE_AUTOUPDATER: "1" };
+const QUIET_CLAUDE: Record<string, string> = { CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", DISABLE_AUTOUPDATER: "1" };
+
+const CLAUDE_MODELS: Model[] = [
+  { id: "", label: "Claude Code's default" },
+  { id: "opus", label: "Opus" },
+  { id: "sonnet", label: "Sonnet" },
+  { id: "haiku", label: "Haiku" },
+];
 
 const HIDDEN_LAUNCHER =
   "const [p, ...a] = process.argv.slice(1);" +
@@ -155,7 +168,31 @@ export function saveAi(incoming: AiConfig): AiConfig {
   const dir = configDir();
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   writeFileSync(filePath(), JSON.stringify(config), "utf8");
+
+  const kept = providers.filter((p) => p.account === "own").map((p) => p.id);
+  const homes = join(configDir(), "claude");
+  if (existsSync(homes)) {
+    for (const id of readdirSync(homes)) {
+      if (!kept.includes(id)) void forgetClaude(join(homes, id));
+    }
+  }
   return config;
+}
+
+export function forgetUnsaved(id: string): void {
+  if (loadAi().providers.some((p) => p.id === id)) return;
+  const home = claudeHome(id, "own");
+  if (home !== undefined && existsSync(home)) void forgetClaude(home);
+}
+
+async function forgetClaude(home: string): Promise<void> {
+  const launch = findCommand("claude");
+  if (launch !== undefined) await exec(launch.program, [...launch.prefix, "auth", "logout"], "", claudeEnv(home));
+  try {
+    rmSync(home, { recursive: true, force: true });
+  } catch {
+    console.error("gitc: could not remove " + home);
+  }
 }
 
 export function masked(config: AiConfig): AiConfig {
@@ -194,32 +231,45 @@ export async function writeCommitMessage(
   return message;
 }
 
-export async function claudeStatus(): Promise<ClaudeStatus> {
+export function claudeHome(id: string, account: string): string | undefined {
+  if (account !== "own") return "";
+  if (!/^[a-z0-9]+$/.test(id)) return;
+  return join(configDir(), "claude", id);
+}
+
+export async function claudeStatus(home: string): Promise<ClaudeStatus> {
+  const missing: ClaudeStatus = { installed: false, loggedIn: false, plan: "", email: "" };
   const launch = findCommand("claude");
-  if (launch === undefined) return { installed: false, loggedIn: false, plan: "" };
-  const ran = await exec(launch.program, [...launch.prefix, "auth", "status", "--json"], "", QUIET_CLAUDE);
-  if ("error" in ran) return { installed: false, loggedIn: false, plan: "" };
+  if (launch === undefined) return missing;
+  const ran = await exec(launch.program, [...launch.prefix, "auth", "status", "--json"], "", claudeEnv(home));
+  if ("error" in ran) return missing;
   try {
-    const parsed = JSON.parse(ran.out) as { loggedIn?: boolean; subscriptionType?: string };
-    return { installed: true, loggedIn: parsed.loggedIn ?? false, plan: parsed.subscriptionType ?? "" };
+    const parsed = JSON.parse(ran.out) as { loggedIn?: boolean; subscriptionType?: string; email?: string };
+    return {
+      installed: true,
+      loggedIn: parsed.loggedIn ?? false,
+      plan: parsed.subscriptionType ?? "",
+      email: parsed.email ?? "",
+    };
   } catch {
-    return { installed: true, loggedIn: false, plan: "" };
+    return { ...missing, installed: true };
   }
 }
 
-export function startClaudeLogin(): Promise<{ url: string } | { error: string }> {
+export function startClaudeLogin(home: string): Promise<{ url: string } | { error: string }> {
   return new Promise((resolve) => {
     const launch = findCommand("claude");
     if (launch === undefined) {
       resolve({ error: "Claude Code is not installed" });
       return;
     }
+    if (home.length > 0 && !existsSync(home)) mkdirSync(home, { recursive: true });
 
     const child = spawn(launch.program, [...launch.prefix, "auth", "login"], {
       stdio: ["pipe", "pipe", "pipe"],
       detached: true,
       cwd: tempDir(),
-      env: { ...process.env, ...QUIET_CLAUDE },
+      env: { ...process.env, ...claudeEnv(home) },
     });
     let said = "";
     let answered = false;
@@ -251,6 +301,40 @@ export function startClaudeLogin(): Promise<{ url: string } | { error: string }>
     child.on("error", (e: Error) => answer({ error: e.message }));
     setTimeout(() => answer({ url: "" }), 5000);
   });
+}
+
+export async function listModels(provider: Provider): Promise<{ models: Model[] } | { error: string }> {
+  if (provider.kind === "claude-code") return { models: CLAUDE_MODELS };
+  const key = resolveKey(provider.key);
+  const anthropic = provider.kind === "anthropic";
+  if (anthropic && key.length === 0) return { error: "no API key set" };
+
+  const headers: string[] = [];
+  if (anthropic) headers.push("x-api-key: " + key, "anthropic-version: 2023-06-01");
+  else if (key.length > 0) headers.push("authorization: Bearer " + key);
+  const url = anthropic ? "https://api.anthropic.com/v1/models?limit=1000" : trimSlash(provider.baseUrl) + "/models";
+
+  const got = await request(url, headers, undefined);
+  if ("error" in got) return { error: scrub(got.error, key) };
+  if (got.status >= 400) return { error: scrub(String(got.status) + " " + got.text.substring(0, 300), key) };
+  try {
+    const parsed = JSON.parse(got.text) as { data?: { id?: string; display_name?: string; name?: string }[] };
+    const models: Model[] = [];
+    for (const m of parsed.data ?? []) {
+      const id = m.id ?? "";
+      if (id.length === 0) continue;
+      models.push({ id, label: modelLabel(id, m.display_name, m.name) });
+    }
+    return { models };
+  } catch {
+    return { error: "the provider's model list could not be read" };
+  }
+}
+
+export function withStoredKey(provider: Provider): Provider {
+  const stored = loadAi().providers.find((p) => p.id === provider.id);
+  if (stored === undefined || provider.key !== maskKey(stored.key)) return provider;
+  return withKey(provider, stored.key);
 }
 
 export async function testProvider(provider: Provider): Promise<{ ms: number } | { error: string }> {
@@ -340,15 +424,17 @@ async function anthropic(provider: Provider, system: string, user: string): Prom
 }
 
 async function claudeCode(provider: Provider, system: string, user: string): Promise<Answer> {
-  const command = provider.command.trim().length > 0 ? provider.command.trim() : "claude";
+  const command = "claude";
   const launch = findCommand(command);
   if (launch === undefined) return { error: command + " not found - is Claude Code installed and on PATH?" };
+  const home = claudeHome(provider.id, provider.account);
+  if (home === undefined) return { error: "this provider's sign-in folder is unusable" };
 
   const args = [...launch.prefix, "-p", "--tools", "", "--no-session-persistence", "--setting-sources", "", "--system-prompt", system];
   const model = provider.model.trim();
   if (model.length > 0) args.push("--model", model);
 
-  const ran = await exec(launch.program, args, user, QUIET_CLAUDE);
+  const ran = await exec(launch.program, args, user, claudeEnv(home));
   if ("error" in ran) return ran.error.includes("ENOENT") ? { error: command + " not found - is Claude Code installed and on PATH?" } : ran;
   if (ran.code !== 0) {
     const said = (ran.err.trim().length > 0 ? ran.err : ran.out).trim();
@@ -357,21 +443,26 @@ async function claudeCode(provider: Provider, system: string, user: string): Pro
   return { text: ran.out };
 }
 
-async function post(
+function post(url: string, headers: string[], body: string): Promise<{ status: number; text: string } | { error: string }> {
+  return request(url, headers, body);
+}
+
+async function request(
   url: string,
   headers: string[],
-  body: string,
+  body: string | undefined,
 ): Promise<{ status: number; text: string } | { error: string }> {
   const bodyFile = tempFile("ai-" + String(Date.now()) + "-" + String(Math.floor(Math.random() * 1e9)) + ".json");
-  writeFileSync(bodyFile, body, "utf8");
   const lines = [
     'url = "' + quoted(url) + '"',
-    'request = "POST"',
-    'data-binary = "@' + quoted(bodyFile) + '"',
     'connect-timeout = "10"',
     'max-time = "' + String(TIMEOUT_MS / 1000) + '"',
     'write-out = "\\n%{http_code}"',
   ];
+  if (body !== undefined) {
+    writeFileSync(bodyFile, body, "utf8");
+    lines.push('request = "POST"', 'data-binary = "@' + quoted(bodyFile) + '"');
+  }
   for (const h of headers) lines.push('header = "' + quoted(h) + '"');
 
   try {
@@ -556,11 +647,19 @@ export function defaultConfig(): AiConfig {
 }
 
 function withKey(p: Provider, key: string): Provider {
-  return { id: p.id, name: p.name, kind: p.kind, baseUrl: p.baseUrl, key, model: p.model, command: p.command };
+  return { id: p.id, name: p.name, kind: p.kind, baseUrl: p.baseUrl, key, model: p.model, account: p.account };
 }
 
 function usable(p: Provider): boolean {
   return p.id.length > 0 && KINDS.includes(p.kind);
+}
+
+export function providerFromJson(text: string): Provider | undefined {
+  try {
+    return restoreProvider(JSON.parse(text) as StoredProvider);
+  } catch {
+    return;
+  }
 }
 
 function restoreRepo(r: StoredRepo): RepoProvider {
@@ -575,7 +674,7 @@ function restoreProvider(p: StoredProvider): Provider {
     baseUrl: p.baseUrl ?? "",
     key: p.key ?? "",
     model: p.model ?? "",
-    command: p.command ?? "",
+    account: p.account ?? "",
   };
 }
 
@@ -613,6 +712,17 @@ function sectionPath(section: string): string {
   const header = section.substring(0, section.indexOf("\n") === -1 ? section.length : section.indexOf("\n"));
   const at = header.lastIndexOf(" b/");
   return at === -1 ? header : header.substring(at + 3);
+}
+
+function claudeEnv(home: string): Record<string, string> {
+  if (home.length === 0) return QUIET_CLAUDE;
+  return { ...QUIET_CLAUDE, CLAUDE_CONFIG_DIR: home };
+}
+
+function modelLabel(id: string, display: string | undefined, name: string | undefined): string {
+  if (display !== undefined && display.length > 0) return display;
+  if (name !== undefined && name.length > 0) return name;
+  return id;
 }
 
 function loginUrl(text: string): string {

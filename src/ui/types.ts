@@ -482,13 +482,19 @@ export interface AiProvider {
   baseUrl: string;
   key: string;
   model: string;
-  command: string;
+  account: string;
 }
 
 export interface ClaudeStatus {
   installed: boolean;
   loggedIn: boolean;
   plan: string;
+  email: string;
+}
+
+export interface AiModel {
+  id: string;
+  label: string;
 }
 
 export interface AiConfig {

@@ -23,6 +23,8 @@ import type {
   WorktreeChanges,
   AiConfig,
   ClaudeStatus,
+  AiModel,
+  AiProvider,
 } from "./types";
 import type { DiffTarget } from "./components/DiffView";
 
@@ -355,9 +357,15 @@ export const api = {
 
   saveAi: (config: AiConfig) => post<AiConfig>("/api/ai", config),
 
-  claudeStatus: () => json<ClaudeStatus>("/api/ai/claude"),
+  claudeStatus: (providerId: string, account: string) =>
+    json<ClaudeStatus>(`/api/ai/claude?id=${encodeURIComponent(providerId)}&account=${encodeURIComponent(account)}`),
 
-  claudeLogin: () => post<{ url?: string; error?: string }>("/api/ai/claude/login", {}),
+  claudeLogin: (providerId: string, account: string) =>
+    post<{ url?: string; error?: string }>("/api/ai/claude/login", { id: providerId, account }),
+
+  claudeForget: (providerId: string) => post<{ ok: boolean }>("/api/ai/claude/forget", { id: providerId }),
+
+  aiModels: (provider: AiProvider) => post<{ models?: AiModel[]; error?: string }>("/api/ai/models", provider),
 
   testAi: (providerId: string) => post<{ ms?: number; error?: string }>("/api/ai/test", { providerId }),
 

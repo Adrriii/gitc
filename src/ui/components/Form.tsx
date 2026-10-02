@@ -12,6 +12,8 @@ export interface Field {
   optional?: boolean;
   /** Typed into a password box. */
   secret?: boolean;
+  /** Picked from a list instead of typed. */
+  options?: { value: string; label: string }[];
 }
 
 /**
@@ -30,6 +32,7 @@ export function Form({
   onCancel,
   blocked = false,
   children,
+  onChange,
 }: {
   title: string;
   body?: string;
@@ -40,6 +43,7 @@ export function Form({
   /** Holds the confirm button back for a reason the fields do not show. */
   blocked?: boolean;
   children?: React.ReactNode;
+  onChange?: (values: Record<string, string>) => void;
 }) {
   const [values, setValues] = useState<Record<string, string>>(() => {
     const init: Record<string, string> = {};
@@ -47,6 +51,10 @@ export function Form({
     return init;
   });
   const first = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    onChange?.(values);
+  }, [values, onChange]);
 
   useEffect(() => {
     first.current?.focus();
@@ -80,6 +88,19 @@ export function Form({
         {fields.map((f, i) => (
           <div key={f.key} className={s.field}>
             <label className={s.label}>{f.label}</label>
+            {f.options !== undefined ? (
+              <select
+                className={s.input}
+                value={values[f.key] ?? ""}
+                onChange={(e) => setValues((v) => ({ ...v, [f.key]: e.target.value }))}
+              >
+                {withCurrent(f.options, values[f.key] ?? "").map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            ) : (
             <input
               ref={i === 0 ? first : undefined}
               className={s.input}
@@ -92,6 +113,7 @@ export function Form({
                 if (e.key === "Escape") onCancel();
               }}
             />
+            )}
             {errors[f.key] !== null && <div className={s.error}>{errors[f.key]}</div>}
           </div>
         ))}
@@ -107,4 +129,9 @@ export function Form({
       </div>
     </div>
   );
+}
+
+function withCurrent(options: { value: string; label: string }[], current: string) {
+  if (current.length === 0 || options.some((o) => o.value === current)) return options;
+  return [{ value: current, label: current }, ...options];
 }

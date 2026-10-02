@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import type { AiConfig, AiProvider, ClaudeStatus, CrashList, CrashReport, ReleaseNotes, UpdateInfo } from "../types";
+import type { AiConfig, AiModel, AiProvider, ClaudeStatus, CrashList, CrashReport, ReleaseNotes, UpdateInfo } from "../types";
 import { AI_KINDS, kindLabel, useAi } from "../ai";
 import { Form, type Field } from "./Form";
 import { since } from "../ago";
@@ -209,9 +209,10 @@ const DEFAULT_NAMES = new Map([
   ["claude-code", "Claude Code"],
 ]);
 
-function providerFields(p: AiProvider): Field[] {
+function providerFields(p: AiProvider, models: AiModel[] | undefined): Field[] {
   const name: Field = { key: "name", label: "Name", initial: p.name };
-  if (p.kind === "claude-code") return [name];
+  const options = models?.map((m) => ({ value: m.id, label: m.label }));
+  if (p.kind === "claude-code") return [name, { key: "model", label: "Model", initial: p.model, optional: true, options }];
   const key: Field = {
     key: "key",
     label: "API key",
@@ -225,6 +226,7 @@ function providerFields(p: AiProvider): Field[] {
     label: "Model",
     initial: p.model,
     placeholder: p.kind === "anthropic" ? "claude-opus-5-5" : "provider/model-name",
+    options: options !== undefined && options.length > 0 ? options : undefined,
   };
   if (p.kind === "anthropic") return [name, key, model];
   const baseUrl: Field = {
@@ -236,19 +238,30 @@ function providerFields(p: AiProvider): Field[] {
   return [name, baseUrl, key, model];
 }
 
-function newProvider(kind: string): AiProvider {
+function newProvider(kind: string, existing: AiProvider[]): AiProvider {
+  const same = existing.filter((p) => p.kind === kind).length;
+  const base = DEFAULT_NAMES.get(kind) ?? kindLabel(kind);
+  const machineTaken = existing.some((p) => p.kind === "claude-code" && p.account !== "own");
   return {
     id: Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
-    name: DEFAULT_NAMES.get(kind) ?? kindLabel(kind),
+    name: same === 0 ? base : base + " " + String(same + 1),
     kind,
     baseUrl: kind === "openai" ? "https://openrouter.ai/api/v1" : "",
     key: "",
     model: kind === "anthropic" ? "claude-opus-5-5" : "",
-    command: "",
+    account: kind === "claude-code" && machineTaken ? "own" : "",
   };
 }
 
-function ClaudeSignIn({ onReady }: { onReady: (ready: boolean) => void }) {
+function ClaudeSignIn({
+  providerId,
+  account,
+  onReady,
+}: {
+  providerId: string;
+  account: string;
+  onReady: (ready: boolean) => void;
+}) {
   const [status, setStatus] = useState<ClaudeStatus | undefined>();
   const [waiting, setWaiting] = useState(false);
   const [url, setUrl] = useState("");
@@ -258,7 +271,7 @@ function ClaudeSignIn({ onReady }: { onReady: (ready: boolean) => void }) {
     let live = true;
     const check = () =>
       api
-        .claudeStatus()
+        .claudeStatus(providerId, account)
         .then((found) => {
           if (!live) return;
           setStatus(found);
@@ -277,12 +290,12 @@ function ClaudeSignIn({ onReady }: { onReady: (ready: boolean) => void }) {
       live = false;
       window.clearInterval(timer);
     };
-  }, [waiting, onReady]);
+  }, [waiting, onReady, providerId, account]);
 
   const logIn = () => {
     setError("");
     api
-      .claudeLogin()
+      .claudeLogin(providerId, account)
       .then((r) => {
         if (r.error !== undefined) {
           setError(r.error);
@@ -308,7 +321,8 @@ function ClaudeSignIn({ onReady }: { onReady: (ready: boolean) => void }) {
       ) : status.loggedIn ? (
         <span className={s.signedIn}>
           <Icon name="check" size={12} />
-          Signed in to Claude{status.plan.length > 0 ? ` (${status.plan})` : ""}
+          Signed in{status.email.length > 0 ? ` as ${status.email}` : " to Claude"}
+          {status.plan.length > 0 ? ` (${status.plan})` : ""}
         </span>
       ) : (
         <>
@@ -337,8 +351,34 @@ function AiPane() {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<AiProvider | undefined>();
   const [claudeReady, setClaudeReady] = useState(false);
-  useEffect(() => setClaudeReady(false), [editing?.id]);
+  const [draft, setDraft] = useState<Record<string, string>>({});
+  const [models, setModels] = useState<AiModel[] | undefined>();
+  const [modelsNote, setModelsNote] = useState("");
+  useEffect(() => setClaudeReady(false), [editing?.id, editing?.account]);
   const [tests, setTests] = useState(new Map<string, string>());
+
+  const draftUrl = draft["baseUrl"] ?? editing?.baseUrl ?? "";
+  const draftKey = draft["key"] ?? editing?.key ?? "";
+  useEffect(() => {
+    setModels(undefined);
+    setModelsNote("");
+    if (editing === undefined) return;
+    let live = true;
+    const timer = window.setTimeout(() => {
+      api
+        .aiModels({ ...editing, baseUrl: draftUrl, key: draftKey })
+        .then((r) => {
+          if (!live) return;
+          if (r.models !== undefined) setModels(r.models);
+          else setModelsNote("No model list from the provider" + (r.error !== undefined ? ": " + r.error : ""));
+        })
+        .catch((e: Error) => live && setModelsNote(e.message));
+    }, 500);
+    return () => {
+      live = false;
+      window.clearTimeout(timer);
+    };
+  }, [editing, draftUrl, draftKey]);
 
   if (config === undefined) {
     return (
@@ -419,7 +459,11 @@ function AiPane() {
                       <button className={s.resetAll} onClick={() => test(p.id)}>
                         Test
                       </button>
-                      <button className={s.resetAll} onClick={() => setEditing(p)}>
+                      <button className={s.resetAll} onClick={() => {
+                          setDraft({});
+                          setEditing(p);
+                        }}
+                      >
                         Edit
                       </button>
                       <button
@@ -431,8 +475,16 @@ function AiPane() {
                     </div>
                   ))}
                   <div className={s.chips}>
-                    {AI_KINDS.filter((k) => k.kind !== "claude-code" || !config.providers.some((p) => p.kind === "claude-code")).map((k) => (
-                      <button key={k.kind} className={s.resetAll} title={k.hint} onClick={() => setEditing(newProvider(k.kind))}>
+                    {AI_KINDS.map((k) => (
+                      <button
+                        key={k.kind}
+                        className={s.resetAll}
+                        title={k.hint}
+                        onClick={() => {
+                          setDraft({});
+                          setEditing(newProvider(k.kind, config.providers));
+                        }}
+                      >
                         Add {k.label}
                       </button>
                     ))}
@@ -463,13 +515,17 @@ function AiPane() {
           title={`${config.providers.some((p) => p.id === editing.id) ? "Edit" : "Add"} ${kindLabel(editing.kind)}`}
           body={
             editing.kind === "claude-code"
-              ? "Uses the Claude Code on this machine and your Claude sign-in. It runs with no tools, so it only sees what gitc sends: the staged diff and recent commit messages."
+              ? "Uses the Claude Code on this machine, signed in to the account below. It runs with no tools, so it only sees what gitc sends: the staged diff and recent commit messages."
               : "The key stays on this machine. Write $NAME instead to read it from that environment variable."
           }
-          fields={providerFields(editing)}
+          fields={providerFields(editing, models)}
+          onChange={setDraft}
           blocked={editing.kind === "claude-code" && !claudeReady}
           confirmLabel="Save"
-          onCancel={() => setEditing(undefined)}
+          onCancel={() => {
+            if (editing.kind === "claude-code" && editing.account === "own") void api.claudeForget(editing.id).catch(() => {});
+            setEditing(undefined);
+          }}
           onConfirm={(v) => {
             store({
               ...editing,
@@ -477,12 +533,37 @@ function AiPane() {
               baseUrl: v["baseUrl"] ?? editing.baseUrl,
               key: v["key"] ?? editing.key,
               model: v["model"] ?? editing.model,
-              command: v["command"] ?? editing.command,
             });
             setEditing(undefined);
           }}
         >
-          {editing.kind === "claude-code" && <ClaudeSignIn onReady={setClaudeReady} />}
+          {editing.kind !== "claude-code" && modelsNote.length > 0 && <span className={s.hint}>{modelsNote}</span>}
+          {editing.kind === "claude-code" && (
+            <>
+              <div className={s.choices}>
+                <button
+                  className={editing.account !== "own" ? s.on : ""}
+                  onClick={() => setEditing({ ...editing, account: "" })}
+                  title="The account the claude on this machine is already signed in to"
+                >
+                  This machine's sign-in
+                </button>
+                <button
+                  className={editing.account === "own" ? s.on : ""}
+                  onClick={() => setEditing({ ...editing, account: "own" })}
+                  title="Another Claude account, signed in for gitc only"
+                >
+                  A separate account
+                </button>
+              </div>
+              <ClaudeSignIn
+                key={editing.account}
+                providerId={editing.id}
+                account={editing.account}
+                onReady={setClaudeReady}
+              />
+            </>
+          )}
         </Form>
       )}
     </>

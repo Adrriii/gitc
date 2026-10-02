@@ -59,8 +59,13 @@ import { readHead, readRefs, readPending, readRemotes, commonDir } from "./engin
 import type { Ref } from "./engine/refs.ts";
 import { loadHidden, saveHidden } from "./engine/visibility.ts";
 import {
+  claudeHome,
   claudeStatus,
   commitContext,
+  forgetUnsaved,
+  listModels,
+  providerFromJson,
+  withStoredKey,
   loadAi,
   masked,
   parseConfig,
@@ -2083,13 +2088,42 @@ async function handleApi(
     return true;
   }
 
-  if (path === "/api/ai/claude") {
-    sendJson(res, JSON.stringify(await claudeStatus()));
+  if (path === "/api/ai/claude/forget") {
+    const body = JSON.parse(await readBody(req)) as { id: string };
+    forgetUnsaved(body.id);
+    sendJson(res, JSON.stringify({ ok: true }));
     return true;
   }
 
   if (path === "/api/ai/claude/login") {
-    sendJson(res, JSON.stringify(await startClaudeLogin()));
+    const body = JSON.parse(await readBody(req)) as { id: string; account: string };
+    const home = claudeHome(body.id, body.account);
+    if (home === undefined) {
+      send(res, 400, "application/json", JSON.stringify({ error: "not a usable provider id" }));
+      return true;
+    }
+    sendJson(res, JSON.stringify(await startClaudeLogin(home)));
+    return true;
+  }
+
+  if (path === "/api/ai/claude" || path.startsWith("/api/ai/claude?")) {
+    const p = query(path);
+    const home = claudeHome(p.get("id") ?? "", p.get("account") ?? "");
+    if (home === undefined) {
+      send(res, 400, "application/json", JSON.stringify({ error: "not a usable provider id" }));
+      return true;
+    }
+    sendJson(res, JSON.stringify(await claudeStatus(home)));
+    return true;
+  }
+
+  if (path === "/api/ai/models") {
+    const provider = providerFromJson(await readBody(req));
+    if (provider === undefined) {
+      send(res, 400, "application/json", JSON.stringify({ error: "not a provider" }));
+      return true;
+    }
+    sendJson(res, JSON.stringify(await listModels(withStoredKey(provider))));
     return true;
   }
 

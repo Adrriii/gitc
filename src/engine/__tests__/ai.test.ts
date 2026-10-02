@@ -18,7 +18,7 @@ const home = mkdtempSync(join(tmpdir(), "gitc-ai-test-"));
 mkdirSync(join(home, "gitc"), { recursive: true });
 process.env["APPDATA"] = home;
 
-const { loadAi, saveAi, masked, maskKey, parseConfig, providerFor, parseReply, trimDiff, buildPrompt } =
+const { loadAi, saveAi, masked, maskKey, parseConfig, providerFor, parseReply, trimDiff, buildPrompt, claudeHome, providerFromJson } =
   await import("../ai.ts");
 
 const provider = (id: string, key = "") => ({
@@ -28,7 +28,7 @@ const provider = (id: string, key = "") => ({
   baseUrl: "https://openrouter.ai/api/v1",
   key,
   model: "m",
-  command: "",
+  account: "",
 });
 
 // --- store ---------------------------------------------------------------
@@ -48,7 +48,7 @@ eq(
   {
     enabled: true,
     features: ["commitMessage"],
-    providers: [{ id: "a", name: "", kind: "anthropic", baseUrl: "", key: "", model: "", command: "" }],
+    providers: [{ id: "a", name: "", kind: "anthropic", baseUrl: "", key: "", model: "", account: "" }],
     defaultId: "",
     repos: [],
   },
@@ -110,6 +110,15 @@ eq("no providers means none", providerFor({ ...config, providers: [] }, "", "/r1
 const pruned = saveAi({ ...config, defaultId: "x" });
 eq("saving repairs a dangling default", pruned.defaultId, "a");
 eq("and drops repos pinned to nothing", pruned.repos.length, 1);
+
+// --- Claude Code accounts --------------------------------------------------
+
+eq("this machine's sign-in needs no folder", claudeHome("abc", ""), "");
+eq("a separate account lives under gitc's settings", claudeHome("abc123", "own"), join(home, "gitc", "claude", "abc123"));
+eq("an id that could leave that folder is refused", claudeHome("../x", "own"), undefined);
+eq("an empty id is refused", claudeHome("", "own"), undefined);
+eq("a provider sent by the window is read field by field", providerFromJson('{"id":"q","kind":"openai"}')?.account, "");
+eq("garbage is not a provider", providerFromJson("{nope"), undefined);
 
 // --- replies -------------------------------------------------------------
 
