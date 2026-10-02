@@ -212,12 +212,17 @@ export function providerFor(config: AiConfig, host: string, path: string): Provi
   return first(config.providers);
 }
 
-export async function commitContext(repo: string, amend: boolean): Promise<CommitContext> {
-  const range = ["--cached"];
-  if (amend) range.push(await amendBase(repo));
-  const diff = await git(repo, ["diff", "--no-color", "--no-ext-diff", ...range]);
-  const numstat = await git(repo, ["diff", "--numstat", ...range]);
-  return { diff, numstat, recent: await recentMessages(repo) };
+export async function commitContext(repo: string, amend: boolean): Promise<CommitContext | { error: string }> {
+  try {
+    const range = ["--cached"];
+    if (amend) range.push(await amendBase(repo));
+    const diff = await git(repo, ["diff", "--no-color", "--no-ext-diff", ...range]);
+    const numstat = await git(repo, ["diff", "--numstat", ...range]);
+    const context: CommitContext = { diff, numstat, recent: await recentMessages(repo) };
+    return context;
+  } catch (e) {
+    return { error: (e as Error).message };
+  }
 }
 
 export async function writeCommitMessage(
