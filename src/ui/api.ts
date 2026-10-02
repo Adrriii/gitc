@@ -22,6 +22,7 @@ import type {
   LineCounts,
   WorktreeChanges,
   AiConfig,
+  ClaudeStatus,
 } from "./types";
 import type { DiffTarget } from "./components/DiffView";
 
@@ -353,6 +354,10 @@ export const api = {
   ai: () => json<AiConfig>("/api/ai"),
 
   saveAi: (config: AiConfig) => post<AiConfig>("/api/ai", config),
+
+  claudeStatus: () => json<ClaudeStatus>("/api/ai/claude"),
+
+  claudeLogin: () => post<{ url?: string; error?: string }>("/api/ai/claude/login", {}),
 
   testAi: (providerId: string) => post<{ ms?: number; error?: string }>("/api/ai/test", { providerId }),
 

@@ -59,12 +59,14 @@ import { readHead, readRefs, readPending, readRemotes, commonDir } from "./engin
 import type { Ref } from "./engine/refs.ts";
 import { loadHidden, saveHidden } from "./engine/visibility.ts";
 import {
+  claudeStatus,
   commitContext,
   loadAi,
   masked,
   parseConfig,
   providerFor,
   saveAi,
+  startClaudeLogin,
   testProvider,
   writeCommitMessage,
 } from "./engine/ai.ts";
@@ -2078,6 +2080,16 @@ async function handleApi(
       return true;
     }
     sendJson(res, JSON.stringify(masked(loadAi())));
+    return true;
+  }
+
+  if (path === "/api/ai/claude") {
+    sendJson(res, JSON.stringify(await claudeStatus()));
+    return true;
+  }
+
+  if (path === "/api/ai/claude/login") {
+    sendJson(res, JSON.stringify(await startClaudeLogin()));
     return true;
   }
 

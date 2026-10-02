@@ -634,3 +634,29 @@
   color: var(--fg-muted);
   font-size: 11px;
 }
+
+.signIn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 4px 0 14px;
+
+  a {
+    color: var(--accent-fg);
+  }
+}
+
+.signedIn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--green);
+  font-size: 12px;
+}
+
+.signInError {
+  color: var(--red-fg);
+  font-size: 11px;
+  white-space: pre-wrap;
+}

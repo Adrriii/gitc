@@ -43,6 +43,12 @@ export interface CommitMessage {
   description: string;
 }
 
+export interface ClaudeStatus {
+  installed: boolean;
+  loggedIn: boolean;
+  plan: string;
+}
+
 export type Answer = { text: string } | { error: string };
 
 interface StoredProvider {
@@ -82,6 +88,7 @@ interface Ran {
 
 const KINDS = ["openai", "anthropic", "claude-code"];
 const TIMEOUT_MS = 120000;
+const LOGIN_MS = 300000;
 const DIFF_CAP = 60000;
 const LOCK_FILES = [
   "package-lock.json",
@@ -99,6 +106,8 @@ const LOCK_FILES = [
   "go.sum",
   "flake.lock",
 ];
+
+const QUIET_CLAUDE = { CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", DISABLE_AUTOUPDATER: "1" };
 
 const HIDDEN_LAUNCHER =
   "const [p, ...a] = process.argv.slice(1);" +
@@ -183,6 +192,65 @@ export async function writeCommitMessage(
   const message = parseReply(answer.text);
   if (message.summary.length === 0) return { error: provider.name + " returned no message" };
   return message;
+}
+
+export async function claudeStatus(): Promise<ClaudeStatus> {
+  const launch = findCommand("claude");
+  if (launch === undefined) return { installed: false, loggedIn: false, plan: "" };
+  const ran = await exec(launch.program, [...launch.prefix, "auth", "status", "--json"], "", QUIET_CLAUDE);
+  if ("error" in ran) return { installed: false, loggedIn: false, plan: "" };
+  try {
+    const parsed = JSON.parse(ran.out) as { loggedIn?: boolean; subscriptionType?: string };
+    return { installed: true, loggedIn: parsed.loggedIn ?? false, plan: parsed.subscriptionType ?? "" };
+  } catch {
+    return { installed: true, loggedIn: false, plan: "" };
+  }
+}
+
+export function startClaudeLogin(): Promise<{ url: string } | { error: string }> {
+  return new Promise((resolve) => {
+    const launch = findCommand("claude");
+    if (launch === undefined) {
+      resolve({ error: "Claude Code is not installed" });
+      return;
+    }
+
+    const child = spawn(launch.program, [...launch.prefix, "auth", "login"], {
+      stdio: ["pipe", "pipe", "pipe"],
+      detached: true,
+      cwd: tempDir(),
+      env: { ...process.env, ...QUIET_CLAUDE },
+    });
+    let said = "";
+    let answered = false;
+    const answer = (result: { url: string } | { error: string }) => {
+      if (answered) return;
+      answered = true;
+      resolve(result);
+    };
+    const giveUp = setTimeout(() => child.kill(), LOGIN_MS);
+    const read = (chunk: Buffer) => {
+      said += chunk.toString("utf8");
+      const url = loginUrl(said);
+      if (url.length > 0) answer({ url });
+    };
+
+    const stdout = child.stdout;
+    const stderr = child.stderr;
+    if (stdout === null || stderr === null) {
+      answer({ error: "claude produced no output streams" });
+      return;
+    }
+    stdout.on("data", read);
+    stderr.on("data", read);
+    child.on("exit", (status: number | null) => {
+      clearTimeout(giveUp);
+      if (status === 0) answer({ url: "" });
+      else answer({ error: said.trim().length > 0 ? said.trim() : "claude auth login exited with " + String(status) });
+    });
+    child.on("error", (e: Error) => answer({ error: e.message }));
+    setTimeout(() => answer({ url: "" }), 5000);
+  });
 }
 
 export async function testProvider(provider: Provider): Promise<{ ms: number } | { error: string }> {
@@ -280,7 +348,7 @@ async function claudeCode(provider: Provider, system: string, user: string): Pro
   const model = provider.model.trim();
   if (model.length > 0) args.push("--model", model);
 
-  const ran = await exec(launch.program, args, user);
+  const ran = await exec(launch.program, args, user, QUIET_CLAUDE);
   if ("error" in ran) return ran.error.includes("ENOENT") ? { error: command + " not found - is Claude Code installed and on PATH?" } : ran;
   if (ran.code !== 0) {
     const said = (ran.err.trim().length > 0 ? ran.err : ran.out).trim();
@@ -307,7 +375,7 @@ async function post(
   for (const h of headers) lines.push('header = "' + quoted(h) + '"');
 
   try {
-    const ran = await exec("curl", ["-sS", "--config", "-"], lines.join(String.fromCharCode(10)) + String.fromCharCode(10));
+    const ran = await exec("curl", ["-sS", "--config", "-"], lines.join(String.fromCharCode(10)) + String.fromCharCode(10), {});
     if ("error" in ran) return ran.error.includes("ENOENT") ? { error: "curl not found" } : ran;
     if (ran.code === 28) return { error: "no answer after " + String(TIMEOUT_MS / 1000) + " s" };
     if (ran.code !== 0) return { error: ran.err.trim().length > 0 ? ran.err.trim() : "curl exited with " + String(ran.code) };
@@ -319,9 +387,14 @@ async function post(
   }
 }
 
-function exec(command: string, args: string[], input: string): Promise<Ran | { error: string }> {
+function exec(command: string, args: string[], input: string, env: Record<string, string>): Promise<Ran | { error: string }> {
   return new Promise((resolve) => {
-    const child = spawn(command, args, { stdio: ["pipe", "pipe", "pipe"], detached: true, cwd: tempDir() });
+    const child = spawn(command, args, {
+      stdio: ["pipe", "pipe", "pipe"],
+      detached: true,
+      cwd: tempDir(),
+      env: { ...process.env, ...env },
+    });
 
     const out: Uint8Array[] = [];
     const err: Uint8Array[] = [];
@@ -540,6 +613,14 @@ function sectionPath(section: string): string {
   const header = section.substring(0, section.indexOf("\n") === -1 ? section.length : section.indexOf("\n"));
   const at = header.lastIndexOf(" b/");
   return at === -1 ? header : header.substring(at + 3);
+}
+
+function loginUrl(text: string): string {
+  const start = text.indexOf("https://");
+  if (start === -1) return "";
+  const rest = text.substring(start);
+  const end = rest.search(/\s/);
+  return end === -1 ? "" : rest.substring(0, end);
 }
 
 function findCommand(command: string): Launch | undefined {

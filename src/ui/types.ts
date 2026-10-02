@@ -485,6 +485,12 @@ export interface AiProvider {
   command: string;
 }
 
+export interface ClaudeStatus {
+  installed: boolean;
+  loggedIn: boolean;
+  plan: string;
+}
+
 export interface AiConfig {
   enabled: boolean;
   features: string[];

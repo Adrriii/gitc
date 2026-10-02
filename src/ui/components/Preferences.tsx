@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import type { AiConfig, AiProvider, CrashList, CrashReport, ReleaseNotes, UpdateInfo } from "../types";
+import type { AiConfig, AiProvider, ClaudeStatus, CrashList, CrashReport, ReleaseNotes, UpdateInfo } from "../types";
 import { AI_KINDS, kindLabel, useAi } from "../ai";
 import { Form, type Field } from "./Form";
 import { since } from "../ago";
@@ -203,15 +203,15 @@ function Row({
   );
 }
 
+const DEFAULT_NAMES = new Map([
+  ["openai", "OpenRouter"],
+  ["anthropic", "Anthropic"],
+  ["claude-code", "Claude Code"],
+]);
+
 function providerFields(p: AiProvider): Field[] {
-  const name: Field = { key: "name", label: "Name", initial: p.name, placeholder: kindLabel(p.kind) };
-  if (p.kind === "claude-code") {
-    return [
-      name,
-      { key: "model", label: "Model", initial: p.model, placeholder: "Claude Code's own choice, or sonnet, opus, haiku", optional: true },
-      { key: "command", label: "Command", initial: p.command, placeholder: "claude, found on PATH", optional: true },
-    ];
-  }
+  const name: Field = { key: "name", label: "Name", initial: p.name };
+  if (p.kind === "claude-code") return [name];
   const key: Field = {
     key: "key",
     label: "API key",
@@ -239,7 +239,7 @@ function providerFields(p: AiProvider): Field[] {
 function newProvider(kind: string): AiProvider {
   return {
     id: Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
-    name: "",
+    name: DEFAULT_NAMES.get(kind) ?? kindLabel(kind),
     kind,
     baseUrl: kind === "openai" ? "https://openrouter.ai/api/v1" : "",
     key: "",
@@ -248,10 +248,96 @@ function newProvider(kind: string): AiProvider {
   };
 }
 
+function ClaudeSignIn({ onReady }: { onReady: (ready: boolean) => void }) {
+  const [status, setStatus] = useState<ClaudeStatus | undefined>();
+  const [waiting, setWaiting] = useState(false);
+  const [url, setUrl] = useState("");
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let live = true;
+    const check = () =>
+      api
+        .claudeStatus()
+        .then((found) => {
+          if (!live) return;
+          setStatus(found);
+          onReady(found.installed && found.loggedIn);
+          if (found.loggedIn) setWaiting(false);
+        })
+        .catch((e: Error) => live && setError(e.message));
+    void check();
+    if (!waiting) {
+      return () => {
+        live = false;
+      };
+    }
+    const timer = window.setInterval(() => void check(), 2000);
+    return () => {
+      live = false;
+      window.clearInterval(timer);
+    };
+  }, [waiting, onReady]);
+
+  const logIn = () => {
+    setError("");
+    api
+      .claudeLogin()
+      .then((r) => {
+        if (r.error !== undefined) {
+          setError(r.error);
+          return;
+        }
+        setUrl(r.url ?? "");
+        setWaiting(true);
+      })
+      .catch((e: Error) => setError(e.message));
+  };
+
+  return (
+    <div className={s.signIn}>
+      {status === undefined ? (
+        <span className={s.hint}>Looking for Claude Code...</span>
+      ) : !status.installed ? (
+        <span className={s.hint}>
+          Claude Code is not installed on this machine.{" "}
+          <a href="https://code.claude.com/docs" target="_blank" rel="noreferrer noopener">
+            How to install it
+          </a>
+        </span>
+      ) : status.loggedIn ? (
+        <span className={s.signedIn}>
+          <Icon name="check" size={12} />
+          Signed in to Claude{status.plan.length > 0 ? ` (${status.plan})` : ""}
+        </span>
+      ) : (
+        <>
+          <button className={s.update} disabled={waiting} onClick={logIn}>
+            {waiting ? "Waiting for the browser..." : "Log in to Claude Code"}
+          </button>
+          {waiting && (
+            <span className={s.hint}>
+              Finish signing in in your browser.{" "}
+              {url.startsWith("https://") && (
+                <a href={url} target="_blank" rel="noreferrer noopener">
+                  Open the sign-in page
+                </a>
+              )}
+            </span>
+          )}
+        </>
+      )}
+      {error.length > 0 && <span className={s.signInError}>{error}</span>}
+    </div>
+  );
+}
+
 function AiPane() {
   const { config, save } = useAi();
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<AiProvider | undefined>();
+  const [claudeReady, setClaudeReady] = useState(false);
+  useEffect(() => setClaudeReady(false), [editing?.id]);
   const [tests, setTests] = useState(new Map<string, string>());
 
   if (config === undefined) {
@@ -345,7 +431,7 @@ function AiPane() {
                     </div>
                   ))}
                   <div className={s.chips}>
-                    {AI_KINDS.map((k) => (
+                    {AI_KINDS.filter((k) => k.kind !== "claude-code" || !config.providers.some((p) => p.kind === "claude-code")).map((k) => (
                       <button key={k.kind} className={s.resetAll} title={k.hint} onClick={() => setEditing(newProvider(k.kind))}>
                         Add {k.label}
                       </button>
@@ -377,10 +463,11 @@ function AiPane() {
           title={`${config.providers.some((p) => p.id === editing.id) ? "Edit" : "Add"} ${kindLabel(editing.kind)}`}
           body={
             editing.kind === "claude-code"
-              ? "Runs claude with no tools, so it can only read what gitc sends it: the staged diff and recent commit messages."
+              ? "Uses the Claude Code on this machine and your Claude sign-in. It runs with no tools, so it only sees what gitc sends: the staged diff and recent commit messages."
               : "The key stays on this machine. Write $NAME instead to read it from that environment variable."
           }
           fields={providerFields(editing)}
+          blocked={editing.kind === "claude-code" && !claudeReady}
           confirmLabel="Save"
           onCancel={() => setEditing(undefined)}
           onConfirm={(v) => {
@@ -394,7 +481,9 @@ function AiPane() {
             });
             setEditing(undefined);
           }}
-        />
+        >
+          {editing.kind === "claude-code" && <ClaudeSignIn onReady={setClaudeReady} />}
+        </Form>
       )}
     </>
   );

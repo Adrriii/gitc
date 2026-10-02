@@ -28,6 +28,8 @@ export function Form({
   confirmLabel,
   onConfirm,
   onCancel,
+  blocked = false,
+  children,
 }: {
   title: string;
   body?: string;
@@ -35,6 +37,9 @@ export function Form({
   confirmLabel: string;
   onConfirm: (values: Record<string, string>) => void;
   onCancel: () => void;
+  /** Holds the confirm button back for a reason the fields do not show. */
+  blocked?: boolean;
+  children?: React.ReactNode;
 }) {
   const [values, setValues] = useState<Record<string, string>>(() => {
     const init: Record<string, string> = {};
@@ -57,6 +62,8 @@ export function Form({
     errors[f.key] = err;
     if (missing || err !== null) ok = false;
   }
+
+  if (blocked) ok = false;
 
   const submit = () => {
     if (!ok) return;
@@ -88,6 +95,7 @@ export function Form({
             {errors[f.key] !== null && <div className={s.error}>{errors[f.key]}</div>}
           </div>
         ))}
+        {children}
         <div className={s.actions}>
           <button className={s.cancel} onClick={onCancel}>
             Cancel
