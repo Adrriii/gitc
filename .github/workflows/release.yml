@@ -16,9 +16,38 @@ on:
 
 permissions:
   contents: write
+  # To find the run that already built this commit and take its binaries.
+  actions: read
+
+env:
+  ZIG_VERSION: 0.16.0
 
 jobs:
+  # A tag is pushed only after release.mjs has had this very commit built by a
+  # manual run, so the binaries a tag needs usually exist already. Publishing
+  # those rather than building again halves the time a release spends on the
+  # runners, and on a slow day that is most of a release. A tag with no such
+  # run - pushed by hand, or after --skip-verify - builds as it always did.
+  verified:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    outputs:
+      run-id: ${{ steps.find.outputs.run-id }}
+    steps:
+      - id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          id=$(gh run list -R "$GITHUB_REPOSITORY" --workflow release.yml --event workflow_dispatch \
+            --commit "$GITHUB_SHA" --status success --limit 1 --json databaseId -q '.[0].databaseId // ""')
+          echo "run-id=$id" >> "$GITHUB_OUTPUT"
+          echo "built already by run: ${id:-none}"
+
   build:
+    needs: verified
+    # Runs on a manual trigger (verified is skipped there) and on a tag that
+    # found nothing to reuse.
+    if: ${{ !cancelled() && needs.verified.outputs.run-id == '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -40,6 +69,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
+          cache: npm
 
       # Both platforms build through zig, for different reasons.
       #
@@ -55,13 +85,22 @@ jobs:
       # builds, where it is not. And it has to be 0.16: scriptc's runtime calls
       # clock_gettime and nanosleep, which zig 0.13's mingw headers do not
       # declare - four undeclared-function errors before it links.
+      #
+      # Cached, since the download was a quarter to a third of a Windows job.
+      - uses: actions/cache@v6
+        with:
+          path: zig-x86_64-${{ runner.os == 'Windows' && 'windows' || 'linux' }}-${{ env.ZIG_VERSION }}
+          key: zig-${{ env.ZIG_VERSION }}-${{ runner.os }}
+
       - name: Install zig
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          v=0.16.0
-          curl -fsSL "https://ziglang.org/download/$v/zig-x86_64-linux-$v.tar.xz" | tar -xJ
-          echo "$PWD/zig-x86_64-linux-$v" >> "$GITHUB_PATH"
+          dir="zig-x86_64-linux-$ZIG_VERSION"
+          if [ ! -d "$dir" ]; then
+            curl -fsSL "https://ziglang.org/download/$ZIG_VERSION/$dir.tar.xz" | tar -xJ
+          fi
+          echo "$PWD/$dir" >> "$GITHUB_PATH"
 
       # In PowerShell, because the `tar` on the runner's bash is GNU tar and
       # cannot read a zip.
@@ -69,10 +108,12 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $v = "0.16.0"
-          Invoke-WebRequest -Uri "https://ziglang.org/download/$v/zig-x86_64-windows-$v.zip" -OutFile zig.zip
-          Expand-Archive -Path zig.zip -DestinationPath . -Force
-          "$PWD\zig-x86_64-windows-$v" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          $dir = "zig-x86_64-windows-$env:ZIG_VERSION"
+          if (-not (Test-Path $dir)) {
+            Invoke-WebRequest -Uri "https://ziglang.org/download/$env:ZIG_VERSION/$dir.zip" -OutFile zig.zip
+            Expand-Archive -Path zig.zip -DestinationPath . -Force
+          }
+          "$PWD\$dir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Check zig
         shell: bash
@@ -116,14 +157,20 @@ jobs:
   publish:
     # Only a tag publishes. A manual run stops after building, which is the
     # point of being able to trigger it by hand.
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    needs: [verified, build]
+    if: >-
+      ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') &&
+      (needs.build.result == 'success' ||
+      (needs.build.result == 'skipped' && needs.verified.outputs.run-id != '')) }}
     runs-on: ubuntu-latest
 
     steps:
+      # From this run when it built them, from the verification run when not.
       - uses: actions/download-artifact@v8
         with:
           path: artifacts
+          run-id: ${{ needs.verified.outputs.run-id || github.run_id }}
+          github-token: ${{ github.token }}
 
       - name: Collect the binaries
         run: |
@@ -133,6 +180,16 @@ jobs:
           chmod +x release/gitc
           (cd release && sha256sum gitc gitc.exe > SHA256SUMS)
           cat release/SHA256SUMS
+
+      # Binaries taken from another run have to be the version being tagged.
+      # The Windows one cannot run here; both come from the same commit, and
+      # the build job already checked each reports its own version.
+      - name: Check the version matches the tag
+        run: |
+          got=$(./release/gitc --version)
+          want="gitc ${GITHUB_REF_NAME#v}"
+          echo "$got"
+          test "$got" = "$want"
 
       - uses: softprops/action-gh-release@v3
         with:
