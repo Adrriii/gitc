@@ -150,9 +150,11 @@ export function superviseEngine(): void {
   const stop = () => child.kill("SIGTERM");
   process.on("SIGTERM", stop);
   process.on("SIGINT", stop);
-  child.on("close", (code: number | null, signal: string | null) => {
-    if (child.pid !== undefined) reportEngineEnd(child.pid, code, signal, tail);
-    process.exit(code ?? 1);
+  child.on("exit", (code: number | null, signal: string | null) => {
+    setTimeout(() => {
+      if (child.pid !== undefined) reportEngineEnd(child.pid, code, signal, tail);
+      process.exit(code ?? 1);
+    }, 300);
   });
 }
 

@@ -14,12 +14,14 @@ import { createHash } from "node:crypto";
 import {
   existsSync,
   readFileSync,
+  readdirSync,
   renameSync,
   rmSync,
   statSync,
   writeFileSync,
   chmodSync,
 } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { promisify } from "node:util";
 
 import { REPO, VERSION } from "../generated/version.ts";
@@ -790,10 +792,14 @@ export async function apply(
   // Prefer the installed copy; a portable run replaces itself where it stands.
   const installed = installedBinary();
   const target = existsSync(installed) ? installed : process.execPath;
-  const aside = target + ".old";
-
+  let aside = target + ".old";
   try {
     if (existsSync(aside)) rmSync(aside, { force: true });
+  } catch {
+    aside = target + ".old-" + String(Date.now());
+  }
+
+  try {
     renameSync(target, aside);
   } catch {
     rmSync(temp, { force: true });
@@ -835,10 +841,16 @@ export async function apply(
 
 /** Removes the binary left aside by a previous update. Called at startup. */
 export function cleanupPrevious(): void {
-  const aside = installedBinary() + ".old";
-  try {
-    if (existsSync(aside)) rmSync(aside, { force: true });
-  } catch {
-    // Still locked by the process that just exited; the next start gets it.
+  const binary = installedBinary();
+  const dir = dirname(binary);
+  if (!existsSync(dir)) return;
+  const prefix = basename(binary) + ".old";
+  for (const name of readdirSync(dir)) {
+    if (!name.startsWith(prefix)) continue;
+    try {
+      rmSync(join(dir, name), { force: true });
+    } catch {
+      // Still locked by the process that just exited; the next start gets it.
+    }
   }
 }
