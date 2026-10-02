@@ -1,0 +1,72 @@
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--bg-2);
+  color: var(--fg-dim);
+  font-size: 11px;
+  cursor: pointer;
+
+  &:hover:not(:disabled) {
+    background: var(--bg-3);
+    color: var(--accent-fg);
+  }
+  &:disabled {
+    cursor: default;
+  }
+}
+
+.spin {
+  animation: explainSpin 1.2s linear infinite;
+}
+
+@keyframes explainSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.error {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--red-fg);
+  font-size: 11px;
+}
+
+.box {
+  padding: 8px 12px 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-inset);
+}
+
+.title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  color: var(--accent-fg);
+  font-size: 11px;
+}
+
+.text {
+  max-height: 260px;
+  overflow: auto;
+  color: var(--fg);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  user-select: text;
+}

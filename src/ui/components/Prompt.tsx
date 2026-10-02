@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Icon } from "./Icon";
 import s from "./Prompt.module.scss";
 
 /**
@@ -18,6 +19,7 @@ export function Prompt({
   validate,
   onConfirm,
   onCancel,
+  suggest,
 }: {
   title: string;
   label: string;
@@ -29,8 +31,26 @@ export function Prompt({
   validate?: (value: string) => string | null;
   onConfirm: (value: string) => void;
   onCancel: () => void;
+  /** Fills the box from elsewhere, behind a button inside it. */
+  suggest?: { title: string; run: () => Promise<string> };
 }) {
   const [value, setValue] = useState(initial ?? "");
+  const [suggesting, setSuggesting] = useState(false);
+  const [suggestError, setSuggestError] = useState("");
+
+  const fill = () => {
+    if (suggest === undefined || suggesting) return;
+    setSuggesting(true);
+    setSuggestError("");
+    suggest
+      .run()
+      .then((v) => {
+        setValue(v);
+        input.current?.focus();
+      })
+      .catch((e: Error) => setSuggestError(e.message))
+      .finally(() => setSuggesting(false));
+  };
   const input = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -50,17 +70,30 @@ export function Prompt({
       <div className={s.dialog} onClick={(e) => e.stopPropagation()}>
         <div className={s.title}>{title}</div>
         <label className={s.label}>{label}</label>
-        <input
-          ref={input}
-          className={s.input}
-          value={value}
-          placeholder={placeholder}
-          onChange={(e) => setValue(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") submit();
-            if (e.key === "Escape") onCancel();
-          }}
-        />
+        <div className={s.inputRow}>
+          <input
+            ref={input}
+            className={`${s.input} ${suggest !== undefined ? s.inputSuggest : ""}`}
+            value={value}
+            placeholder={placeholder}
+            onChange={(e) => setValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") submit();
+              if (e.key === "Escape") onCancel();
+            }}
+          />
+          {suggest !== undefined && (
+            <button
+              className={`${s.suggest} ${suggesting ? s.suggesting : ""}`}
+              title={suggest.title}
+              disabled={suggesting}
+              onClick={fill}
+            >
+              <Icon name="sparkle" size={13} />
+            </button>
+          )}
+        </div>
+        {suggestError.length > 0 && <div className={s.error}>{suggestError}</div>}
         {error !== null && <div className={s.error}>{error}</div>}
         {error === null && hint && <div className={s.hint}>{hint}</div>}
         <div className={s.actions}>

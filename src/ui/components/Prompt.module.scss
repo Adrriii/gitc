@@ -102,3 +102,51 @@
     color: var(--fg-faint);
   }
 }
+
+.inputRow {
+  position: relative;
+  display: flex;
+  align-items: center;
+
+  .input {
+    flex: 1;
+  }
+}
+
+.inputSuggest {
+  padding-right: 34px;
+}
+
+.suggest {
+  position: absolute;
+  right: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: var(--radius);
+  background: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+
+  &:hover:not(:disabled) {
+    background: var(--bg-3);
+    color: var(--accent-fg);
+  }
+}
+
+.suggesting {
+  color: var(--accent-fg);
+
+  svg {
+    animation: promptSpin 1.2s linear infinite;
+  }
+}
+
+@keyframes promptSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}

@@ -92,10 +92,12 @@ interface Ran {
   err: string;
 }
 
+const ALL_FEATURES = ["commitMessage", "explainCommit", "branchName", "squashMessage", "conflictAssist"];
+
 const KINDS = ["openai", "anthropic", "claude-code"];
 const TIMEOUT_MS = 120000;
 const LOGIN_MS = 300000;
-const DIFF_CAP = 60000;
+export const DIFF_CAP = 60000;
 const LOCK_FILES = [
   "package-lock.json",
   "npm-shrinkwrap.json",
@@ -592,7 +594,9 @@ export function trimDiff(diff: string, numstat: string, cap: number): string {
     kept.push(section);
   }
 
-  let text = kept.join("");
+  const first = diff.indexOf("diff --git ");
+  const loose = first === -1 ? diff : diff.substring(0, first);
+  let text = loose.substring(0, cap) + kept.join("");
   if (summarised.length > 0) text += "\nAlso changed, contents not shown:\n" + summarised.join("\n") + "\n";
   if (omitted.length > 0) text += "\nAlso changed, left out for length:\n" + omitted.join("\n") + "\n";
   return text;
@@ -632,7 +636,7 @@ export function parseConfig(text: string): AiConfig {
     for (const r of raw.repos ?? []) repos.push(restoreRepo(r));
     return {
       enabled: raw.enabled ?? false,
-      features: raw.features ?? ["commitMessage"],
+      features: raw.features ?? ALL_FEATURES,
       providers,
       defaultId: raw.defaultId ?? "",
       repos,
@@ -643,7 +647,7 @@ export function parseConfig(text: string): AiConfig {
 }
 
 export function defaultConfig(): AiConfig {
-  return { enabled: false, features: ["commitMessage"], providers: [], defaultId: "", repos: [] };
+  return { enabled: false, features: ALL_FEATURES, providers: [], defaultId: "", repos: [] };
 }
 
 function withKey(p: Provider, key: string): Provider {

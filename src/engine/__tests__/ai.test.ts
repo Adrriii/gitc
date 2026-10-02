@@ -33,9 +33,9 @@ const provider = (id: string, key = "") => ({
 
 // --- store ---------------------------------------------------------------
 
-eq("no file means AI off with the commit message feature ready", loadAi(), {
+eq("no file means AI off, with every feature ready for when it is on", loadAi(), {
   enabled: false,
-  features: ["commitMessage"],
+  features: ["commitMessage", "explainCommit", "branchName", "squashMessage", "conflictAssist"],
   providers: [],
   defaultId: "",
   repos: [],
@@ -47,7 +47,7 @@ eq(
   parseConfig('{"enabled":true,"providers":[{"id":"a","kind":"anthropic"}]}'),
   {
     enabled: true,
-    features: ["commitMessage"],
+    features: ["commitMessage", "explainCommit", "branchName", "squashMessage", "conflictAssist"],
     providers: [{ id: "a", name: "", kind: "anthropic", baseUrl: "", key: "", model: "", account: "" }],
     defaultId: "",
     repos: [],
@@ -153,6 +153,8 @@ eq("its contents are not", trimmed.includes("+lots"), false);
 eq("a binary is one line", trimmed.includes("logo.png (binary)"), true);
 eq("past the cap a file is listed with its counts", trimmed.includes("left out for length:\nsrc/big.ts +1 -0"), true);
 eq("and its contents are not", trimmed.includes("xxxxx"), false);
+
+eq("text outside any diff section is kept", trimDiff("New file: README.md\nhello\n", "", 200), "New file: README.md\nhello\n");
 
 const prompt = buildPrompt({ diff, numstat, recent: ["Add a thing\n\nBecause.", "", "Fix x"] }, "fix login");
 eq("the prompt carries the examples", prompt.includes("Add a thing\n\nBecause.\n\n-----\n\nFix x"), true);

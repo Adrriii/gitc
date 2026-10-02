@@ -16,6 +16,8 @@ import { Icon } from "./Icon";
 import { api } from "../api";
 import { StagingPanel } from "./StagingPanel";
 import { Avatar } from "./Avatar";
+import { Explain } from "./Explain";
+import { useAi } from "../ai";
 import s from "./Panel.module.scss";
 
 /** git's soft limit for a subject line. Same number as StagingPanel's. */
@@ -372,6 +374,7 @@ export function Panel({
     () => data.commits.filter((c) => selected.includes(c.hash)),
     [data.commits, selected],
   );
+  const explainOn = useAi().feature("explainCommit");
   const newest = chosen.length > 0 ? chosen[0].hash : null;
   const oldest = chosen.length > 0 ? chosen[chosen.length - 1].hash : null;
   const isRange = selected.length > 1 && newest !== null && oldest !== null;
@@ -546,6 +549,7 @@ export function Panel({
     return (
       <div className={s.panel}>
         <div className={s.head}>{selected.length} commits selected</div>
+        {explainOn && <Explain tabId={tabId} shas={chosen.map((c) => c.hash)} />}
         <div className={s.multi}>Viewing merged diff of {selected.length} commits</div>
         <div className={s.mlist}>
           {chosen.map((c) => (
@@ -769,6 +773,8 @@ export function Panel({
           {editError !== null && <div className={s.editError}>{editError}</div>}
         </div>
       )}
+
+      {explainOn && <Explain tabId={tabId} shas={[commit.hash]} />}
 
       <div className={s.person}>
         <Avatar name={commit.author} email={commit.email} size={34} rounded />

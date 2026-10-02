@@ -12,6 +12,34 @@ export const AI_KINDS = [
   { kind: "claude-code", label: "Claude Code", hint: "The claude on this machine, signed in to your Claude account" },
 ];
 
+export const AI_FEATURES = [
+  {
+    id: "commitMessage",
+    label: "Commit message",
+    hint: "A button inside the commit summary writes the summary and description from the staged changes, in the style of this repository's recent commits. Anything already typed in either box is taken as a hint.",
+  },
+  {
+    id: "explainCommit",
+    label: "Explain commits",
+    hint: "A button in the commit panel explains the selected commit, or commits, in a few plain paragraphs.",
+  },
+  {
+    id: "branchName",
+    label: "Branch name",
+    hint: "A button in the new branch box names the branch after your uncommitted changes, in the style of this repository's branches.",
+  },
+  {
+    id: "squashMessage",
+    label: "Squash message",
+    hint: "Squashing writes one message for the result from the commits' messages and their combined change, instead of joining the messages together.",
+  },
+  {
+    id: "conflictAssist",
+    label: "Conflict picks",
+    hint: "The merge editor can suggest which lines to keep from each side. It only ever picks lines, and says so when a conflict needs more than that.",
+  },
+];
+
 const EVENT = "gitc:ai";
 let current: AiConfig | undefined;
 let loading: Promise<void> | undefined;

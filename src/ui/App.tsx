@@ -112,6 +112,7 @@ interface PromptState {
   confirmLabel: string;
   validate?: (v: string) => string | null;
   onConfirm: (v: string) => void;
+  suggest?: { title: string; run: () => Promise<string> };
 }
 
 interface ChooseState {
@@ -529,6 +530,8 @@ export function App() {
   const activeTab = session?.tabs.find((t) => t.id === activeId) ?? null;
   activeIdRef.current = activeId;
 
+  const branchNameOn = ai.feature("branchName");
+  const squashOn = ai.feature("squashMessage");
   const aiShown = ai.config !== undefined && ai.config.enabled && ai.config.features.length > 0;
   const aiCurrent =
     ai.config === undefined || activeTab === null
@@ -1411,7 +1414,26 @@ export function App() {
                   // oldest commit's title, then everything folded into it) and
                   // that commit is then a commit like any other - amending it
                   // is a double-click away in the panel.
-                  action: () => void runOp({ op: "squash", shas: chosen }),
+                  action: () => {
+                    if (!squashOn || activeId === null) {
+                      void runOp({ op: "squash", shas: chosen });
+                      return;
+                    }
+                    pushToast("ok", "Writing the squash message...");
+                    void api
+                      .writeSquashMessage(activeId, chosen)
+                      .then((m) =>
+                        runOp({
+                          op: "squash",
+                          shas: chosen,
+                          message: m.description.length > 0 ? m.summary + "\n\n" + m.description : m.summary,
+                        }),
+                      )
+                      .catch((e: Error) => {
+                        pushToast("warn", "Squashed with the usual message - " + e.message);
+                        return runOp({ op: "squash", shas: chosen });
+                      });
+                  },
                 },
                 { separator: true },
               ]
@@ -1575,7 +1597,7 @@ export function App() {
         ],
       });
     },
-    [selected, branch, runOp, data, worktrees, worktreeMenu],
+    [selected, branch, runOp, data, worktrees, worktreeMenu, squashOn, activeId, pushToast],
   );
 
   /**
@@ -2130,9 +2152,16 @@ export function App() {
             setPrompt(null);
             void runOp({ op: "createBranch", name, checkout: true });
           },
+          suggest:
+            branchNameOn && activeId !== null && (data?.status.length ?? 0) > 0
+              ? {
+                  title: "Name the branch after your uncommitted changes",
+                  run: () => api.suggestBranchName(activeId).then((r) => r.name),
+                }
+              : undefined,
         }),
     }),
-    [runOp, branch, data],
+    [runOp, branch, data, branchNameOn, activeId],
   );
 
   const conflictCount = useMemo(() => {
@@ -2458,6 +2487,7 @@ export function App() {
           validate={prompt.validate}
           onConfirm={prompt.onConfirm}
           onCancel={() => setPrompt(null)}
+          suggest={prompt.suggest}
         />
       )}
       {choose && (

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import type { AiConfig, AiModel, AiProvider, ClaudeStatus, CrashList, CrashReport, ReleaseNotes, UpdateInfo } from "../types";
-import { AI_KINDS, kindLabel, useAi } from "../ai";
+import { AI_FEATURES, AI_KINDS, kindLabel, useAi } from "../ai";
 import { Form, type Field } from "./Form";
 import { since } from "../ago";
 import {
@@ -494,19 +494,18 @@ function AiPane() {
             </div>
           </Row>
 
-          <Row
-            label="Commit message"
-            hint="A button inside the commit summary writes the summary and description from the staged changes, in the style of this repository's recent commits. Anything already typed in either box is taken as a hint."
-          >
-            <div className={s.choices}>
-              <button className={config.features.includes("commitMessage") ? s.on : ""} onClick={() => setFeature("commitMessage", true)}>
-                On
-              </button>
-              <button className={config.features.includes("commitMessage") ? "" : s.on} onClick={() => setFeature("commitMessage", false)}>
-                Off
-              </button>
-            </div>
-          </Row>
+          {AI_FEATURES.map((f) => (
+            <Row key={f.id} label={f.label} hint={f.hint}>
+              <div className={s.choices}>
+                <button className={config.features.includes(f.id) ? s.on : ""} onClick={() => setFeature(f.id, true)}>
+                  On
+                </button>
+                <button className={config.features.includes(f.id) ? "" : s.on} onClick={() => setFeature(f.id, false)}>
+                  Off
+                </button>
+              </div>
+            </Row>
+          ))}
         </>
       )}
 

@@ -75,7 +75,9 @@ import {
   testProvider,
   writeCommitMessage,
 } from "./engine/ai.ts";
-import type { CommitContext } from "./engine/ai.ts";
+import type { CommitContext, Provider } from "./engine/ai.ts";
+import { explainCommits, suggestBranchName, suggestPicks, taskContext, writeSquashMessage } from "./engine/aiTasks.ts";
+import type { ConflictHunk } from "./engine/aiTasks.ts";
 import { listDir } from "./engine/browse.ts";
 import { readSubmodules, listSubmodules } from "./engine/submodules.ts";
 import { install, uninstall, installedBinary, runningFromInstall } from "./engine/install.ts";
@@ -796,11 +798,42 @@ async function proxyToHost(
   }
 }
 
-async function contextFor(tab: Tab, amend: boolean): Promise<CommitContext | { error: string }> {
+function contextFor(tab: Tab, amend: boolean): Promise<CommitContext | { error: string }> {
   const flag = amend ? "1" : "0";
+  return contextVia(
+    tab,
+    () => commitContext(tab.path, amend),
+    "/api/commit-context?id=" + encodeURIComponent(tab.id) + "&amend=" + flag,
+  );
+}
+
+function aiProviderFor(tab: Tab, res: import("node:http").ServerResponse): Provider | undefined {
+  const config = loadAi();
+  if (!config.enabled) {
+    send(res, 403, "application/json", JSON.stringify({ error: "AI features are turned off" }));
+    return;
+  }
+  const provider = providerFor(config, tab.host ?? "", tab.path);
+  if (provider === undefined) {
+    send(res, 400, "application/json", JSON.stringify({ error: "No AI provider - add one in Preferences > AI" }));
+    return;
+  }
+  return provider;
+}
+
+function sendAiResult(res: import("node:http").ServerResponse, result: object): void {
+  if ("error" in result) send(res, 502, "application/json", JSON.stringify(result));
+  else sendJson(res, JSON.stringify(result));
+}
+
+async function contextVia(
+  tab: Tab,
+  local: () => Promise<CommitContext | { error: string }>,
+  remotePath: string,
+): Promise<CommitContext | { error: string }> {
   if (tab.host === null) {
     try {
-      return await commitContext(tab.path, amend);
+      return await local();
     } catch (e) {
       return { error: (e as Error).message };
     }
@@ -810,7 +843,7 @@ async function contextFor(tab: Tab, amend: boolean): Promise<CommitContext | { e
   const conn = await connectionFor(host);
   if ("error" in conn) return { error: conn.error };
   conn.inFlight++;
-  const got = await sendThrough(conn, "/api/commit-context?id=" + encodeURIComponent(tab.id) + "&amend=" + flag, "GET", undefined, "");
+  const got = await sendThrough(conn, remotePath, "GET", undefined, "");
   conn.inFlight--;
   if (!got.ok) return { error: host + ": " + got.error };
   try {
@@ -2142,11 +2175,8 @@ async function handleApi(
     const body = JSON.parse(await readBody(req)) as { id: string; hint: string; amend: boolean };
     const tab = tabFor(body.id, res);
     if (tab === null) return true;
-    const provider = providerFor(loadAi(), tab.host ?? "", tab.path);
-    if (provider === undefined) {
-      send(res, 400, "application/json", JSON.stringify({ error: "No AI provider - add one in Preferences > AI" }));
-      return true;
-    }
+    const provider = aiProviderFor(tab, res);
+    if (provider === undefined) return true;
     const context = await contextFor(tab, body.amend);
     if ("error" in context) {
       send(res, 502, "application/json", JSON.stringify(context));
@@ -2158,6 +2188,57 @@ async function handleApi(
       return true;
     }
     sendJson(res, JSON.stringify(message));
+    return true;
+  }
+
+  if (path === "/api/ai/explain" || path === "/api/ai/squash-message" || path === "/api/ai/branch-name") {
+    const body = JSON.parse(await readBody(req)) as { id: string; shas?: string[] };
+    const tab = tabFor(body.id, res);
+    if (tab === null) return true;
+    const provider = aiProviderFor(tab, res);
+    if (provider === undefined) return true;
+    let kind = "squash";
+    if (path === "/api/ai/explain") kind = "explain";
+    if (path === "/api/ai/branch-name") kind = "branch";
+    const shas = body.shas ?? [];
+    const repo = tab.path;
+    const context = await contextVia(
+      tab,
+      () => taskContext(repo, kind, shas),
+      "/api/repo-context?id=" + encodeURIComponent(tab.id) + "&kind=" + kind + "&shas=" + encodeURIComponent(shas.join(",")),
+    );
+    if ("error" in context) {
+      send(res, 502, "application/json", JSON.stringify(context));
+      return true;
+    }
+    if (kind === "explain") {
+      sendAiResult(res, await explainCommits(provider, context));
+      return true;
+    }
+    if (kind === "branch") {
+      sendAiResult(res, await suggestBranchName(provider, context));
+      return true;
+    }
+    sendAiResult(res, await writeSquashMessage(provider, context));
+    return true;
+  }
+
+  if (path === "/api/ai/conflict") {
+    const body = JSON.parse(await readBody(req)) as { id: string; path: string; hunks: ConflictHunk[] };
+    const tab = tabFor(body.id, res);
+    if (tab === null) return true;
+    const provider = aiProviderFor(tab, res);
+    if (provider === undefined) return true;
+    sendAiResult(res, await suggestPicks(provider, body.path, body.hunks));
+    return true;
+  }
+
+  if (path.startsWith("/api/repo-context")) {
+    const p = query(path);
+    const tab = tabFor(p.get("id") ?? "", res);
+    if (tab === null) return true;
+    const shas = (p.get("shas") ?? "").split(",").filter((s) => s.length > 0);
+    sendJson(res, JSON.stringify(await taskContext(tab.path, p.get("kind") ?? "", shas)));
     return true;
   }
 

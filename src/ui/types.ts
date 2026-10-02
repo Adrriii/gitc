@@ -497,6 +497,16 @@ export interface AiModel {
   label: string;
 }
 
+export interface AiConflictHunk {
+  ours: string[];
+  theirs: string[];
+  base: string[] | null;
+  before: string[];
+  after: string[];
+}
+
+export type AiPick = { ours: number[]; theirs: number[] } | { reason: string };
+
 export interface AiConfig {
   enabled: boolean;
   features: string[];

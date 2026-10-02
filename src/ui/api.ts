@@ -25,6 +25,8 @@ import type {
   ClaudeStatus,
   AiModel,
   AiProvider,
+  AiConflictHunk,
+  AiPick,
 } from "./types";
 import type { DiffTarget } from "./components/DiffView";
 
@@ -371,6 +373,16 @@ export const api = {
 
   writeCommitMessage: (id: string, hint: string, amend: boolean) =>
     post<{ summary: string; description: string }>("/api/ai/commit-message", { id, hint, amend }),
+
+  explainCommits: (id: string, shas: string[]) => post<{ text: string }>("/api/ai/explain", { id, shas }),
+
+  suggestBranchName: (id: string) => post<{ name: string }>("/api/ai/branch-name", { id }),
+
+  writeSquashMessage: (id: string, shas: string[]) =>
+    post<{ summary: string; description: string }>("/api/ai/squash-message", { id, shas }),
+
+  suggestPicks: (id: string, path: string, hunks: AiConflictHunk[]) =>
+    post<{ picks: AiPick[] }>("/api/ai/conflict", { id, path, hunks }),
 
   commit: (id: string, summary: string, description: string, amend: boolean) =>
     post<{ hash: string; summary: string }>("/api/commit", {

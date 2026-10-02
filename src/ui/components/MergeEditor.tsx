@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ConflictVersions } from "../types";
+import type { AiConflictHunk, AiPick, ConflictVersions } from "../types";
+import { useAi } from "../ai";
 import { api } from "../api";
 import {
   parseConflicts,
@@ -13,6 +14,8 @@ import { languageFor, highlightLines } from "../highlight";
 import { Icon } from "./Icon";
 import { CloseButton } from "./CloseButton";
 import s from "./MergeEditor.module.scss";
+
+const CONTEXT = 5;
 
 /** One rendered line, on one side. */
 interface Row {
@@ -63,6 +66,9 @@ export function MergeEditor({
   const [current, setCurrent] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const assistOn = useAi().feature("conflictAssist");
+  const [picks, setPicks] = useState<AiPick[] | undefined>();
+  const [suggesting, setSuggesting] = useState(false);
 
   const regionRefs = useRef<Map<number, HTMLDivElement>>(new Map());
   const leftRef = useRef<HTMLDivElement>(null);
@@ -85,6 +91,7 @@ export function MergeEditor({
         setSelections(emptySelection(segs));
         setManual(null);
         setCurrent(0);
+        setPicks(undefined);
       })
       .catch((e: Error) => live && setError(e.message));
     return () => {
@@ -244,6 +251,35 @@ export function MergeEditor({
     [manual],
   );
 
+  const suggest = useCallback(() => {
+    setSuggesting(true);
+    setError(null);
+    api
+      .suggestPicks(tabId, path, conflictHunks(segments))
+      .then((r) => setPicks(r.picks))
+      .catch((e: Error) => setError(e.message))
+      .finally(() => setSuggesting(false));
+  }, [tabId, path, segments]);
+
+  const accept = useCallback(
+    (only: number | null) => {
+      if (picks === undefined) return;
+      guardManual(() =>
+        setSelections((prev) =>
+          prev.map((sel, i) => {
+            const pick = picks[i];
+            if ((only !== null && i !== only) || pick === undefined || "reason" in pick) return sel;
+            return {
+              ours: sel.ours.map((_, j) => pick.ours.includes(j)),
+              theirs: sel.theirs.map((_, j) => pick.theirs.includes(j)),
+            };
+          }),
+        ),
+      );
+    },
+    [picks, guardManual],
+  );
+
   const scrollToConflict = useCallback((idx: number, behavior: ScrollBehavior) => {
     const pane = leftRef.current;
     const el = regionRefs.current.get(idx);
@@ -336,6 +372,8 @@ export function MergeEditor({
 
       const sel = selections[idx];
       const chosen = side === "ours" ? sel?.ours ?? [] : sel?.theirs ?? [];
+      const pick = picks?.[idx];
+      const proposed = pick === undefined || "reason" in pick ? [] : side === "ours" ? pick.ours : pick.theirs;
       const realLines = block.filter((r) => r.kind === "conflict").length;
       const allOn = realLines > 0 && chosen.every(Boolean);
       const isDone = decided[idx];
@@ -378,6 +416,20 @@ export function MergeEditor({
                 take both
               </button>
             )}
+            {side === "ours" && pick !== undefined && !("reason" in pick) && (
+              <button
+                className={`${s.takeBtn} ${s.suggestBtn}`}
+                onClick={() => accept(idx)}
+                title="Tick the lines the suggestion picked, on both sides"
+              >
+                accept suggestion
+              </button>
+            )}
+            {side === "ours" && pick !== undefined && "reason" in pick && (
+              <span className={s.declined} title={pick.reason}>
+                no suggestion: {pick.reason}
+              </span>
+            )}
             {side === "theirs" && (
               <span className={isDone ? s.doneTag : s.todoTag}>
                 {isDone ? "resolved" : "not resolved"}
@@ -395,7 +447,7 @@ export function MergeEditor({
             ) : (
               <div
                 key={j}
-                className={`${s.line} ${chosen[r.lineIndex as number] ? s.linePicked : ""}`}
+                className={`${s.line} ${chosen[r.lineIndex as number] ? s.linePicked : ""} ${proposed.includes(r.lineIndex as number) ? s.lineSuggested : ""}`}
               >
                 <span className={s.num}>{r.no}</span>
                 <span className={s.tick}>
@@ -464,6 +516,22 @@ export function MergeEditor({
             : `all ${total} resolved`}
         </span>
         <span className={s.spacer} />
+        {assistOn && (
+          <button
+            className={`${s.assist} ${suggesting ? s.assistBusy : ""}`}
+            disabled={suggesting || total === 0}
+            onClick={suggest}
+            title="Ask the AI which lines to keep in each conflict of this file. It only picks lines, and says when a conflict needs more."
+          >
+            <Icon name="sparkle" size={12} />
+            {suggesting ? "Suggesting..." : "Suggest picks"}
+          </button>
+        )}
+        {assistOn && picks !== undefined && picks.some((p) => !("reason" in p)) && (
+          <button className={s.assist} onClick={() => accept(null)} title="Tick every suggested line in this file">
+            Accept all suggestions
+          </button>
+        )}
         <span className={s.nav}>
           conflict {total === 0 ? 0 : current + 1} of {total}
         </span>
@@ -566,6 +634,23 @@ export function MergeEditor({
       </div>
     </div>
   );
+}
+
+function conflictHunks(segments: Segment[]): AiConflictHunk[] {
+  const hunks: AiConflictHunk[] = [];
+  segments.forEach((seg, i) => {
+    if (seg.kind !== "conflict") return;
+    const prev = segments[i - 1];
+    const next = segments[i + 1];
+    hunks.push({
+      ours: seg.region.ours,
+      theirs: seg.region.theirs,
+      base: seg.region.base,
+      before: prev !== undefined && prev.kind === "stable" ? prev.lines.slice(-CONTEXT) : [],
+      after: next !== undefined && next.kind === "stable" ? next.lines.slice(0, CONTEXT) : [],
+    });
+  });
+  return hunks;
 }
 
 function Text({ row }: { row: Row }) {
