@@ -97,6 +97,13 @@ const forced = await runOp(clone, request("push", { ...where, force: true }));
 eq("forcing the same destination goes through", [forced.ok, forced.note], [true, "force-pushed to origin/feature"]);
 eq("and lands", git(upstream, "log", "-1", "--format=%s", "feature"), "more, amended");
 
+// The last commit dropped: only behind, and forcing is how the remote loses it.
+git(clone, "reset", "-q", "--hard", "HEAD~1");
+const dropped = await runOp(clone, request("push", where));
+eq("a dropped commit reads as behind", dropped.refusal.kind, "behind");
+const removed = await runOp(clone, request("push", { ...where, force: true }));
+eq("and can be forced off the remote", [removed.ok, git(upstream, "log", "-1", "--format=%s", "feature")], [true, "mine"]);
+
 const created = await runOp(clone, request("createBranch", { name: "other", ref: "origin/master", checkout: true }));
 eq("a branch made in gitc from origin/master", created.ok, true);
 eq("tracks nothing", tracking(clone, "other"), "");

@@ -57,7 +57,9 @@ export function PushRefused({
             <>
               <code>{refusal.upstream}</code> has {plural(refusal.behind, "commit")} that this
               branch does not, and this branch has nothing of its own to publish. Pulling brings
-              you level - there is nothing to reconcile.
+              you level - there is nothing to reconcile. Unless you removed{" "}
+              {refusal.behind === 1 ? "it" : "them"} on purpose - a reset or a dropped commit -
+              and the remote should lose {refusal.behind === 1 ? "it" : "them"} too.
             </>
           ) : rewrite ? (
             <>
@@ -103,13 +105,25 @@ export function PushRefused({
 
         <div className={s.actions}>
           {behind ? (
-            <button className={s.primary} onClick={() => onPull("ff")}>
-              Pull
-              <span className={s.hint}>
-                git pull --ff-only. Moves this branch up to {refusal.upstream}; nothing here is
-                changed or merged.
-              </span>
-            </button>
+            <>
+              <button className={s.primary} onClick={() => onPull("ff")}>
+                Pull
+                <span className={s.hint}>
+                  git pull --ff-only. Moves this branch up to {refusal.upstream}; nothing here is
+                  changed or merged.
+                </span>
+              </button>
+              {/* Being behind is also what dropping or resetting away the
+                  last commits looks like, and then removing them from the
+                  remote is the point - so it stays possible, in red. */}
+              <button className={s.danger} onClick={onForce}>
+                Force push
+                <span className={s.hint}>
+                  Deletes {plural(refusal.behind, "commit")} from {refusal.upstream}, for commits
+                  you removed on purpose.
+                </span>
+              </button>
+            </>
           ) : rewrite ? (
             <>
               <button className={s.primary} onClick={onForce}>
