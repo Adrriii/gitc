@@ -192,6 +192,22 @@ async function conflictProne(
 ): Promise<OpResult> {
   try {
     await git(repo, args, env);
+    // With --autostash, git can finish the operation and then fail to put
+    // the uncommitted changes back: it exits 0, leaves the clashing files
+    // conflicted and keeps the changes in the stash. Reporting that as done
+    // would hide conflict markers in files the user was editing.
+    if (await hasUnmerged(repo)) {
+      return {
+        ok: false,
+        note:
+          label +
+          " went through, but your uncommitted changes clash with it. Resolve them below - a copy is kept in the stash, so nothing is lost either way.",
+        pending: "unmerged",
+        refusal: NO_REFUSAL,
+        warn: false,
+        confirm: "",
+      };
+    }
     return ok(done);
   } catch (e) {
     const pending = readPending(repo);
@@ -1595,10 +1611,15 @@ export async function runOp(repo: string, req: OpRequest): Promise<OpResult> {
       // branches have diverged the user should choose, not have a merge commit
       // appear. `mode` is that choice, once they have been shown what the
       // divergence actually is.
+      //
+      // --autostash on every mode: uncommitted changes are set aside and put
+      // back on top, so a branch that moved can be caught up with mid-edit.
+      // Without it git refuses as soon as an incoming change touches an
+      // edited file, and a rebase refuses on any edit at all.
       if (req.mode === "rebase") {
         return conflictProne(
           repo,
-          ["pull", "--rebase"],
+          ["pull", "--rebase", "--autostash"],
           "Pull",
           "pulled - your commits are on top now, push again to publish",
         );
@@ -1606,13 +1627,12 @@ export async function runOp(repo: string, req: OpRequest): Promise<OpResult> {
       if (req.mode === "merge") {
         return conflictProne(
           repo,
-          ["pull", "--no-rebase"],
+          ["pull", "--no-rebase", "--autostash"],
           "Pull",
           "pulled and merged - push again to publish",
         );
       }
-      await git(repo, ["pull", "--ff-only"]);
-      return ok("pulled");
+      return conflictProne(repo, ["pull", "--ff-only", "--autostash"], "Pull", "pulled");
     }
 
     case "push": {
