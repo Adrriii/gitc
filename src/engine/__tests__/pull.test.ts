@@ -60,7 +60,7 @@ let n = 0;
 /** A clone with `edit` applied to one of its files, left uncommitted after the remote moved line 2 of f. */
 function behindWithEdit(file: string, edit: (lines: string[]) => void): string {
   n += 1;
-  git(root, "clone", "-q", upstream, "c" + String(n));
+  git(root, "clone", "-q", "-c", "core.autocrlf=false", upstream, "c" + String(n));
   const clone = join(root, "c" + String(n));
   writeFileSync(join(other, "f"), "1\ntheirs " + String(n) + "\n3\n");
   git(other, "commit", "-q", "-am", "theirs " + String(n));
