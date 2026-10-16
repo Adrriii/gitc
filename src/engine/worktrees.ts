@@ -176,7 +176,8 @@ export async function asRegisteredHere<T>(repo: string, name: string, act: () =>
   const record = join(w.admin, "gitdir");
   const before = readTrimmed(record);
   if (samePath(dirname(resolve(w.admin, before)), w.path) || !pointsBack(w.path, w.admin)) return act();
-  writeFileSync(record, join(w.path, ".git") + "\n", "utf8");
+  const real = join(w.path, ".git").replace(/\\/g, "/");
+  writeFileSync(record, real + "\n", "utf8");
   try {
     return await act();
   } catch (e) {
