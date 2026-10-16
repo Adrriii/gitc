@@ -14,7 +14,7 @@ import { extractCoAuthors, git, gitOrNull } from "./git.ts";
 import type { Person } from "./git.ts";
 import { needInRepo, safeArgument, safeRemoteUrl, tempFile } from "./paths.ts";
 import { readPending, readRemotes } from "./refs.ts";
-import { listWorktrees } from "./worktrees.ts";
+import { asRegisteredHere, listWorktrees } from "./worktrees.ts";
 import { at, atOr } from "./safe.ts";
 
 export interface OpRequest {
@@ -1035,10 +1035,12 @@ export async function runOp(repo: string, req: OpRequest): Promise<OpResult> {
       const args = ["worktree", "remove"];
       if (req.force) args.push("--force");
       if (req.force && w.locked) args.push("--force");
-      // git's own record of the path, absolute, so it cannot read as an option.
+      // Absolute, so it cannot read as an option. Where the worktree really
+      // is, which for one registered from another machine is not where git's
+      // record says - asRegisteredHere reconciles the two for the call.
       args.push(w.path);
       try {
-        await git(repo, args);
+        await asRegisteredHere(repo, w.name, () => git(repo, args));
       } catch (e) {
         const message = (e as Error).message;
         if (req.force) throw e;

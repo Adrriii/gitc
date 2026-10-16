@@ -15,7 +15,7 @@
 // recover from that badly - so every git call below runs with
 // --no-optional-locks, and none of them writes.
 
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 
 import { readStatus } from "./git.ts";
@@ -157,6 +157,32 @@ function relocate(recorded: string, admin: string, common: string): string {
     }
   }
   return recorded;
+}
+
+/**
+ * Runs `act` with git's record of a worktree pointing where it really is.
+ *
+ * A worktree registered from another machine is found here by relocate, but
+ * git itself only knows the recorded path, so `git worktree remove` given the
+ * real one answers "is not a working tree". `git worktree repair` would fix
+ * the record, and also rewrite the link of every other worktree it can
+ * reach into an absolute path for this machine, breaking them on the one
+ * they came from. So only this worktree's record is rewritten, and put back
+ * if `act` fails: the worktree is still in use over there.
+ */
+export async function asRegisteredHere<T>(repo: string, name: string, act: () => Promise<T>): Promise<T> {
+  const w = locate(repo).find((x) => x.name === name && !x.main);
+  if (w === undefined) return act();
+  const record = join(w.admin, "gitdir");
+  const before = readTrimmed(record);
+  if (samePath(dirname(resolve(w.admin, before)), w.path) || !pointsBack(w.path, w.admin)) return act();
+  writeFileSync(record, join(w.path, ".git") + "\n", "utf8");
+  try {
+    return await act();
+  } catch (e) {
+    if (existsSync(w.admin)) writeFileSync(record, before + "\n", "utf8");
+    throw e;
+  }
 }
 
 function pointsBack(tree: string, admin: string): boolean {
