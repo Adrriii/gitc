@@ -1,5 +1,5 @@
-// Pulling a branch that moved while there are uncommitted changes, against a
-// real clone made by git here.
+// Pulling and rebasing while there are uncommitted changes, against a real
+// clone made by git here.
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
@@ -29,10 +29,10 @@ function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
 }
 
-function pull(mode: string): OpRequest {
+function pull(mode: string, op = "pull", ref = ""): OpRequest {
   return {
-    op: "pull",
-    ref: "",
+    op,
+    ref,
     shas: [],
     name: "",
     mode,
@@ -100,6 +100,25 @@ const r4 = await runOp(rebased, pull("rebase"));
 eq("a rebase pull with an edit goes through", r4.ok, true);
 eq("own commit on top", git(rebased, "log", "-1", "--format=%s"), "own");
 eq("the edit is still there", git(rebased, "status", "--porcelain"), "M g");
+
+const onto = behindWithEdit("g", (l) => (l[0] = "mine"));
+writeFileSync(join(onto, "h"), "h\n");
+git(onto, "add", "h");
+git(onto, "commit", "-q", "-m", "own");
+writeFileSync(join(onto, "g"), "mine\n");
+const r5 = await runOp(onto, pull("", "rebaseOnto", "origin/master"));
+eq("rebase onto, mid-edit: goes through", r5.ok, true);
+eq("onto the target", git(onto, "rev-parse", "HEAD^"), git(onto, "rev-parse", "origin/master"));
+eq("the edit is still there", git(onto, "status", "--porcelain"), "M g");
+
+const aborted = behindWithEdit("g", (l) => (l[0] = "mine"));
+writeFileSync(join(aborted, "f"), "1\nown\n3\n");
+git(aborted, "commit", "-q", "-m", "own", "f");
+const r6 = await runOp(aborted, pull("", "rebaseOnto", "origin/master"));
+eq("a rebase that conflicts stops", r6.pending, "rebase");
+await runOp(aborted, pull("", "abort", "rebase"));
+eq("aborting it gives the edit back", git(aborted, "status", "--porcelain"), "M g");
+eq("and the stash is empty again", git(aborted, "stash", "list"), "");
 
 rmSync(root, { recursive: true, force: true });
 

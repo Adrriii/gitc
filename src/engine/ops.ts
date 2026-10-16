@@ -521,7 +521,10 @@ async function rebaseWith(
   }
 
   try {
-    return await conflictProne(repo, ["rebase", "-i", base], label, done, env);
+    // --autostash, as on every rebase here: uncommitted changes wait in the
+    // stash while history is rewritten and come back on top - after the
+    // last pick, or after a continue or an abort.
+    return await conflictProne(repo, ["rebase", "-i", "--autostash", base], label, done, env);
   } finally {
     for (const file of [specPath, msgPath]) {
       try {
@@ -1084,10 +1087,11 @@ export async function runOp(repo: string, req: OpRequest): Promise<OpResult> {
     case "rebaseOnto": {
       needRef(req.ref, "target");
       // core.editor=true makes any editor git wants a no-op that succeeds:
-      // there is no terminal for one to open in.
+      // there is no terminal for one to open in. --autostash so a rebase can
+      // start mid-edit, which git otherwise refuses outright.
       return conflictProne(
         repo,
-        ["-c", "core.editor=true", "rebase", req.ref],
+        ["-c", "core.editor=true", "rebase", "--autostash", req.ref],
         "Rebase",
         "rebased onto " + req.ref,
       );
