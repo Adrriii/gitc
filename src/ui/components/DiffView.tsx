@@ -78,8 +78,14 @@ function showWhitespace(text: string, tabSize: number): string {
 }
 
 function Gutter({ n }: { n: number | null }) {
-  return <span className={s.num}>{n ?? ""}</span>;
+  return (
+    <span className={s.num} data-gutter="" title={GUTTER_HINT}>
+      {n ?? ""}
+    </span>
+  );
 }
+
+const GUTTER_HINT = "Click to copy the line, drag to copy several";
 
 /**
  * How many diff lines are rendered before the view stops and asks.
@@ -212,6 +218,56 @@ export function DiffView({
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const body = useRef<HTMLDivElement>(null);
+
+  /**
+   * Copying lines from the gutter: a click copies one, a drag the run between
+   * where it started and where it is released.
+   *
+   * Each row carries its raw text in data-copy, so what lands on the
+   * clipboard is the file's own text - not the rendered one, whose tabs and
+   * trailing spaces may be drawn as arrows and dots, and without the +/-.
+   * The rows in between are found in the DOM rather than in the hunks, so
+   * the copy is what was on screen, in that order, whichever view drew it;
+   * data-side keeps a drag in Split to the column it started in.
+   */
+  const picked = useRef<HTMLElement[]>([]);
+  const paint = (rows: HTMLElement[], cls: string) => {
+    for (const r of picked.current) r.classList.remove(s.picking, s.copiedFlash);
+    for (const r of rows) r.classList.add(cls);
+    picked.current = rows;
+  };
+  const startPick = (e: React.MouseEvent) => {
+    const target = e.target as HTMLElement;
+    const from = target.closest<HTMLElement>("[data-gutter]")?.closest<HTMLElement>("[data-copy]");
+    if (e.button !== 0 || from === null || from === undefined || body.current === null) return;
+    // No native text selection while picking rows.
+    e.preventDefault();
+    const side = `[data-copy][data-side="${from.dataset.side ?? ""}"]`;
+    const rows = Array.from(body.current.querySelectorAll<HTMLElement>(side));
+    const start = rows.indexOf(from);
+    paint([from], s.picking);
+    const over = (ev: MouseEvent) => {
+      // Over the other column in Split, the row under the mouse still counts,
+      // through its cell on this side; a filler there has none, and changes
+      // nothing.
+      const t = ev.target as HTMLElement;
+      const cell = t.closest<HTMLElement>(side) ?? t.closest("tr")?.querySelector<HTMLElement>(side);
+      const to = cell === null || cell === undefined ? -1 : rows.indexOf(cell);
+      if (to < 0) return;
+      paint(rows.slice(Math.min(start, to), Math.max(start, to) + 1), s.picking);
+    };
+    const up = () => {
+      window.removeEventListener("mouseover", over);
+      const chosen = picked.current;
+      void navigator.clipboard.writeText(chosen.map((r) => r.dataset.copy ?? "").join("\n"));
+      paint(chosen, s.copiedFlash);
+      window.setTimeout(() => {
+        if (picked.current === chosen) paint([], s.picking);
+      }, 600);
+    };
+    window.addEventListener("mouseover", over);
+    window.addEventListener("mouseup", up, { once: true });
+  };
 
   // Unified shows only the changed neighbourhood; every other view needs the
   // whole file, so the fetch depends on the mode.
@@ -466,10 +522,12 @@ export function DiffView({
                   l.kind === "add" ? s.add : l.kind === "del" ? s.del : "",
                   !fileView && l.kind !== "context" ? s.changed : "",
                 ].join(" ")}
+                data-copy={l.text}
+                data-side="unified"
               >
                 <Gutter n={l.oldNo} />
                 <Gutter n={l.newNo} />
-                <span className={s.marker}>
+                <span className={s.marker} data-gutter="" title={GUTTER_HINT}>
                   {fileView ? "" : l.kind === "add" ? "+" : l.kind === "del" ? "−" : ""}
                 </span>
                 <Content line={l} />
@@ -509,6 +567,8 @@ export function DiffView({
                       s.cell,
                       row.left === null ? s.filler : row.left.kind === "del" ? s.del : "",
                     ].join(" ")}
+                    data-copy={row.left?.text}
+                    data-side={row.left === null ? undefined : "left"}
                   >
                     {row.left !== null && (
                       <span className={s.cellInner}>
@@ -522,6 +582,8 @@ export function DiffView({
                       s.cell,
                       row.right === null ? s.filler : row.right.kind === "add" ? s.add : "",
                     ].join(" ")}
+                    data-copy={row.right?.text}
+                    data-side={row.right === null ? undefined : "right"}
                   >
                     {row.right !== null && (
                       <span className={s.cellInner}>
@@ -666,7 +728,7 @@ export function DiffView({
         </div>
       </div>
 
-      <div className={s.body} ref={body}>
+      <div className={s.body} ref={body} onMouseDown={startPick}>
         {loading && <div className={s.note}>Loading diff…</div>}
         {error !== null && <div className={s.note}>{error}</div>}
         {!loading && error === null && diff !== null && budget.shown < budget.total && (
