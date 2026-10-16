@@ -233,6 +233,25 @@ $hatch: var(--line-strong);
   user-select: none;
 }
 
+// The gutter copies the line it is on - see startPick. Stretched to the
+// row, so an empty cell (the old number of an added line, the marker of an
+// unchanged one) and the lower part of a wrapped line can be clicked too.
+.num,
+.marker {
+  cursor: copy;
+  align-self: stretch;
+}
+
+// An overlay rather than a background, so it shows over the add/del and
+// changed-line colours without out-ranking each of them.
+.picking {
+  box-shadow: inset 0 0 0 9999px rgba(79, 140, 255, 0.22);
+}
+
+.copiedFlash {
+  box-shadow: inset 0 0 0 9999px rgba(79, 140, 255, 0.4);
+}
+
 .text {
   flex: 1;
   white-space: pre;
