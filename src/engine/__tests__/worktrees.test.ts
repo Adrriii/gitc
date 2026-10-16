@@ -2,12 +2,13 @@
 //
 // Faking the layout by hand would test our idea of it; the point is git's.
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, realpathSync } from "node:fs";
-import { join, relative } from "node:path";
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, realpathSync, existsSync } from "node:fs";
+import { join, relative, dirname } from "node:path";
 import { tmpdir } from "node:os";
 
 import { readRefs, readHead, readRemotes, gitDir, commonDir } from "../refs.ts";
 import { listWorktrees, findWorktree, worktreeStatus, samePath } from "../worktrees.ts";
+import { runOp } from "../ops.ts";
 
 let pass = 0;
 let fail = 0;
@@ -137,6 +138,45 @@ eq("a worktree gone from disk is not readable", findWorktree(main, "gone"), null
 writeFileSync(join(agent, "note.txt"), "x");
 const files = await worktreeStatus(agent);
 eq("another worktree's changes", files.map((f) => f.path), ["note.txt"]);
+
+// --- removing one registered from another mount ------------------------------
+
+/** A locked worktree as another machine registers it: its record holds that machine's path, its link is relative. */
+function registeredElsewhere(name: string): { tree: string; record: string } {
+  const tree = join(root, name);
+  git(main, "worktree", "add", "-q", "--lock", "-b", name, tree);
+  const record = join(main, ".git", "worktrees", name, "gitdir");
+  rewrite(record, "/elsewhere/mount/" + name + "/.git\n");
+  const link = join(tree, ".git");
+  const target = readFileSync(link, "utf8").trim().substring("gitdir:".length).trim();
+  rewrite(link, "gitdir: " + relative(tree, target).replace(/\\/g, "/") + "\n");
+  return { tree, record };
+}
+const far = registeredElsewhere("far");
+const near = registeredElsewhere("near");
+const nearLink = readFileSync(join(near.tree, ".git"), "utf8");
+const remove = (force: boolean) =>
+  runOp(main, {
+    op: "removeWorktree",
+    ref: "",
+    shas: [],
+    name: "far",
+    mode: "",
+    message: "",
+    remote: "",
+    force,
+    checkout: false,
+    path: "",
+    patch: "",
+  });
+
+const refused = await remove(false);
+eq("a locked one is asked about first", refused.confirm, "Remove far anyway?");
+eq("and its record is put back for the other machine", readFileSync(far.record, "utf8"), "/elsewhere/mount/far/.git\n");
+const removed = await remove(true);
+eq("removed when confirmed", [removed.ok, existsSync(far.tree), existsSync(dirname(far.record))], [true, false, false]);
+eq("another worktree's record is untouched", readFileSync(near.record, "utf8"), "/elsewhere/mount/near/.git\n");
+eq("and so is its link", readFileSync(join(near.tree, ".git"), "utf8"), nearLink);
 
 rmSync(root, { recursive: true, force: true });
 
