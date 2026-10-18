@@ -555,14 +555,9 @@ export async function readCommits(
     const f = record.split(SEP);
     if (f.length < 7) continue;
     const extracted = extractCoAuthors(f[6]);
-    // Named, not `f[1].length > 0 ? f[1].split(" ") : []`: scriptc 0.1.x
-    // releases the hidden copy of f[1] the taken branch made at the end of
-    // every iteration, taken or not - so each root commit released the
-    // previous commit's box twice and corrupted the heap.
-    const parentField = f[1];
     commits.push({
       hash: f[0],
-      parents: parentField.length > 0 ? parentField.split(" ") : [],
+      parents: f[1].length > 0 ? f[1].split(" ") : [],
       author: f[2],
       email: f[3],
       date: parseInt(f[4], 10),
@@ -613,15 +608,12 @@ export async function readStashes(repo: string): Promise<RawStash[]> {
     if (record.length === 0) continue;
     const f = record.split(SEP);
     if (f.length < 7) continue;
-    // Named for scriptc, as in readCommits.
-    const parentField = f[1];
-    const parents = parentField.length > 0 ? parentField.split(" ") : [];
+    const parents = f[1].length > 0 ? f[1].split(" ") : [];
     out.push({
       selector: f[5],
       commit: {
         hash: f[0],
-        // The first parent or none. slice rather than a conditional
-        // [parents[0]], which hits the same scriptc bug as above.
+        // The first parent or none.
         parents: parents.slice(0, 1),
         author: f[2],
         email: f[3],
