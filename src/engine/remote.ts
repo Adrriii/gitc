@@ -103,40 +103,17 @@ export function sshRun(host: string, command: string): Promise<Ran> {
 
     const out: Uint8Array[] = [];
     const err: Uint8Array[] = [];
-    let code = 0;
-    let exited = false;
-    let open = 2;
-
-    const settle = () => {
-      if (!exited || open > 0) return;
+    const settle = (code: number) =>
       resolve({
         code,
         out: Buffer.concat(out).toString("utf8"),
         err: Buffer.concat(err).toString("utf8"),
       });
-    };
 
     stdout.on("data", (c: Buffer) => out.push(c));
     stderr.on("data", (c: Buffer) => err.push(c));
-    stdout.on("end", () => {
-      open--;
-      settle();
-    });
-    stderr.on("end", () => {
-      open--;
-      settle();
-    });
-    child.on("exit", (c: number | null) => {
-      code = c === null ? 1 : c;
-      exited = true;
-      settle();
-    });
-    child.on("error", () => {
-      code = 127;
-      exited = true;
-      open = 0;
-      settle();
-    });
+    child.on("close", (c: number | null) => settle(c === null ? 1 : c));
+    child.on("error", () => settle(127));
   });
 }
 
@@ -323,38 +300,16 @@ function localRun(cmd: string, args: string[]): Promise<Ran> {
     }
     const out: Uint8Array[] = [];
     const err: Uint8Array[] = [];
-    let code = 0;
-    let exited = false;
-    let open = 2;
-    const settle = () => {
-      if (!exited || open > 0) return;
+    const settle = (code: number) =>
       resolve({
         code,
         out: Buffer.concat(out).toString("utf8"),
         err: Buffer.concat(err).toString("utf8"),
       });
-    };
     stdout.on("data", (c: Buffer) => out.push(c));
     stderr.on("data", (c: Buffer) => err.push(c));
-    stdout.on("end", () => {
-      open--;
-      settle();
-    });
-    stderr.on("end", () => {
-      open--;
-      settle();
-    });
-    child.on("exit", (c: number | null) => {
-      code = c === null ? 1 : c;
-      exited = true;
-      settle();
-    });
-    child.on("error", () => {
-      code = 127;
-      exited = true;
-      open = 0;
-      settle();
-    });
+    child.on("close", (c: number | null) => settle(c === null ? 1 : c));
+    child.on("error", () => settle(127));
   });
 }
 

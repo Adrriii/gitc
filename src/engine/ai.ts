@@ -496,9 +496,6 @@ function exec(command: string, args: string[], input: string, env: Record<string
 
     const out: Uint8Array[] = [];
     const err: Uint8Array[] = [];
-    let code = 0;
-    let exited = false;
-    let open = 2;
     let done = false;
 
     const finish = (result: Ran | { error: string }) => {
@@ -506,10 +503,6 @@ function exec(command: string, args: string[], input: string, env: Record<string
       done = true;
       clearTimeout(timer);
       resolve(result);
-    };
-    const settle = () => {
-      if (!exited || open > 0) return;
-      finish({ code, out: Buffer.concat(out).toString("utf8"), err: Buffer.concat(err).toString("utf8") });
     };
     const timer = setTimeout(() => {
       child.kill();
@@ -527,20 +520,14 @@ function exec(command: string, args: string[], input: string, env: Record<string
     stdin.end();
 
     stdout.on("data", (chunk: Buffer) => out.push(chunk));
-    stdout.on("end", () => {
-      open -= 1;
-      settle();
-    });
     stderr.on("data", (chunk: Buffer) => err.push(chunk));
-    stderr.on("end", () => {
-      open -= 1;
-      settle();
-    });
-    child.on("exit", (status: number | null) => {
-      code = status === null ? 1 : status;
-      exited = true;
-      settle();
-    });
+    child.on("close", (status: number | null) =>
+      finish({
+        code: status === null ? 1 : status,
+        out: Buffer.concat(out).toString("utf8"),
+        err: Buffer.concat(err).toString("utf8"),
+      }),
+    );
     child.on("error", (e: Error) => finish({ error: e.message }));
   });
 }

@@ -362,23 +362,6 @@ function run(repo: string, args: string[], env?: Record<string, string>, input?:
 
     const out: Uint8Array[] = [];
     const err: Uint8Array[] = [];
-    let code = 0;
-    let exited = false;
-    let open = 2;
-
-    // Both streams have to END before the output is complete. `exit` can
-    // arrive with bytes still unread, and this compiler has no `close` event
-    // to mean "exited AND drained" - so that condition is assembled here.
-    const settle = () => {
-      if (!exited || open > 0) return;
-      const bytes = Buffer.concat(out);
-      resolve({
-        code,
-        out: bytes.toString("utf8"),
-        bytes,
-        err: Buffer.concat(err).toString("utf8"),
-      });
-    };
 
     const stdin = child.stdin;
     const stdout = child.stdout;
@@ -391,21 +374,17 @@ function run(repo: string, args: string[], env?: Record<string, string>, input?:
     stdin.end();
 
     stdout.on("data", (chunk: Buffer) => out.push(chunk));
-    stdout.on("end", () => {
-      open -= 1;
-      settle();
-    });
     stderr.on("data", (chunk: Buffer) => err.push(chunk));
-    stderr.on("end", () => {
-      open -= 1;
-      settle();
-    });
 
-    child.on("exit", (status: number | null) => {
+    child.on("close", (status: number | null) => {
       // A signal death reports null; treat it as a failure with no code.
-      code = status === null ? 1 : status;
-      exited = true;
-      settle();
+      const bytes = Buffer.concat(out);
+      resolve({
+        code: status === null ? 1 : status,
+        out: bytes.toString("utf8"),
+        bytes,
+        err: Buffer.concat(err).toString("utf8"),
+      });
     });
     child.on("error", (e: Error) => reject(e));
   });

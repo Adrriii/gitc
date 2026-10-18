@@ -221,8 +221,7 @@ const META_TIMEOUT = [...CONNECT_TIMEOUT, "--max-time", "30"];
  * and the window sat on the new-tab screen unable to open anything.
  *
  * This is the same bargain `run()` in git.ts makes for git, for the same
- * reason and with the same explicit stdio: scriptc has no `close` event, so
- * "exited AND drained" has to be assembled from the parts.
+ * reason and with the same explicit stdio.
  */
 function curl(args: string[]): Promise<string | null> {
   return new Promise((resolve) => {
@@ -234,14 +233,6 @@ function curl(args: string[]): Promise<string | null> {
     });
 
     const out: Uint8Array[] = [];
-    let code = 0;
-    let exited = false;
-    let open = 2;
-
-    const settle = () => {
-      if (!exited || open > 0) return;
-      resolve(code === 0 ? Buffer.concat(out).toString("utf8") : null);
-    };
 
     const stdout = child.stdout;
     const stderr = child.stderr;
@@ -251,23 +242,11 @@ function curl(args: string[]): Promise<string | null> {
     }
 
     stdout.on("data", (chunk: Buffer) => out.push(chunk));
-    stdout.on("end", () => {
-      open -= 1;
-      settle();
-    });
     // Read and discarded: an unread pipe fills and stalls the child, and
     // curl's progress chatter is of no use to anyone here.
     stderr.on("data", () => {});
-    stderr.on("end", () => {
-      open -= 1;
-      settle();
-    });
 
-    child.on("exit", (status: number | null) => {
-      code = status === null ? 1 : status;
-      exited = true;
-      settle();
-    });
+    child.on("close", (status: number | null) => resolve(status === 0 ? Buffer.concat(out).toString("utf8") : null));
     // curl missing entirely lands here rather than as a non-zero exit.
     child.on("error", () => resolve(null));
   });
