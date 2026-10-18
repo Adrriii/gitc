@@ -190,8 +190,7 @@ export function confirmTakeOver(
     });
 
     // Port 0 lets the OS pick a free one - the launcher cannot use gitc's own
-    // port, which is precisely the thing that is already taken. Composed read
-    // of address().port, which is the only form scriptc lowers.
+    // port, which is precisely the thing that is already taken.
     server.listen(0, () => {
       const url = "http://127.0.0.1:" + String(server.address().port) + "/";
 

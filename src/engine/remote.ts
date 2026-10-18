@@ -366,9 +366,7 @@ export async function pushRemote(
     // transfer that dies halfway cannot leave a half-written binary behind.
     const incoming = bin + ".incoming";
     // scp resolves a relative path against the remote's home directory, which
-    // is what the leading "~/" in binPath means anyway. Stripped by hand:
-    // String.replace runs in an embedded dynamic engine this build leaves out
-    // (SC2012).
+    // is what the leading "~/" in binPath means anyway.
     const relative = incoming.startsWith("~/") ? incoming.substring(2) : incoming;
     const scp = await localRun("scp", [
       "-o", "BatchMode=yes",
@@ -526,7 +524,6 @@ function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const probe = createServer(() => undefined);
     probe.on("error", () => reject(new Error("no free port")));
-    // Composed read of address().port: the only form scriptc lowers.
     probe.listen(0, () => {
       const port = probe.address().port;
       probe.close(() => resolve(port));

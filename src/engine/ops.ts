@@ -355,8 +355,6 @@ function personText(person: Person): string {
 async function creditsFor(repo: string, shas: string[], author: Person): Promise<Person[]> {
   const seen = new Set<string>();
   seen.add(personKey(author));
-  // Declared before the early return: a bare `[]` has no element type to infer
-  // from here, and scriptc reads it as number[].
   const credits: Person[] = [];
 
   // --no-walk so the listed commits are the ONLY ones read: without it git

@@ -45,10 +45,7 @@ function hash(text: string): string {
     // The shifts are FNV's 32-bit prime multiply, written to stay in range.
     h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
   }
-  // String(h), not h.toString(16): a radix argument needs scriptc's embedded
-  // dynamic engine, which a static build does not carry. The value is only
-  // ever compared with itself, so the base is irrelevant.
-  return String(h);
+  return h.toString(16);
 }
 
 function mtimeOf(path: string): string {

@@ -525,11 +525,7 @@ async function graphPayload(tab: Tab, limit: number): Promise<string> {
    * where it says it does.
    */
   const walked: RawCommit[] = [];
-  const noFiles: WorkingFile[] = [];
   if (status.length > 0 && head.hash !== null) {
-    // `noAuthors` rather than a bare `[]`: scriptc types an empty literal as
-    // number[] and refuses to widen it (SC2002).
-    const noAuthors: Person[] = [];
     walked.push({
       hash: WIP_HASH,
       parents: [head.hash],
@@ -538,7 +534,7 @@ async function graphPayload(tab: Tab, limit: number): Promise<string> {
       author: "",
       email: "",
       date: Math.floor(Date.now() / 1000),
-      coAuthors: noAuthors,
+      coAuthors: [],
     });
   }
   // The same for every other worktree with something uncommitted, each as a
@@ -551,7 +547,6 @@ async function graphPayload(tab: Tab, limit: number): Promise<string> {
     const files = others.get(w.name);
     if (files === undefined || files.length === 0 || w.hash === null) continue;
     otherStatus.set(w.name, files);
-    const noAuthors: Person[] = [];
     walked.push({
       hash: WIP_HASH + ":" + w.name,
       parents: [w.hash],
@@ -560,7 +555,7 @@ async function graphPayload(tab: Tab, limit: number): Promise<string> {
       author: "",
       email: "",
       date: Math.floor(Date.now() / 1000),
-      coAuthors: noAuthors,
+      coAuthors: [],
     });
   }
   for (const c of history) walked.push(c);
@@ -568,10 +563,8 @@ async function graphPayload(tab: Tab, limit: number): Promise<string> {
   const walkedRows = buildGraph(walked, trunkTip(refs));
 
   // Started with the others above; collected here, where they are first
-  // needed. `noStashes` rather than a bare [] - scriptc types an empty
-  // literal as number[] and will not widen it.
-  const noStashes: RawStash[] = [];
-  const stashes = stashesP === null ? noStashes : await stashesP;
+  // needed.
+  const stashes = stashesP === null ? [] : await stashesP;
   const spliced = spliceStashes(
     walked,
     walkedRows,
@@ -686,7 +679,7 @@ async function graphPayload(tab: Tab, limit: number): Promise<string> {
       prunable: w.prunable,
       pending: w.pending,
       idleMs: w.idleMs,
-      status: w.current ? status : (otherStatus.get(w.name) ?? noFiles),
+      status: w.current ? status : (otherStatus.get(w.name) ?? []),
     })),
     colors: [...LANE_COLORS, STASH_LANE],
   });
@@ -696,8 +689,7 @@ function send(res: import("node:http").ServerResponse, code: number, type: strin
   res.writeHead(code, { "content-type": type, "cache-control": "no-store" });
   // Encoded to bytes explicitly. Handing res.end a string emits one byte per
   // code unit - a folder called "Cafe-Munster" arrived with a bare 0xe9 where
-  // the accent belongs, which is Latin-1, not UTF-8. (scriptc 0.0.35 also
-  // ignored Buffer.from's encoding argument, which is why this is TextEncoder.)
+  // the accent belongs, which is Latin-1, not UTF-8.
   //
   // Every string this server sends is affected - commit subjects and author
   // names as much as paths - so it is fixed once, here.
@@ -1139,8 +1131,7 @@ async function connectionFor(host: string): Promise<Connection | { error: string
   // status, submodules, the watcher - and each one arriving to find no
   // connection would otherwise start its own install and its own tunnel.
   const pending = connecting.get(host);
-  // `!`: scriptc's await ignores the narrowing.
-  if (pending !== undefined) return await pending!;
+  if (pending !== undefined) return await pending;
 
   const attempt = openConnection(host);
   connecting.set(host, attempt);
@@ -1378,8 +1369,7 @@ async function openRemoteRepo(
 
   const key = host + "\n" + path;
   const already = openingRemote.get(key);
-  // `!`: scriptc's await ignores the narrowing.
-  if (already !== undefined) return await already!;
+  if (already !== undefined) return await already;
 
   const attempt = openRemoteRepoOnce(host, path);
   openingRemote.set(key, attempt);
@@ -2708,7 +2698,6 @@ async function main(): Promise<void> {
   }
 
   // A path argument opens that repo; otherwise the saved tabs come back.
-  // at() rather than argv[2]: scriptc throws on out-of-range reads.
   const arg = at(process.argv, 2);
   let wanted: string | null = null;
   if (arg !== undefined && arg.length > 0 && !arg.startsWith("--")) {

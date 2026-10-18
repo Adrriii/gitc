@@ -279,7 +279,7 @@ export async function otherStatuses(worktrees: Worktree[]): Promise<Map<string, 
     if (w.current || w.prunable) continue;
     pending.set(
       w.name,
-      worktreeStatus(w.path).catch((): null => null),
+      worktreeStatus(w.path).catch(() => null),
     );
   }
   const out = new Map<string, WorkingFile[]>();

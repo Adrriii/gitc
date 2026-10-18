@@ -211,9 +211,7 @@ export function buildGraph(commits: RawCommit[], trunkTip: string = ""): GraphRo
 
     const merges: Link[] = [];
     for (let i = 1; i < waiting.length; i++) {
-      // The `!` is for scriptc, which types an element read as number |
-      // undefined and will not index with that.
-      const other = waiting[i]!;
+      const other = waiting[i];
       merges.push({ from: other, to: lane, color: laneColor[other] });
       lanes[other] = null;
     }
@@ -375,8 +373,7 @@ export function spliceStashes(
     const last = firstLane + mine.length - 1;
     outCommits.push(commit);
     outRows.push({
-      // `!`: scriptc's spread ignores the narrowing above.
-      ...row!,
+      ...row,
       merges,
       width: row.width > last ? row.width : last,
     });
