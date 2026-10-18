@@ -64,27 +64,23 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # scriptc needs Node 24 or newer; it is the interpreter the build runs
-      # under, so this is the whole Node requirement.
+      # scriptc's package needs Node 24 or newer to install, and the tests run
+      # on Node 24's type stripping.
       - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
 
-      # Both platforms build through zig, for different reasons.
-      #
-      # Windows: scriptc's runtime assumes mingw's CRT and a stock clang targets
-      # MSVC's. Linux: targeting musl produces a STATIC binary. Built natively
-      # against the runner's glibc, the 0.1.0 release refused to start on any
-      # older system - "libm.so.6: version GLIBC_2.38 not found" - because glibc
-      # symbols are versioned and only work forwards. A static musl binary asks
-      # the system for nothing.
+      # Both platforms link through zig: scriptc uses it on Windows, and for
+      # any cross target. Linux builds for musl, which produces a STATIC
+      # binary. Built natively against the runner's glibc, the 0.1.0 release
+      # refused to start on any older system - "libm.so.6: version GLIBC_2.38
+      # not found" - because glibc symbols are versioned and only work
+      # forwards. A static musl binary asks the system for nothing.
       #
       # Fetched straight from ziglang.org rather than through setup-zig, whose
       # version index did not know about 0.16 and looked for it among the dev
-      # builds, where it is not. And it has to be 0.16: scriptc's runtime calls
-      # clock_gettime and nanosleep, which zig 0.13's mingw headers do not
-      # declare - four undeclared-function errors before it links.
+      # builds, where it is not.
       #
       # Cached, since the download was a quarter to a third of a Windows job.
       - uses: actions/cache@v6
@@ -123,9 +119,8 @@ jobs:
 
       - run: npm run build
         env:
-          # Windows picks zigcc for itself; Linux has to be told, because its
-          # default is a native clang build against the runner's glibc.
-          SCRIPTC_CC: ${{ runner.os == 'Linux' && 'zigcc' || '' }}
+          # Linux has to be told, because its default is a native clang build
+          # against the runner's glibc.
           SCRIPTC_TARGET: ${{ runner.os == 'Linux' && 'x86_64-linux-musl' || '' }}
 
       - name: Check it is tied to no system libc
