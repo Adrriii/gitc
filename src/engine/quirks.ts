@@ -10,10 +10,12 @@
 //
 // The inventory, including the parts too entangled to move here:
 //
-//  1. raiseWindow() does nothing on Windows.        - in this file
-//  2. PowerShell flashes a console on Windows.      - in this file
-//  3. There is no reachable native dialog.          - in this file
-//  4. The browser-exit hook cannot see every close. - main.ts, useHeartbeat.ts
+//  1. Raising the window on Windows needs native code.  - in this file
+//  2. PowerShell would flash a console on Windows.      - in this file
+//  3. There is no reachable native dialog.              - in this file
+//  4. The browser-exit hook cannot see every close.     - main.ts, useHeartbeat.ts
+//
+// (1) and (2) go through native/gitc.c, linked with scriptc's FFI.
 //
 // (4) is the one that is not contained, because the response to it - the
 // goodbye beacon, the grace timer, the launcher's probe - is spread across
@@ -28,35 +30,26 @@
 import { spawnSync } from "node:child_process";
 import { createServer } from "node:http";
 
+declare function gitcRaiseWindow(title: string): number;
+declare function gitcRunHidden(commandLine: string): number;
+
 /**
- * Brings the existing gitc window to the front, where the platform allows it.
+ * Brings the existing gitc window to the front.
  *
- * On Windows it does nothing, and there is currently no way to make it do
- * anything. Three routes were tried:
+ * On Windows, native/gitc.c finds the Chromium window titled exactly "gitc"
+ * and calls SetForegroundWindow. Windows grants that to a process the user
+ * just started, which a second launch always is. Letting the page raise
+ * itself with window.focus() does not work: Chromium ignores it without a
+ * user gesture (document.hasFocus() stays false, measured over CDP).
  *
- *  - SetForegroundWindow directly. scriptc has no user-facing FFI and no
- *    windowing, so native calls are not reachable.
- *  - PowerShell, which can reach it through Add-Type. This worked and was
- *    what gitc shipped, but see powershell() below: it flashes a console
- *    window every time, which on an app that has just failed to appear looks
- *    exactly like something going wrong.
- *  - Letting the page raise itself with window.focus(). Chromium ignores it
- *    without a user gesture. Measured on an --app window with CDP:
- *    document.hasFocus() stays false across the call.
- *
- * So a second launch opens a window when there isn't one, and otherwise does
- * nothing visible. Not raising a window that is already on screen is a
- * smaller failure than a console flash on every start.
- *
- * SWAP WHEN: scriptc gains FFI, or gitc stops borrowing a browser for its
- * window. Either makes this a real raise on Windows.
- *
- * Linux is unaffected and keeps its raise - wmctrl matches the WM_CLASS gitc
- * sets with --class=gitc, xdotool is the fallback, and neither can allocate a
- * console because there are none to allocate.
+ * On Linux wmctrl matches the WM_CLASS gitc sets with --class=gitc, and
+ * xdotool is the fallback.
  */
 export function raiseWindow(): void {
-  if (process.platform === "win32") return;
+  if (process.platform === "win32") {
+    gitcRaiseWindow("gitc");
+    return;
+  }
 
   const wm = spawnSync("wmctrl", ["-x", "-a", "gitc"], { stdio: "ignore" });
   if (wm.status === 0) return;
@@ -64,44 +57,18 @@ export function raiseWindow(): void {
 }
 
 /**
- * Runs a PowerShell script, accepting that it flashes a console window.
+ * Runs a PowerShell script without a console window.
  *
- * Every PowerShell call gitc makes goes through here, so that the day the
- * flash can be suppressed it is suppressed in one place.
- *
- * Why it flashes: gitc is linked as a GUI-subsystem binary so that launching
- * it from a shortcut opens no console. A GUI process has no console, so when
- * it starts a CONSOLE program - powershell.exe is one - Windows allocates a
- * fresh, visible one for it. `stdio: "ignore"` does not prevent that; it only
- * discards the output that console would have shown.
- *
- * Node's answer is the `windowsHide` option, which sets CREATE_NO_WINDOW.
- * scriptc accepts that option, type-checks it, compiles it, and discards it -
- * "accepted-but-inert" in its own frontend/types.js, "a POSIX no-op,
- * evaluated for side effects" in lower-builtins.js. It is passed below
- * anyway: it costs nothing, it documents the intent, and it starts working
- * for free if scriptc ever lowers it.
- *
- * That is why the window-raising path above no longer uses this at all. What
- * remains are the install-time calls, which need COM (a shortcut with an
- * AppUserModelID) and the user's environment block (PATH) - neither reachable
- * any other way without FFI. Those run once, when a freshly downloaded binary
- * installs itself, rather than on every start.
- *
- * SWAP WHEN: scriptc lowers windowsHide - then this is already correct and
- * the comment is all that needs deleting. Failing that, a GUI-subsystem
- * helper would avoid the console entirely, but the ones Windows ships for
- * this (wscript, mshta) are deprecated and are exactly the shapes malware
- * uses, which is not a trade gitc should make to hide a one-time install.
+ * gitc is linked as a GUI-subsystem binary, so a CONSOLE program it starts -
+ * powershell.exe is one - gets a fresh, visible console from Windows. Node's
+ * `windowsHide` would set CREATE_NO_WINDOW, but scriptc parses it and ignores
+ * it (scr_child.c, 0.3.6), so native/gitc.c calls CreateProcessW with that
+ * flag itself. Only the install-time calls come through here: the shortcut
+ * with its AppUserModelID, and the user's PATH.
  */
 export function powershell(args: string[]): boolean {
-  const r = spawnSync("powershell", args, {
-    stdio: "ignore",
-    // Currently inert under scriptc. See above - kept so this starts working
-    // on its own if that changes.
-    windowsHide: true,
-  });
-  return r.status === 0;
+  if (process.platform === "win32") return gitcRunHidden(windowsCommandLine(["powershell", ...args])) === 0;
+  return spawnSync("powershell", args, { stdio: "ignore" }).status === 0;
 }
 
 /**
@@ -254,3 +221,29 @@ const DIALOG_HTML =
   "var beat=function(){fetch('/alive').catch(function(){})};beat();" +
   "setInterval(beat,1000);" +
   "</script></body></html>";
+
+/** Joins arguments into one Windows command line, quoted as libuv (and so Node and scriptc) quote them. */
+export function windowsCommandLine(args: string[]): string {
+  return args.map(quoteArg).join(" ");
+}
+
+function quoteArg(arg: string): string {
+  if (arg.length === 0) return '""';
+  if (!/[ \t"]/.test(arg)) return arg;
+  if (!/["\\]/.test(arg)) return '"' + arg + '"';
+  let out = "";
+  let quoteHit = true;
+  for (let i = arg.length - 1; i >= 0; i--) {
+    const c = arg.charAt(i);
+    out = c + out;
+    if (quoteHit && c === "\\") {
+      out = "\\" + out;
+    } else if (c === '"') {
+      quoteHit = true;
+      out = "\\" + out;
+    } else {
+      quoteHit = false;
+    }
+  }
+  return '"' + out + '"';
+}

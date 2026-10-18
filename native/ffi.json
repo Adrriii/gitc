@@ -1,0 +1,9 @@
+{
+  "ffi_format": 1,
+  "functions": [
+    { "name": "gitcRaiseWindow", "symbol": "gitc_raise_window", "params": ["string"], "returns": "i32" },
+    { "name": "gitcRunHidden", "symbol": "gitc_run_hidden", "params": ["string"], "returns": "i32" }
+  ],
+  "libraries": ["../build/native/gitc.o"],
+  "system_libraries": []
+}

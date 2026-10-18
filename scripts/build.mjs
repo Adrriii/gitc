@@ -6,7 +6,7 @@
 // macOS build.
 
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const root = resolve(import.meta.dirname, "..");
@@ -53,6 +53,26 @@ if (windows || target.length > 0) {
   }
 }
 
+// --- native helpers ---------------------------------------------------------
+
+// native/gitc.c is what the engine calls through --ffi native/ffi.json. It is
+// compiled for the same target the binary links for, and always with an
+// explicit triple: `zig cc` without one compiles for the build machine's own
+// CPU, and a release built on an AVX-512 runner once died on start on most
+// PCs.
+const triple = target.length > 0 ? target : windows ? "x86_64-windows-gnu" : "";
+mkdirSync(join(root, "build", "native"), { recursive: true });
+const cc = triple.length > 0 ? ["zig", ["cc", "-target", triple]] : ["clang", []];
+const native = spawnSync(
+  cc[0],
+  [...cc[1], "-O2", "-c", join("native", "gitc.c"), "-o", join("build", "native", "gitc.o")],
+  { cwd: root, stdio: "inherit" },
+);
+if (native.status !== 0) {
+  console.error("failed to compile native/gitc.c");
+  process.exit(1);
+}
+
 // --- run it -----------------------------------------------------------------
 
 // The installed binary rather than the npm shim: spawning a .cmd needs
@@ -73,7 +93,7 @@ if (!existsSync(scriptc)) {
 // The command line still works: Windows never allocates a console for a GUI
 // binary, but it inherits its parent's handles, so `gitc --version` from a
 // shell still prints. Only for a Windows binary, not a cross-build from here.
-const args = ["build", entry, "-o", out, "--strip"];
+const args = ["build", entry, "-o", out, "--strip", "--ffi", join("native", "ffi.json")];
 if (windows && (target === "" || target.includes("windows"))) args.push("--windows-subsystem", "gui");
 
 const r = spawnSync(scriptc, args, {
