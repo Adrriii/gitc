@@ -16,7 +16,7 @@
 //            on the next start from the marker it left behind
 //
 // scriptc has no uncaughtException event, so a fatal error cannot be caught
-// from inside the process it kills. Under scriptc 0.1.7 an uncaught throw
+// from inside the process it kills. Under scriptc 0.1.7 and 0.3.6 an uncaught throw
 // prints "Uncaught <Name>: <message>" to stderr and exits 1, running the
 // `exit` hook; a stack overflow is a SIGSEGV, the out-of-memory killer a
 // SIGKILL, and neither runs anything (measured 2026-09-29; 0.1.0 exited 127
@@ -32,8 +32,9 @@
 // start time are not, and the report is dated when the marker was found, not
 // when the engine died.
 //
-// No stack traces in the engine's reports: scriptc does not capture them. The
-// window's reports carry the browser's, which are real.
+// The engine's reports carry scriptc's stack frames, which name the throwing
+// function and its file but no line and no async callers. The window's
+// reports carry the browser's, which are complete.
 //
 // One file per report rather than one growing list: two engines sharing this
 // directory (a dev engine beside the installed one) would otherwise rewrite

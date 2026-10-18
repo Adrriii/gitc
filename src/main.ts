@@ -2567,7 +2567,7 @@ async function main(): Promise<void> {
   process.on("unhandledRejection", (reason: unknown) => {
     const msg = reason instanceof Error ? reason.message : String(reason);
     const name = reason instanceof Error ? reason.name : "thrown value";
-    recordFatal("engine", msg, name + " in a promise nothing was waiting on; the engine exited");
+    recordFatal("engine", msg, name + " in a promise nothing was waiting on; the engine exited" + framesOf(reason));
     console.error("Unhandled promise rejection: " + msg);
     process.exit(1);
   });
@@ -2886,7 +2886,7 @@ async function main(): Promise<void> {
           const where = (req.method === undefined ? "GET" : req.method) + " " +
             (q === -1 ? path : path.substring(0, q));
           const name = e instanceof Error ? e.name : "thrown value";
-          recordCrash("engine", msg, name + " answering " + where);
+          recordCrash("engine", msg, name + " answering " + where + framesOf(e));
           send(res, 500, "text/plain", msg);
         });
       return;
@@ -3026,6 +3026,15 @@ async function main(): Promise<void> {
       console.log("no Chromium browser found - open the URL manually");
     }
   });
+}
+
+/** The stack frames of a thrown Error, one per line after a newline, or "" for anything else. */
+function framesOf(e: unknown): string {
+  if (!(e instanceof Error)) return "";
+  const stack = e.stack;
+  if (stack === undefined) return "";
+  const nl = stack.indexOf(String.fromCharCode(10));
+  return nl === -1 ? "" : stack.substring(nl);
 }
 
 main();
