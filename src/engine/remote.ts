@@ -524,7 +524,7 @@ function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const probe = createServer(() => undefined);
     probe.on("error", () => reject(new Error("no free port")));
-    probe.listen(0, () => {
+    probe.listen(0, "127.0.0.1", () => {
       const port = probe.address().port;
       probe.close(() => resolve(port));
     });

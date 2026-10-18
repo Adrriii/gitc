@@ -191,7 +191,7 @@ export function confirmTakeOver(
 
     // Port 0 lets the OS pick a free one - the launcher cannot use gitc's own
     // port, which is precisely the thing that is already taken.
-    server.listen(0, () => {
+    server.listen(0, "127.0.0.1", () => {
       const url = "http://127.0.0.1:" + String(server.address().port) + "/";
 
       // No browser to ask with. Leaving the running instance alone is the
