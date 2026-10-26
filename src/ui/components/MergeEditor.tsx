@@ -14,6 +14,7 @@ import { languageFor, highlightLines } from "../highlight";
 import { Icon } from "./Icon";
 import { CloseButton } from "./CloseButton";
 import { CodeEditor } from "./CodeEditor";
+import { Html } from "./Html";
 import s from "./MergeEditor.module.scss";
 
 const CONTEXT = 5;
@@ -608,5 +609,5 @@ function conflictHunks(segments: Segment[]): AiConflictHunk[] {
 
 function Text({ row }: { row: Row }) {
   if (row.html === null) return <span className={s.text}>{row.text}</span>;
-  return <span className={s.text} dangerouslySetInnerHTML={{ __html: row.html }} />;
+  return <Html className={s.text} html={row.html} />;
 }

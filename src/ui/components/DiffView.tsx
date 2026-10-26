@@ -10,6 +10,7 @@ import { Icon } from "./Icon";
 import { CloseButton } from "./CloseButton";
 import { CodeEditor } from "./CodeEditor";
 import { ContextMenu } from "./ContextMenu";
+import { Html } from "./Html";
 import { MediaPreview } from "./MediaPreview";
 import { absolutePath, mediaFor } from "../media";
 import s from "./DiffView.module.scss";
@@ -472,8 +473,15 @@ export function DiffView({
 
   const text = (line: DiffLine) => (ws ? showWhitespace(line.text, tabSize) : line.text);
 
-  /** A line's content: highlighted when we have it, plain text otherwise. */
-  const Content = ({ line }: { line: DiffLine }) => {
+  /**
+   * A line's content: highlighted when we have it, plain text otherwise.
+   *
+   * Called as a function, never rendered as <Content />. A component declared
+   * inside this one is a new type on every render, so React threw away every
+   * line's DOM and rebuilt it each time anything re-rendered the view - a
+   * refresh, the copy button's tick - and a text selection went with it.
+   */
+  const content = (line: DiffLine) => {
     const html = highlighted.get(line);
     const cls = wrap ? s.textWrap : s.text;
     const spans = changed.get(line);
@@ -481,7 +489,7 @@ export function DiffView({
 
     if (html !== undefined) {
       const marked = spans === undefined ? html : markHtml(html, spans, mark);
-      return <span className={cls} dangerouslySetInnerHTML={{ __html: marked }} />;
+      return <Html className={cls} html={marked} />;
     }
 
     // No highlighting to preserve, so the pieces go straight into the DOM as
@@ -584,7 +592,7 @@ export function DiffView({
                 <span className={s.marker} data-gutter="" title={GUTTER_HINT}>
                   {fileView ? "" : l.kind === "add" ? "+" : l.kind === "del" ? "−" : ""}
                 </span>
-                <Content line={l} />
+                {content(l)}
               </div>
             ))}
         </div>
@@ -627,7 +635,7 @@ export function DiffView({
                     {row.left !== null && (
                       <span className={s.cellInner}>
                         <Gutter n={row.left.oldNo} />
-                        <Content line={row.left} />
+                        {content(row.left)}
                       </span>
                     )}
                   </td>
@@ -642,7 +650,7 @@ export function DiffView({
                     {row.right !== null && (
                       <span className={s.cellInner}>
                         <Gutter n={row.right.newNo} />
-                        <Content line={row.right} />
+                        {content(row.right)}
                       </span>
                     )}
                   </td>
