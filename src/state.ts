@@ -250,6 +250,19 @@ export function addWorkspace(session: Session, name: string): Workspace {
   return workspace;
 }
 
+/**
+ * Puts the workspaces in the order given. Any the order leaves out keep their
+ * place after it, so a workspace added meanwhile is not lost.
+ */
+export function reorderWorkspaces(session: Session, order: string[]): void {
+  const named: Workspace[] = [];
+  for (const id of order) {
+    const w = session.workspaces.find((x) => x.id === id);
+    if (w !== undefined && !named.includes(w)) named.push(w);
+  }
+  session.workspaces = [...named, ...session.workspaces.filter((w) => !named.includes(w))];
+}
+
 export function renameWorkspace(session: Session, id: string, name: string): boolean {
   const workspace = session.workspaces.find((w) => w.id === id);
   if (workspace === undefined) return false;

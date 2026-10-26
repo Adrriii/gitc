@@ -65,3 +65,16 @@
   vertical-align: -1px;
   color: var(--accent);
 }
+
+.dragging {
+  opacity: 0.4;
+}
+
+// Where a dragged item would land: a rule on the edge it would go past.
+.dropBefore {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+.dropAfter {
+  box-shadow: inset 0 -2px 0 var(--accent);
+}

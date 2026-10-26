@@ -117,6 +117,7 @@ import {
   loadSession,
   removeWorkspace,
   renameWorkspace,
+  reorderWorkspaces,
   saveSession,
   setTabWorkspaces,
   shownTabs,
@@ -1853,6 +1854,14 @@ async function handleApi(
   if (path === "/api/workspace/rename") {
     const body = JSON.parse(await readBody(req)) as IdRequest & { name: string };
     if (body.name.trim().length > 0) renameWorkspace(session, body.id, body.name.trim());
+    saveSession(session);
+    sendJson(res, JSON.stringify(session));
+    return true;
+  }
+
+  if (path === "/api/workspace/reorder") {
+    const body = JSON.parse(await readBody(req)) as OrderRequest;
+    reorderWorkspaces(session, body.order);
     saveSession(session);
     sendJson(res, JSON.stringify(session));
     return true;

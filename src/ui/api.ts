@@ -159,6 +159,8 @@ export const api = {
   /** Makes another workspace the current one. */
   workspace: (id: string) => post<Session>("/api/workspace", { id }),
   addWorkspace: (name: string) => post<Session>("/api/workspace/add", { name }),
+  /** Puts the workspaces in this order. */
+  reorderWorkspaces: (order: string[]) => post<Session>("/api/workspace/reorder", { order }),
   renameWorkspace: (id: string, name: string) => post<Session>("/api/workspace/rename", { id, name }),
   /** Deletes a workspace, closing the tabs no other workspace holds. */
   removeWorkspace: (id: string) => post<Session>("/api/workspace/remove", { id }),

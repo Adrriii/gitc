@@ -104,6 +104,8 @@ interface MenuState {
   x: number;
   y: number;
   items: MenuItem[];
+  /** For a menu whose items can be dragged into a new order. */
+  onMove?: (order: string[]) => void;
 }
 
 interface PromptState {
@@ -2190,6 +2192,7 @@ export function App() {
     const items: MenuItem[] = cur.workspaces.map((w) => ({
       label: w.name,
       checked: w.id === cur.workspace,
+      moves: w.id,
       action: () => void api.workspace(w.id).then(setSession),
     }));
     items.push(
@@ -2292,7 +2295,18 @@ export function App() {
           );
           api.reorder(order).catch((e: Error) => setError(e.message));
         }}
-        onWorkspaceMenu={(x, y) => setMenu({ x, y, items: workspaceMenu(session) })}
+        onWorkspaceMenu={(x, y) => {
+          // Reordered in place: the menu stays open on the new order.
+          const onMove = (order: string[]) =>
+            void api
+              .reorderWorkspaces(order)
+              .then((next) => {
+                setSession(next);
+                setMenu((m) => (m === null ? m : { ...m, items: workspaceMenu(next) }));
+              })
+              .catch((e: Error) => setError(e.message));
+          setMenu({ x, y, items: workspaceMenu(session), onMove });
+        }}
         onTabMenu={(id, x, y) => {
           const tab = session.tabs.find((t) => t.id === id);
           if (tab !== undefined) setMenu({ x, y, items: tabMenu(session, tab) });
@@ -2573,7 +2587,13 @@ export function App() {
       )}
 
       {menu && (
-        <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          items={menu.items}
+          onMove={menu.onMove}
+          onClose={() => setMenu(null)}
+        />
       )}
       {prompt && (
         <Prompt

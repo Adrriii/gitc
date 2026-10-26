@@ -20,8 +20,16 @@ const home = mkdtempSync(join(tmpdir(), "gitc-session-test-"));
 mkdirSync(join(home, "gitc"), { recursive: true });
 process.env["APPDATA"] = home;
 
-const { loadSession, addWorkspace, closeTab, removeWorkspace, setTabWorkspaces, shownTabs, switchWorkspace } =
-  await import("../../state.ts");
+const {
+  loadSession,
+  addWorkspace,
+  closeTab,
+  removeWorkspace,
+  reorderWorkspaces,
+  setTabWorkspaces,
+  shownTabs,
+  switchWorkspace,
+} = await import("../../state.ts");
 
 /**
  * The session that caused "spawn git ENOENT" on a healthy repository.
@@ -101,6 +109,14 @@ switchWorkspace(session, "default");
 session.activeId = "t7";
 switchWorkspace(session, work.id);
 eq("switching shows that workspace's tab", session.activeId, "t4");
+
+reorderWorkspaces(session, [work.id, "nowhere", work.id]);
+eq(
+  "workspaces take the order given, unknown and repeated ids aside, and the rest follow",
+  session.workspaces.map((w) => w.id),
+  [work.id, "default"],
+);
+reorderWorkspaces(session, ["default", work.id]);
 switchWorkspace(session, "default");
 eq("and switching back finds the tab left in front", session.activeId, "t7");
 

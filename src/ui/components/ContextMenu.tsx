@@ -13,6 +13,8 @@ export interface MenuItem {
   danger?: boolean;
   /** Set for an item that toggles something: a tick when on, room for one when off. */
   checked?: boolean;
+  /** Set on the items `onMove` can reorder by dragging: what each one is. */
+  moves?: string;
 }
 
 export function ContextMenu({
@@ -20,12 +22,33 @@ export function ContextMenu({
   y,
   items,
   onClose,
+  onMove,
 }: {
   x: number;
   y: number;
   items: MenuItem[];
   onClose: () => void;
+  /** The new order of the `moves` items, after one was dragged among them. */
+  onMove?: (order: string[]) => void;
 }) {
+  /** The item being dragged, and where it would land. */
+  const [dragging, setDragging] = useState<string | null>(null);
+  const [over, setOver] = useState<{ id: string; after: boolean } | null>(null);
+
+  const drop = () => {
+    const from = dragging;
+    const target = over;
+    setDragging(null);
+    setOver(null);
+    if (from === null || target === null || onMove === undefined) return;
+    const current = items.flatMap((it) => (it.moves === undefined ? [] : [it.moves]));
+    const order = current.filter((id) => id !== from);
+    const at = order.indexOf(target.id);
+    if (at === -1) return;
+    order.splice(target.after ? at + 1 : at, 0, from);
+    if (order.join("\n") !== current.join("\n")) onMove(order);
+  };
+
   const box = useRef<HTMLDivElement>(null);
   // Held in a ref so the effect below does not re-subscribe on every render of
   // the application. It is passed as an inline arrow, so its identity changes
@@ -118,7 +141,36 @@ export function ContextMenu({
         ) : (
           <div
             key={i}
-            className={`${s.item} ${it.action ? "" : s.disabled} ${it.danger ? s.danger : ""}`}
+            className={[
+              s.item,
+              it.action ? "" : s.disabled,
+              it.danger ? s.danger : "",
+              it.moves !== undefined && it.moves === dragging ? s.dragging : "",
+              it.moves !== undefined && over?.id === it.moves ? (over.after ? s.dropAfter : s.dropBefore) : "",
+            ].join(" ")}
+            draggable={onMove !== undefined && it.moves !== undefined}
+            onDragStart={(e) => {
+              if (it.moves === undefined) return;
+              setDragging(it.moves);
+              e.dataTransfer.effectAllowed = "move";
+              // Firefox ignores a drag with no payload.
+              e.dataTransfer.setData("text/plain", it.moves);
+            }}
+            onDragOver={(e) => {
+              if (dragging === null || it.moves === undefined || it.moves === dragging) return;
+              // Without this the drop is refused and the item springs back.
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "move";
+              const box = e.currentTarget.getBoundingClientRect();
+              const id = it.moves;
+              setOver({ id, after: e.clientY > box.top + box.height / 2 });
+            }}
+            onDragLeave={() => setOver((cur) => (cur?.id === it.moves ? null : cur))}
+            onDrop={(e) => {
+              e.preventDefault();
+              drop();
+            }}
+            onDragEnd={drop}
             onClick={() => {
               if (!it.action) return;
               // The action first, then dismiss. Clicks inside the menu are
