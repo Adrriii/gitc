@@ -2351,6 +2351,7 @@ export function App() {
                 onClose={() => setOpenFile(null)}
                 onChanged={refresh}
                 version={reloadToken}
+                remote={activeTab.host !== null}
                 repoPath={
                   openFile.target.kind === "wip" && openFile.target.worktree !== undefined
                     ? (findWorktree(worktrees, openFile.target.worktree)?.path ?? activeTab.path)

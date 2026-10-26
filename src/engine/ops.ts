@@ -7,12 +7,12 @@
 // Everything here goes through git. None of it touches .git directly.
 
 import { spawn } from "node:child_process";
-import { existsSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { extractCoAuthors, git, gitOrNull } from "./git.ts";
 import type { Person } from "./git.ts";
-import { needInRepo, safeArgument, safeRemoteUrl, tempFile } from "./paths.ts";
+import { inRepo, needInRepo, safeArgument, safeRemoteUrl, tempFile } from "./paths.ts";
 import { readPending, readRemotes } from "./refs.ts";
 import { asRegisteredHere, listWorktrees } from "./worktrees.ts";
 import { at, atOr } from "./safe.ts";
@@ -27,7 +27,7 @@ export interface OpRequest {
   name: string;
   /** soft | mixed | hard, for reset. */
   mode: string;
-  /** Tag or stash message. */
+  /** Tag or stash message, or the new content for writeFile. */
   message: string;
   /** Delete a remote branch as well / force a delete. */
   remote: string;
@@ -131,6 +131,16 @@ const warned = (note: string): OpResult => ({
   pending: "",
   refusal: NO_REFUSAL,
   warn: true,
+  confirm: "",
+});
+
+/** Refused before anything was touched. */
+const refused = (note: string): OpResult => ({
+  ok: false,
+  note,
+  pending: "",
+  refusal: NO_REFUSAL,
+  warn: false,
   confirm: "",
 });
 
@@ -1545,6 +1555,16 @@ export async function runOp(repo: string, req: OpRequest): Promise<OpResult> {
       }
       openInEditor(full);
       return ok("opened " + rel);
+    }
+
+    case "writeFile": {
+      const full = inRepo(repo, req.path);
+      if (full === null) return refused(req.path + " is outside the repository");
+      if (!existsSync(full) || !statSync(full).isFile()) {
+        return refused(req.path + " is not in the working tree");
+      }
+      writeFileSync(full, req.message, "utf8");
+      return ok("saved " + req.path);
     }
 
     // --- managing remotes -------------------------------------------------

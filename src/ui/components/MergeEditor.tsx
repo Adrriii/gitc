@@ -13,6 +13,7 @@ import type { Segment, Selection } from "../conflictParse";
 import { languageFor, highlightLines } from "../highlight";
 import { Icon } from "./Icon";
 import { CloseButton } from "./CloseButton";
+import { CodeEditor } from "./CodeEditor";
 import s from "./MergeEditor.module.scss";
 
 const CONTEXT = 5;
@@ -73,9 +74,6 @@ export function MergeEditor({
   const regionRefs = useRef<Map<number, HTMLDivElement>>(new Map());
   const leftRef = useRef<HTMLDivElement>(null);
   const rightRef = useRef<HTMLDivElement>(null);
-  const outputRef = useRef<HTMLTextAreaElement>(null);
-  const overlayRef = useRef<HTMLPreElement>(null);
-  const gutterRef = useRef<HTMLDivElement>(null);
   const echo = useRef<Partial<Record<"left" | "right", string>>>({});
 
   useEffect(() => {
@@ -199,11 +197,6 @@ export function MergeEditor({
     return { left, right };
   }, [segments, language]);
 
-  const outputHtml = useMemo(() => {
-    if (language === null) return null;
-    return highlightLines(output, language);
-  }, [output, language]);
-
   const setSel = useCallback(
     (conflict: number, side: "ours" | "theirs", line: number, on: boolean) => {
       setSelections((prev) =>
@@ -313,16 +306,6 @@ export function MergeEditor({
     b.scrollTop = a.scrollTop;
     b.scrollLeft = a.scrollLeft;
     echo.current[to] = `${b.scrollTop}:${b.scrollLeft}`;
-  }, []);
-
-  const syncOutput = useCallback(() => {
-    const ta = outputRef.current;
-    if (!ta) return;
-    if (overlayRef.current) {
-      overlayRef.current.scrollTop = ta.scrollTop;
-      overlayRef.current.scrollLeft = ta.scrollLeft;
-    }
-    if (gutterRef.current) gutterRef.current.scrollTop = ta.scrollTop;
   }, []);
 
   const save = useCallback(async () => {
@@ -503,8 +486,6 @@ export function MergeEditor({
     );
   }
 
-  const outputLines = output.split(String.fromCharCode(10));
-
   return (
     <div className={s.wrap}>
       <div className={s.pathBar}>
@@ -602,35 +583,7 @@ export function MergeEditor({
           <span className={s.spacer} />
           <span className={s.outputHint}>editable — type here for anything neither side has</span>
         </div>
-        <div className={s.outputBody}>
-          <div className={s.outputGutter} ref={gutterRef}>
-            {outputLines.map((_, i) => (
-              <div key={i} className={s.outNum}>
-                {i + 1}
-              </div>
-            ))}
-          </div>
-          <div className={s.outputStack}>
-            {/* A highlighted copy sits under a transparent textarea: a
-                textarea cannot render colour itself, and this keeps the real
-                caret and selection behaviour rather than faking an editor. */}
-            <pre className={s.outputOverlay} ref={overlayRef} aria-hidden="true">
-              {outputHtml === null
-                ? output
-                : outputHtml.map((html, i) => (
-                    <div key={i} dangerouslySetInnerHTML={{ __html: html || "​" }} />
-                  ))}
-            </pre>
-            <textarea
-              ref={outputRef}
-              className={s.outputText}
-              value={output}
-              spellCheck={false}
-              onScroll={syncOutput}
-              onChange={(e) => setManual(e.target.value)}
-            />
-          </div>
-        </div>
+        <CodeEditor value={output} language={language} onChange={setManual} />
       </div>
     </div>
   );

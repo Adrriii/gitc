@@ -8,6 +8,7 @@ import { markHtml } from "../markHtml";
 import { useDiffWrap, useTabSize } from "../settings";
 import { Icon } from "./Icon";
 import { CloseButton } from "./CloseButton";
+import { CodeEditor } from "./CodeEditor";
 import { ContextMenu } from "./ContextMenu";
 import { MediaPreview } from "./MediaPreview";
 import { absolutePath, mediaFor } from "../media";
@@ -133,8 +134,11 @@ export function DiffView({
   onChanged,
   version,
   repoPath,
+  remote,
 }: {
   tabId: string;
+  /** The tab lives on another machine, where no editor of ours can open. */
+  remote?: boolean;
   target: DiffTarget;
   path: string;
   /** The repository's own path, for "Copy full path". */
@@ -177,6 +181,55 @@ export function DiffView({
       setEditError((e as Error).message);
     }
   };
+
+  /**
+   * Editing in place, for a remote tab. The working-tree copy again, read
+   * through the media endpoint since that is the one that returns raw bytes.
+   */
+  const [draft, setDraft] = useState<string>();
+  const [draftBase, setDraftBase] = useState<string[]>([]);
+  const [saving, setSaving] = useState(false);
+  const crlf = useRef(false);
+
+  const editHere = async () => {
+    setEditError(null);
+    const tree = { kind: "wip", staged: false, untracked: false } as const;
+    try {
+      const bytes = await api.media(tabId, tree, path, null, "new");
+      const text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+      const indexed = await api
+        .media(tabId, tree, path, null, "old")
+        .then((b) => new TextDecoder("utf-8", { ignoreBOM: true }).decode(b).replace(/\r\n/g, "\n").split("\n"))
+        .catch(() => []);
+      crlf.current = text.includes("\r\n");
+      setDraftBase(indexed);
+      setDraft(text.replace(/\r\n/g, "\n"));
+    } catch (e) {
+      setEditError(e instanceof TypeError ? "not UTF-8 text, it cannot be edited here" : (e as Error).message);
+    }
+  };
+
+  const save = async () => {
+    if (draft === undefined || saving) return;
+    setEditError(null);
+    setSaving(true);
+    try {
+      const content = crlf.current ? draft.replace(/\r?\n/g, "\r\n") : draft;
+      const r = await api.op(tabId, { op: "writeFile", path, message: content });
+      if (!r.ok) {
+        setEditError(r.note);
+        return;
+      }
+      setDraft(undefined);
+      setReloadToken((n) => n + 1);
+      if (onChanged) onChanged();
+    } catch (e) {
+      setEditError((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   /**
    * Stages, unstages or discards a single hunk.
    *
@@ -288,6 +341,7 @@ export function DiffView({
     shown.current = identity;
     if (opened) {
       setLoading(true);
+      setDraft(undefined);
       // "Show all" was a decision about the file you were looking at, not a
       // preference to carry to the next one.
       setShowAll(false);
@@ -651,84 +705,120 @@ export function DiffView({
       <div className={s.toolbar}>
         {/* Not for another worktree's file: the engine would open this tab's
             copy of it, and editing is what that worktree's own tab is for. */}
-        {!(target.kind === "wip" && target.worktree !== undefined) && (
-          <button
-            className={s.btn}
-            onClick={() => void openInEditor()}
-            title="Open this file in your editor"
-          >
-            &#9998; Edit This File
-          </button>
+        {draft !== undefined ? (
+          <>
+            <button
+              className={s.btn}
+              disabled={saving}
+              onClick={() => void save()}
+              title="Write it to the working tree (Ctrl+S)"
+            >
+              Save
+            </button>
+            <button className={s.btn} onClick={() => setDraft(undefined)} title="Drop the edits">
+              Cancel
+            </button>
+          </>
+        ) : (
+          !(target.kind === "wip" && target.worktree !== undefined) && (
+            <button
+              className={s.btn}
+              onClick={() => void (remote ? editHere() : openInEditor())}
+              title={remote ? "Edit this file here" : "Open this file in your editor"}
+            >
+              &#9998; Edit This File
+            </button>
+          )
         )}
         {editError !== null && <span className={s.editError}>{editError}</span>}
         <span className={s.spacer} />
 
-        <div className={s.group}>
-          <button className={fileView ? s.on : ""} onClick={() => setFileView(true)}>
-            File View
-          </button>
-          <button className={!fileView ? s.on : ""} onClick={() => setFileView(false)}>
-            Diff View
-          </button>
-        </div>
+        {draft === undefined && (
+          <>
+            <div className={s.group}>
+              <button className={fileView ? s.on : ""} onClick={() => setFileView(true)}>
+                File View
+              </button>
+              <button className={!fileView ? s.on : ""} onClick={() => setFileView(false)}>
+                Diff View
+              </button>
+            </div>
 
-        <div className={s.group}>
-          <button disabled title="Not wired yet">Blame</button>
-          <button disabled title="Not wired yet">History</button>
-        </div>
+            <div className={s.group}>
+              <button disabled title="Not wired yet">Blame</button>
+              <button disabled title="Not wired yet">History</button>
+            </div>
 
-        <div className={s.group}>
-          <button onClick={() => stepChange(-1)} title="Previous change">
-            <Icon name="arrowUp" size={14} />
-          </button>
-          <button onClick={() => stepChange(1)} title="Next change">
-            <Icon name="arrowDown" size={14} />
-          </button>
-        </div>
+            <div className={s.group}>
+              <button onClick={() => stepChange(-1)} title="Previous change">
+                <Icon name="arrowUp" size={14} />
+              </button>
+              <button onClick={() => stepChange(1)} title="Next change">
+                <Icon name="arrowDown" size={14} />
+              </button>
+            </div>
 
-        <div className={s.group}>
-          <button
-            className={mode === "unified" ? s.on : ""}
-            onClick={() => setMode("unified")}
-            title="Unified View — changed hunks only"
-          >
-            <Icon name="unified" size={14} />
-          </button>
-          <button
-            className={mode === "inline" ? s.on : ""}
-            onClick={() => setMode("inline")}
-            title="Inline View — whole file, changes in place"
-          >
-            <Icon name="inline" size={14} />
-          </button>
-          <button
-            className={mode === "split" ? s.on : ""}
-            onClick={() => setMode("split")}
-            title="Split View — old and new side by side"
-          >
-            <Icon name="split" size={14} />
-          </button>
-        </div>
+            <div className={s.group}>
+              <button
+                className={mode === "unified" ? s.on : ""}
+                onClick={() => setMode("unified")}
+                title="Unified View — changed hunks only"
+              >
+                <Icon name="unified" size={14} />
+              </button>
+              <button
+                className={mode === "inline" ? s.on : ""}
+                onClick={() => setMode("inline")}
+                title="Inline View — whole file, changes in place"
+              >
+                <Icon name="inline" size={14} />
+              </button>
+              <button
+                className={mode === "split" ? s.on : ""}
+                onClick={() => setMode("split")}
+                title="Split View — old and new side by side"
+              >
+                <Icon name="split" size={14} />
+              </button>
+            </div>
 
-        <div className={s.group}>
-          <button
-            className={ws ? s.on : ""}
-            onClick={() => setWs(!ws)}
-            title="Show whitespace (turns off syntax highlighting)"
-          >
-            <Icon name="pilcrow" size={14} />
-          </button>
-          <button
-            className={wrap ? s.on : ""}
-            onClick={() => setWrap(!wrap)}
-            title={wrap ? "Wrapping long lines — click to scroll instead" : "Scrolling long lines — click to wrap"}
-          >
-            <Icon name="wrap" size={14} />
-          </button>
-        </div>
+            <div className={s.group}>
+              <button
+                className={ws ? s.on : ""}
+                onClick={() => setWs(!ws)}
+                title="Show whitespace (turns off syntax highlighting)"
+              >
+                <Icon name="pilcrow" size={14} />
+              </button>
+              <button
+                className={wrap ? s.on : ""}
+                onClick={() => setWrap(!wrap)}
+                title={wrap ? "Wrapping long lines — click to scroll instead" : "Scrolling long lines — click to wrap"}
+              >
+                <Icon name="wrap" size={14} />
+              </button>
+            </div>
+          </>
+        )}
       </div>
 
-      <div className={s.body} ref={body} onMouseDown={startPick}>
+      {draft !== undefined && (
+        <CodeEditor
+          value={draft}
+          language={language}
+          base={draftBase}
+          autoFocus
+          onChange={setDraft}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") e.stopPropagation();
+            if (e.key === "s" && (e.ctrlKey || e.metaKey)) {
+              e.preventDefault();
+              void save();
+            }
+          }}
+        />
+      )}
+      <div className={s.body} ref={body} onMouseDown={startPick} hidden={draft !== undefined}>
         {loading && <div className={s.note}>Loading diff…</div>}
         {error !== null && <div className={s.note}>{error}</div>}
         {!loading && error === null && diff !== null && budget.shown < budget.total && (
