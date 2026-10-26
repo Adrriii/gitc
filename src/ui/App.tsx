@@ -7,6 +7,7 @@ import type {
   OpArgs,
   Ref,
   Session,
+  Tab,
   Submodule,
   PushRefusal,
   UpdateInfo,
@@ -579,7 +580,8 @@ export function App() {
   // list, which is the whole of "roll over" in one expression.
   const stepRepo = useCallback(
     (delta: number) => {
-      const tabs = session?.tabs ?? [];
+      // Through the strip as it is shown: the current workspace's tabs.
+      const tabs = (session?.tabs ?? []).filter((t) => t.workspaces.includes(session?.workspace ?? ""));
       if (tabs.length < 2) return;
       const at = tabs.findIndex((t) => t.id === activeId);
       if (at < 0) return;
@@ -925,7 +927,7 @@ export function App() {
           const gone = worktreesRef.current.find((w) => w.name === args.name);
           for (const t of sessionRef.current?.tabs ?? []) {
             if (gone === undefined || t.host !== activeTab.host || !samePath(t.path, gone.path)) continue;
-            void api.close(t.id).then(setSession);
+            void api.close(t.id, undefined, true).then(setSession);
           }
         }
         if (!r.ok) {
@@ -2181,6 +2183,83 @@ export function App() {
     return <div className={s.boot}>{error ?? "Starting gitc…"}</div>;
   }
 
+  /** The switcher's menu: every workspace, then managing the current one. */
+  const workspaceMenu = (cur: Session): MenuItem[] => {
+    const current = cur.workspaces.find((w) => w.id === cur.workspace);
+    const only = (w: string) => cur.tabs.filter((t) => t.workspaces.length === 1 && t.workspaces[0] === w).length;
+    const items: MenuItem[] = cur.workspaces.map((w) => ({
+      label: w.name,
+      checked: w.id === cur.workspace,
+      action: () => void api.workspace(w.id).then(setSession),
+    }));
+    items.push(
+      { separator: true },
+      {
+        label: "New workspace…",
+        action: () =>
+          setPrompt({
+            title: "New workspace",
+            label: "Name",
+            confirmLabel: "Create",
+            onConfirm: (name) => {
+              setPrompt(null);
+              if (name.trim().length > 0) void api.addWorkspace(name).then(setSession);
+            },
+          }),
+      },
+    );
+    if (current === undefined) return items;
+    items.push({
+      label: `Rename ${current.name}…`,
+      action: () =>
+        setPrompt({
+          title: "Rename workspace",
+          label: "Name",
+          initial: current.name,
+          confirmLabel: "Rename",
+          onConfirm: (name) => {
+            setPrompt(null);
+            if (name.trim().length > 0) void api.renameWorkspace(current.id, name).then(setSession);
+          },
+        }),
+    });
+    if (cur.workspaces.length > 1) {
+      const closing = only(current.id);
+      items.push({
+        label: `Delete ${current.name}`,
+        danger: true,
+        hint: closing === 0 ? undefined : `closes ${closing} ${closing === 1 ? "tab" : "tabs"} no other workspace has`,
+        action: () => void api.removeWorkspace(current.id).then(setSession),
+      });
+    }
+    return items;
+  };
+
+  /** A tab's menu: the workspaces it is shown in, ticked, then closing it. */
+  const tabMenu = (cur: Session, tab: Tab): MenuItem[] => [
+    { label: "Show in" },
+    ...cur.workspaces.map((w): MenuItem => {
+      const on = tab.workspaces.includes(w.id);
+      // A tab is always somewhere: the last tick is taken off by closing it.
+      const last = on && tab.workspaces.length === 1;
+      return {
+        label: w.name,
+        checked: on,
+        action: last
+          ? undefined
+          : () =>
+              void api
+                .tabWorkspaces(tab.id, on ? tab.workspaces.filter((x) => x !== w.id) : [...tab.workspaces, w.id])
+                .then(setSession),
+      };
+    }),
+    { separator: true },
+    {
+      label: tab.workspaces.length > 1 ? "Close in this workspace" : "Close",
+      action: () => void api.close(tab.id).then(setSession),
+    },
+  ];
+
   return (
     <div className={s.root}>
       <TabBar
@@ -2201,9 +2280,22 @@ export function App() {
           setSession((cur) =>
             cur === null
               ? cur
-              : { ...cur, tabs: order.map((id) => cur.tabs.find((t) => t.id === id)!).filter(Boolean) },
+              : {
+                  ...cur,
+                  // The order names this workspace's tabs; the others follow, as
+                  // the engine places them.
+                  tabs: [
+                    ...order.map((id) => cur.tabs.find((t) => t.id === id)!).filter(Boolean),
+                    ...cur.tabs.filter((t) => !order.includes(t.id)),
+                  ],
+                },
           );
           api.reorder(order).catch((e: Error) => setError(e.message));
+        }}
+        onWorkspaceMenu={(x, y) => setMenu({ x, y, items: workspaceMenu(session) })}
+        onTabMenu={(id, x, y) => {
+          const tab = session.tabs.find((t) => t.id === id);
+          if (tab !== undefined) setMenu({ x, y, items: tabMenu(session, tab) });
         }}
       />
 

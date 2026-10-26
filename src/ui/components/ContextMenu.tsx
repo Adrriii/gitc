@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Icon } from "./Icon";
 import s from "./ContextMenu.module.scss";
 
 export interface MenuItem {
@@ -10,6 +11,8 @@ export interface MenuItem {
   hint?: string;
   /** Destructive: shown in red, because the menu is the last warning. */
   danger?: boolean;
+  /** Set for an item that toggles something: a tick when on, room for one when off. */
+  checked?: boolean;
 }
 
 export function ContextMenu({
@@ -126,6 +129,9 @@ export function ContextMenu({
               closeRef.current();
             }}
           >
+            {it.checked !== undefined && (
+              <span className={s.check}>{it.checked && <Icon name="check" size={12} />}</span>
+            )}
             {it.label}
             {it.hint && <div className={s.hint}>{it.hint}</div>}
           </div>

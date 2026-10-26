@@ -9,6 +9,26 @@
   border-bottom: 1px solid var(--line);
 }
 
+// The workspace switcher, first on the strip: it decides what the rest shows.
+.workspace {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  padding: 0 10px;
+  max-width: 160px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-dim);
+  cursor: pointer;
+  border-right: 1px solid var(--line-strong);
+
+  &:hover {
+    background: var(--bg-2);
+    color: var(--fg-bright);
+  }
+}
+
 .tab {
   display: flex;
   cursor: pointer;

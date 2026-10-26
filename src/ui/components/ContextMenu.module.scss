@@ -58,3 +58,10 @@
   background: var(--line-strong);
   margin: 5px 0;
 }
+
+.check {
+  display: inline-flex;
+  width: 18px;
+  vertical-align: -1px;
+  color: var(--accent);
+}

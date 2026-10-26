@@ -153,7 +153,18 @@ export const api = {
   revokeRemote: (host: string) =>
     post<{ hosts: string[] }>("/api/remote/revoke", { host }).then((r) => r.hosts),
 
-  close: (id: string, next?: string) => post<Session>("/api/close", { id, next }),
+  close: (id: string, next?: string, everywhere?: boolean) =>
+    post<Session>("/api/close", { id, next, everywhere }),
+
+  /** Makes another workspace the current one. */
+  workspace: (id: string) => post<Session>("/api/workspace", { id }),
+  addWorkspace: (name: string) => post<Session>("/api/workspace/add", { name }),
+  renameWorkspace: (id: string, name: string) => post<Session>("/api/workspace/rename", { id, name }),
+  /** Deletes a workspace, closing the tabs no other workspace holds. */
+  removeWorkspace: (id: string) => post<Session>("/api/workspace/remove", { id }),
+  /** Chooses which workspaces a tab is shown in. */
+  tabWorkspaces: (id: string, workspaces: string[]) =>
+    post<Session>("/api/workspace/tab", { id, workspaces }),
 
   activate: (id: string) => post<Session>("/api/activate", { id }),
 

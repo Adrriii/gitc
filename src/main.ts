@@ -110,7 +110,19 @@ import {
   type Channel,
 } from "./engine/update.ts";
 import { NAME, VERSION } from "./generated/version.ts";
-import { loadSession, saveSession, touchRecent } from "./state.ts";
+import {
+  addWorkspace,
+  adoptTab,
+  closeTab,
+  loadSession,
+  removeWorkspace,
+  renameWorkspace,
+  saveSession,
+  setTabWorkspaces,
+  shownTabs,
+  switchWorkspace,
+  touchRecent,
+} from "./state.ts";
 import { at } from "./engine/safe.ts";
 import { allowedRequest } from "./engine/origin.ts";
 import { cleanTempDir, configDir } from "./engine/paths.ts";
@@ -1066,7 +1078,9 @@ async function openRepo(path: string, wantId?: string): Promise<Tab | null> {
     }
 
     // Focus it rather than silently doing nothing. Opening a repo should
-    // always end with that repo in front.
+    // always end with that repo in front - which, for a tab another workspace
+    // holds, means bringing it into this one too.
+    adoptTab(session, t);
     session.activeId = t.id;
     touchRecent(session, t);
     saveSession(session);
@@ -1094,6 +1108,7 @@ async function openRepo(path: string, wantId?: string): Promise<Tab | null> {
     name: basename(resolved),
     path: resolved,
     host: null,
+    workspaces: [session.workspace],
   };
   session.tabs.push(tab);
   session.activeId = tab.id;
@@ -1312,6 +1327,7 @@ const LOCAL_ONLY = [
   "/api/close",
   "/api/activate",
   "/api/reorder",
+  "/api/workspace",
   "/api/hosts",
   "/api/remote",
   "/api/update",
@@ -1361,6 +1377,7 @@ async function openRemoteRepo(
   // one of them.
   for (const t of session.tabs) {
     if (t.host !== host || t.path !== path) continue;
+    adoptTab(session, t);
     session.activeId = t.id;
     touchRecent(session, t);
     saveSession(session);
@@ -1431,7 +1448,7 @@ async function openRemoteRepoOnce(
   const taken = theirs === null || session.tabs.some((t) => t.id === theirs);
   const id = taken ? wanted : theirs;
 
-  const tab: Tab = { id, name: basename(path), path, host };
+  const tab: Tab = { id, name: basename(path), path, host, workspaces: [session.workspace] };
   session.tabs.push(tab);
   session.activeId = id;
   touchRecent(session, tab);
@@ -1490,7 +1507,7 @@ async function closeStaleRemoteTab(
 
   for (const t of theirs.tabs) {
     if (t.path !== path || t.id === wanted) continue;
-    await tunnelRequest(port, "/api/close", "POST", JSON.stringify({ id: t.id }), token);
+    await tunnelRequest(port, "/api/close", "POST", JSON.stringify({ id: t.id, everywhere: true }), token);
   }
 }
 
@@ -1802,18 +1819,58 @@ async function handleApi(
     // `next` is the tab to bring forward when the one closing is in front: the
     // window names the repository a worktree belongs to, so closing it goes
     // back there rather than to whichever tab happens to be first.
-    const body = JSON.parse(await readBody(req)) as IdRequest & { next?: string };
-    // Which machine this tab was on, before it stops being in the list.
-    const closing = session.tabs.find((t) => t.id === body.id);
-    const wasOn = closing === undefined ? null : closing.host;
-    session.tabs = session.tabs.filter((t) => t.id !== body.id);
+    //
+    // A tab other workspaces hold only leaves this one; `everywhere` closes it
+    // outright, for a repository that is gone.
+    const body = JSON.parse(await readBody(req)) as IdRequest & { next?: string; everywhere?: boolean };
+    const closed = closeTab(session, body.id, body.next ?? null, body.everywhere === true);
     // A tunnel outliving every tab that used it is a process on somebody's
     // server that nothing here still refers to.
-    if (wasOn !== null) releaseHost(wasOn);
-    if (session.activeId === body.id) {
-      const head = session.tabs.find((t) => t.id === body.next) ?? at(session.tabs, 0);
-      session.activeId = head === undefined ? null : head.id;
+    if (closed !== null && closed.host !== null) releaseHost(closed.host);
+    saveSession(session);
+    sendJson(res, JSON.stringify(session));
+    return true;
+  }
+
+  // Workspaces. Each answers with the session, as /api/close does, so the
+  // strip redraws from what the engine now holds.
+  if (path === "/api/workspace") {
+    const body = JSON.parse(await readBody(req)) as IdRequest;
+    switchWorkspace(session, body.id);
+    saveSession(session);
+    sendJson(res, JSON.stringify(session));
+    return true;
+  }
+
+  if (path === "/api/workspace/add") {
+    const body = JSON.parse(await readBody(req)) as { name: string };
+    if (body.name.trim().length > 0) addWorkspace(session, body.name.trim());
+    saveSession(session);
+    sendJson(res, JSON.stringify(session));
+    return true;
+  }
+
+  if (path === "/api/workspace/rename") {
+    const body = JSON.parse(await readBody(req)) as IdRequest & { name: string };
+    if (body.name.trim().length > 0) renameWorkspace(session, body.id, body.name.trim());
+    saveSession(session);
+    sendJson(res, JSON.stringify(session));
+    return true;
+  }
+
+  if (path === "/api/workspace/remove") {
+    const body = JSON.parse(await readBody(req)) as IdRequest;
+    for (const t of removeWorkspace(session, body.id) ?? []) {
+      if (t.host !== null) releaseHost(t.host);
     }
+    saveSession(session);
+    sendJson(res, JSON.stringify(session));
+    return true;
+  }
+
+  if (path === "/api/workspace/tab") {
+    const body = JSON.parse(await readBody(req)) as IdRequest & { workspaces: string[] };
+    setTabWorkspaces(session, body.id, body.workspaces);
     saveSession(session);
     sendJson(res, JSON.stringify(session));
     return true;
@@ -2799,7 +2856,7 @@ async function main(): Promise<void> {
 
   if (wanted !== null) await openRepo(wanted);
   if (session.activeId === null) {
-    const head = at(session.tabs, 0);
+    const head = at(shownTabs(session), 0);
     if (head !== undefined) session.activeId = head.id;
   }
 

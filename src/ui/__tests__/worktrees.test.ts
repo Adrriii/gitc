@@ -111,7 +111,7 @@ eq("a different directory is different", samePath("/work/agent", "/work/agent2")
 
 // Where closing a worktree's tab lands.
 {
-  const tab = (id: string, path: string, host: string | null = null): Tab => ({ id, name: id, path, host });
+  const tab = (id: string, path: string, host: string | null = null): Tab => ({ id, name: id, path, host, workspaces: ["default"] });
   const repo = tab("t1", "/work/repo");
   const agent = tab("t2", "/work/repo/.wt/agent");
   const remoteRepo = tab("t3", "/work/repo", "box");

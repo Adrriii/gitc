@@ -16,6 +16,16 @@ export interface Tab {
    * to be rewritten in transit.
    */
   host: string | null;
+  /** The workspaces this tab is shown in, by id - never empty. */
+  workspaces: string[];
+}
+
+/** A named set of tabs; only the current one's are on the strip. */
+export interface Workspace {
+  id: string;
+  name: string;
+  /** The tab that was in front when this workspace was last left. */
+  activeId: string | null;
 }
 
 /**
@@ -73,6 +83,9 @@ export interface Session {
   tabs: Tab[];
   activeId: string | null;
   recents: Tab[];
+  workspaces: Workspace[];
+  /** The current workspace's id. */
+  workspace: string;
 }
 
 export interface Head {

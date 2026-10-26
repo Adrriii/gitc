@@ -107,6 +107,8 @@ export function TabBar({
   onNew,
   onPreferences,
   onReorder,
+  onWorkspaceMenu,
+  onTabMenu,
 }: {
   session: Session;
   /** What each machine a tab lives on is doing, for the dot on its tab. */
@@ -119,11 +121,18 @@ export function TabBar({
   onPreferences: () => void;
   /** The new left-to-right order after a drag. */
   onReorder: (order: string[]) => void;
+  /** The workspace switcher was clicked; the menu opens at x, y. */
+  onWorkspaceMenu: (x: number, y: number) => void;
+  /** A tab was right-clicked. */
+  onTabMenu: (id: string, x: number, y: number) => void;
 }) {
+  // Only the current workspace's tabs are on the strip; the rest stay open.
+  const tabs = session.tabs.filter((t) => t.workspaces.includes(session.workspace));
+  const workspace = session.workspaces.find((w) => w.id === session.workspace);
   /** The tab being dragged, and where it would land. */
   const [dragging, setDragging] = useState<string | null>(null);
   const [over, setOver] = useState<{ id: string; after: boolean } | null>(null);
-  const changes = useTabChanges(session.tabs, session.activeId, refreshKey);
+  const changes = useTabChanges(tabs, session.activeId, refreshKey);
 
   const drop = () => {
     if (dragging === null || over === null) {
@@ -132,7 +141,7 @@ export function TabBar({
       return;
     }
 
-    const ids = session.tabs.map((t) => t.id).filter((id) => id !== dragging);
+    const ids = tabs.map((t) => t.id).filter((id) => id !== dragging);
     const at = ids.indexOf(over.id);
     if (at === -1) {
       setDragging(null);
@@ -145,13 +154,24 @@ export function TabBar({
     setOver(null);
     // Only tell the engine when the order actually changed - a drag that ends
     // where it started should not write the session file.
-    const current = session.tabs.map((t) => t.id);
+    const current = tabs.map((t) => t.id);
     if (ids.join(",") !== current.join(",")) onReorder(ids);
   };
 
   return (
     <div className={s.bar}>
-      {session.tabs.map((t) => (
+      <div
+        className={s.workspace}
+        title="Switch workspace"
+        onClick={(e) => {
+          const box = e.currentTarget.getBoundingClientRect();
+          onWorkspaceMenu(box.left, box.bottom);
+        }}
+      >
+        <span className={s.name}>{workspace?.name ?? "Workspace"}</span>
+        <Icon name="chevronDown" size={11} className={s.ico} />
+      </div>
+      {tabs.map((t) => (
         <div
           key={t.id}
           className={[
@@ -163,6 +183,10 @@ export function TabBar({
           title={t.host === null ? t.path : t.host + ":" + t.path}
           draggable
           onClick={() => onActivate(t.id)}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            onTabMenu(t.id, e.clientX, e.clientY);
+          }}
           onDragStart={(e) => {
             setDragging(t.id);
             e.dataTransfer.effectAllowed = "move";
