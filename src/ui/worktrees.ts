@@ -7,7 +7,7 @@
  * and never touched: its uncommitted work is a graph row you can select and
  * read, and editing it means opening it as a tab of its own, deliberately.
  */
-import type { Worktree } from "./types";
+import type { Tab, Worktree } from "./types";
 
 /** The WIP row for this tab's own working tree. */
 export const OWN_WIP = "WIP";
@@ -93,6 +93,16 @@ export function samePath(a: string, b: string): boolean {
     return /^[A-Za-z]:/.test(s) ? s.toLowerCase() : s;
   };
   return norm(a) === norm(b);
+}
+
+/**
+ * The tab of the repository a worktree tab belongs to: its main working tree,
+ * open on the same machine. Where closing a worktree's tab should land.
+ */
+export function mainTabOf(tabs: Tab[], from: Tab, worktrees: Worktree[]): Tab | undefined {
+  const main = worktrees.find((w) => w.main);
+  if (main === undefined || main.current) return undefined;
+  return tabs.find((t) => t.id !== from.id && t.host === from.host && samePath(t.path, main.path));
 }
 
 /** The summary the row and the list both show: "3 changed, 1 new". */

@@ -153,7 +153,7 @@ export const api = {
   revokeRemote: (host: string) =>
     post<{ hosts: string[] }>("/api/remote/revoke", { host }).then((r) => r.hosts),
 
-  close: (id: string) => post<Session>("/api/close", { id }),
+  close: (id: string, next?: string) => post<Session>("/api/close", { id, next }),
 
   activate: (id: string) => post<Session>("/api/activate", { id }),
 

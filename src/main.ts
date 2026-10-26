@@ -1799,7 +1799,10 @@ async function handleApi(
   }
 
   if (path === "/api/close") {
-    const body = JSON.parse(await readBody(req)) as IdRequest;
+    // `next` is the tab to bring forward when the one closing is in front: the
+    // window names the repository a worktree belongs to, so closing it goes
+    // back there rather than to whichever tab happens to be first.
+    const body = JSON.parse(await readBody(req)) as IdRequest & { next?: string };
     // Which machine this tab was on, before it stops being in the list.
     const closing = session.tabs.find((t) => t.id === body.id);
     const wasOn = closing === undefined ? null : closing.host;
@@ -1808,7 +1811,7 @@ async function handleApi(
     // server that nothing here still refers to.
     if (wasOn !== null) releaseHost(wasOn);
     if (session.activeId === body.id) {
-      const head = at(session.tabs, 0);
+      const head = session.tabs.find((t) => t.id === body.next) ?? at(session.tabs, 0);
       session.activeId = head === undefined ? null : head.id;
     }
     saveSession(session);

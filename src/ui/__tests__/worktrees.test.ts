@@ -2,13 +2,14 @@ import {
   branchesElsewhere,
   isActive,
   isWip,
+  mainTabOf,
   samePath,
   wipHash,
   wipWorktree,
   worktreeLabel,
 } from "../worktrees.ts";
 import { groupRefs } from "../refGroups.ts";
-import type { Worktree } from "../types.ts";
+import type { Tab, Worktree } from "../types.ts";
 
 let pass = 0;
 let fail = 0;
@@ -107,6 +108,25 @@ eq("and a drive path's case is not", samePath("c:/code/Repo/agent", "C:/Code/rep
 eq("a trailing separator is not", samePath("/work/agent/", "/work/agent"), true);
 eq("a POSIX path keeps its case", samePath("/work/Agent", "/work/agent"), false);
 eq("a different directory is different", samePath("/work/agent", "/work/agent2"), false);
+
+// Where closing a worktree's tab lands.
+{
+  const tab = (id: string, path: string, host: string | null = null): Tab => ({ id, name: id, path, host });
+  const repo = tab("t1", "/work/repo");
+  const agent = tab("t2", "/work/repo/.wt/agent");
+  const remoteRepo = tab("t3", "/work/repo", "box");
+  const fromAgent = [
+    tree({ name: "", path: "/work/repo", main: true, current: false }),
+    tree({ name: "agent", path: "/work/repo/.wt/agent", current: true }),
+  ];
+  eq("a worktree goes back to its repository", mainTabOf([remoteRepo, repo, agent], agent, fromAgent)?.id, "t1");
+  eq("on its own machine only", mainTabOf([remoteRepo, agent], agent, fromAgent), undefined);
+  eq(
+    "the main tree itself has nowhere to go back to",
+    mainTabOf([repo, agent], repo, [{ ...fromAgent[0]!, current: true }, { ...fromAgent[1]!, current: false }]),
+    undefined,
+  );
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 // exitCode, not exit(): exit() can abort a queued stdout write on Windows.

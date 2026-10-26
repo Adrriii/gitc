@@ -66,6 +66,7 @@ import {
   findWorktree,
   isActive,
   isWip,
+  mainTabOf,
   samePath,
   wipHash,
   wipWorktree,
@@ -2187,7 +2188,11 @@ export function App() {
         remotes={remotes}
         refreshKey={data}
         onActivate={(id) => api.activate(id).then(setSession)}
-        onClose={(id) => api.close(id).then(setSession)}
+        onClose={(id) => {
+          // Closing the worktree in front goes back to its repository's tab.
+          const back = activeTab?.id === id ? mainTabOf(session.tabs, activeTab, worktrees) : undefined;
+          void api.close(id, back?.id).then(setSession);
+        }}
         onNew={() => setSession({ ...session, activeId: null })}
         onPreferences={() => setPrefsOpen(true)}
         onReorder={(order) => {
