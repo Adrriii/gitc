@@ -142,6 +142,42 @@ export function groupTabs(tabs: Tab[], mains: Map<string, string>): TabGroup[] {
   return groups;
 }
 
+/**
+ * Moves the other repositories' tabs along when the checkout in front changes.
+ *
+ * Work spanning several repositories often has a worktree of the same name in
+ * each, so switching one repository's tab to that worktree
+ * switches every other tab that has it open by that exact name. Coming back
+ * to the repository's own checkout takes back those that were on the same
+ * worktree.
+ *
+ * @param shown Each repository's tab to the worktree tab it shows, updated in
+ *   place. Nothing moves until the tab in front differs from what it records,
+ *   so calling this on every render is safe.
+ */
+export function followWorktree(groups: TabGroup[], activeId: string | null, shown: Map<string, string>): void {
+  const group = groups.find((g) => g.head.id === activeId || g.members.some((t) => t.id === activeId));
+  if (group === undefined) return;
+  const now = group.members.find((t) => t.id === activeId);
+  const was = shown.get(group.head.id);
+  if (was === now?.id) return;
+  const wasName = group.members.find((t) => t.id === was)?.name;
+
+  if (now === undefined) shown.delete(group.head.id);
+  else shown.set(group.head.id, now.id);
+
+  for (const g of groups) {
+    if (g === group) continue;
+    if (now === undefined) {
+      const current = g.members.find((t) => t.id === shown.get(g.head.id));
+      if (wasName !== undefined && current?.name === wasName) shown.delete(g.head.id);
+      continue;
+    }
+    const same = g.members.find((t) => t.name === now.name);
+    if (same !== undefined) shown.set(g.head.id, same.id);
+  }
+}
+
 /** The summary the row and the list both show: "3 changed, 1 new". */
 export function changeCounts(w: Worktree): { modified: number; added: number } {
   return {

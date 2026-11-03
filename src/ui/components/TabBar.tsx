@@ -5,7 +5,7 @@ import { Icon } from "./Icon";
 import { CloseButton } from "./CloseButton";
 import { ContextMenu } from "./ContextMenu";
 import type { MenuItem } from "./ContextMenu";
-import { groupTabs } from "../worktrees";
+import { followWorktree, groupTabs } from "../worktrees";
 import type { TabGroup } from "../worktrees";
 import s from "./TabBar.module.scss";
 
@@ -174,16 +174,9 @@ export function TabBar({
   const lastShown = useRef(new Map<string, string>());
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
 
+  followWorktree(groups, session.activeId, lastShown.current);
   const shownOf = (g: TabGroup): Tab => {
-    const active = g.members.find((t) => t.id === session.activeId);
-    if (active !== undefined) {
-      lastShown.current.set(g.head.id, active.id);
-      return active;
-    }
-    if (g.head.id === session.activeId) {
-      lastShown.current.delete(g.head.id);
-      return g.head;
-    }
+    if (g.head.id === session.activeId) return g.head;
     return g.members.find((t) => t.id === lastShown.current.get(g.head.id)) ?? g.head;
   };
 

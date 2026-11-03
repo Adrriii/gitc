@@ -1,5 +1,6 @@
 import {
   branchesElsewhere,
+  followWorktree,
   isActive,
   groupTabs,
   isWip,
@@ -149,6 +150,39 @@ eq("a different directory is different", samePath("/code/agent", "/code/agent2")
   eq("alone when its repository is not open", shape([agent, other], mains), [["t2"], ["t3"]]);
   eq("alone on another machine", shape([repo, remoteAgent], mains), [["t1"], ["t4"]]);
   eq("alone until its main tree is known", shape([repo, agent], new Map([["t1", "/code/repo"]])), [["t1"], ["t2"]]);
+}
+
+// Switching one repository's tab to a worktree takes its namesakes along.
+{
+  const tab = (id: string, path: string): Tab => ({ id, name: path.split("/").pop()!, path, host: null, workspaces: ["default"] });
+  const frontend = tab("a", "/code/frontend");
+  const frontendX = tab("ax", "/code/frontend/worktrees/feature-x");
+  const frontendY = tab("ay", "/code/frontend/worktrees/feature-y");
+  const backend = tab("t", "/code/backend");
+  const backendX = tab("tx", "/code/backend/worktrees/feature-x");
+  const other = tab("o", "/code/other");
+  const mains = new Map([
+    ["a", "/code/frontend"],
+    ["ax", "/code/frontend"],
+    ["ay", "/code/frontend"],
+    ["t", "/code/backend"],
+    ["tx", "/code/backend"],
+    ["o", "/code/other"],
+  ]);
+  const groups = groupTabs([frontend, frontendX, frontendY, backend, backendX, other], mains);
+  const shown = new Map<string, string>();
+  const state = () => JSON.stringify([...shown].sort());
+
+  followWorktree(groups, "ax", shown);
+  eq("the same name follows", state(), JSON.stringify([["a", "ax"], ["t", "tx"]]));
+  followWorktree(groups, "ay", shown);
+  eq("no namesake, nothing moves", state(), JSON.stringify([["a", "ay"], ["t", "tx"]]));
+  followWorktree(groups, "ax", shown);
+  followWorktree(groups, "a", shown);
+  eq("back to the repository takes them back", state(), "[]");
+  shown.set("t", "tx");
+  followWorktree(groups, "o", shown);
+  eq("another repository moves nothing", state(), JSON.stringify([["t", "tx"]]));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
