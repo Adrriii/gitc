@@ -26,7 +26,7 @@ function eq(label: string, got: unknown, want: unknown) {
 
 const tree = (over: Partial<Worktree>): Worktree => ({
   name: "agent",
-  path: "/work/agent",
+  path: "/code/agent",
   main: false,
   current: false,
   branch: "topic",
@@ -56,9 +56,9 @@ console.log("WIP rows");
 
 console.log("labels");
 {
-  eq("a linked worktree by its directory", worktreeLabel(tree({ path: "/work/agent-7" })), "agent-7");
+  eq("a linked worktree by its directory", worktreeLabel(tree({ path: "/code/agent-7" })), "agent-7");
   eq("the main one too", worktreeLabel(tree({ name: "", main: true, path: "C:\\Code\\gitc" })), "gitc");
-  eq("a trailing separator does not blank it", worktreeLabel(tree({ path: "/work/agent/" })), "agent");
+  eq("a trailing separator does not blank it", worktreeLabel(tree({ path: "/code/agent/" })), "agent");
 }
 
 console.log("who is working where");
@@ -106,19 +106,19 @@ console.log("chips");
 // A worktree's path as git reports it, against a tab's.
 eq("Windows separators are one", samePath("C:\\Code\\repo\\agent", "C:/Code/repo/agent"), true);
 eq("and a drive path's case is not", samePath("c:/code/Repo/agent", "C:/Code/repo/agent"), true);
-eq("a trailing separator is not", samePath("/work/agent/", "/work/agent"), true);
-eq("a POSIX path keeps its case", samePath("/work/Agent", "/work/agent"), false);
-eq("a different directory is different", samePath("/work/agent", "/work/agent2"), false);
+eq("a trailing separator is not", samePath("/code/agent/", "/code/agent"), true);
+eq("a POSIX path keeps its case", samePath("/code/Agent", "/code/agent"), false);
+eq("a different directory is different", samePath("/code/agent", "/code/agent2"), false);
 
 // Where closing a worktree's tab lands.
 {
   const tab = (id: string, path: string, host: string | null = null): Tab => ({ id, name: id, path, host, workspaces: ["default"] });
-  const repo = tab("t1", "/work/repo");
-  const agent = tab("t2", "/work/repo/.wt/agent");
-  const remoteRepo = tab("t3", "/work/repo", "box");
+  const repo = tab("t1", "/code/repo");
+  const agent = tab("t2", "/code/repo/worktrees/agent");
+  const remoteRepo = tab("t3", "/code/repo", "box");
   const fromAgent = [
-    tree({ name: "", path: "/work/repo", main: true, current: false }),
-    tree({ name: "agent", path: "/work/repo/.wt/agent", current: true }),
+    tree({ name: "", path: "/code/repo", main: true, current: false }),
+    tree({ name: "agent", path: "/code/repo/worktrees/agent", current: true }),
   ];
   eq("a worktree goes back to its repository", mainTabOf([remoteRepo, repo, agent], agent, fromAgent)?.id, "t1");
   eq("on its own machine only", mainTabOf([remoteRepo, agent], agent, fromAgent), undefined);
@@ -132,15 +132,15 @@ eq("a different directory is different", samePath("/work/agent", "/work/agent2")
 // Which tabs the bar folds into their repository's.
 {
   const tab = (id: string, path: string, host: string | null = null): Tab => ({ id, name: id, path, host, workspaces: ["default"] });
-  const repo = tab("t1", "/work/repo");
-  const agent = tab("t2", "/work/repo/.wt/agent");
-  const other = tab("t3", "/work/other");
-  const remoteAgent = tab("t4", "/work/repo/.wt/agent", "box");
+  const repo = tab("t1", "/code/repo");
+  const agent = tab("t2", "/code/repo/worktrees/agent");
+  const other = tab("t3", "/code/other");
+  const remoteAgent = tab("t4", "/code/repo/worktrees/agent", "box");
   const mains = new Map([
-    ["t1", "/work/repo"],
-    ["t2", "/work/repo"],
-    ["t3", "/work/other"],
-    ["t4", "/work/repo"],
+    ["t1", "/code/repo"],
+    ["t2", "/code/repo"],
+    ["t3", "/code/other"],
+    ["t4", "/code/repo"],
   ]);
   const shape = (tabs: Tab[], m: Map<string, string>) =>
     groupTabs(tabs, m).map((g) => [g.head.id, ...g.members.map((t) => t.id)]);
@@ -148,7 +148,7 @@ eq("a different directory is different", samePath("/work/agent", "/work/agent2")
   eq("even from left of it", shape([agent, repo], mains), [["t1", "t2"]]);
   eq("alone when its repository is not open", shape([agent, other], mains), [["t2"], ["t3"]]);
   eq("alone on another machine", shape([repo, remoteAgent], mains), [["t1"], ["t4"]]);
-  eq("alone until its main tree is known", shape([repo, agent], new Map([["t1", "/work/repo"]])), [["t1"], ["t2"]]);
+  eq("alone until its main tree is known", shape([repo, agent], new Map([["t1", "/code/repo"]])), [["t1"], ["t2"]]);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
