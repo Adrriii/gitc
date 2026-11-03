@@ -295,7 +295,7 @@ function worktreeBadge(w: Worktree): { text: string; tone: "warn" | "bad" | "dim
 /**
  * One checkout of the repository.
  *
- * Click looks (read-only, in this tab), double-click edits (its own tab) -
+ * Click looks (read-only, in this tab), double-click edits (opened from the tab) -
  * the same click/double-click split a branch row has between finding it and
  * checking it out. The two buttons say the same thing for anyone who does
  * not guess it, revealed on hover like every other row's controls.
@@ -320,7 +320,7 @@ function WorktreeRow({
     w.current ? "open in this tab" : w.detached ? "detached HEAD" : "on " + where,
     w.locked ? "locked" + (w.lockReason.length > 0 ? ": " + w.lockReason : "") : "",
     active ? "changed " + Math.round(w.idleMs / 1000) + "s ago - something may be working in it" : "",
-    w.current ? "" : "click to look at it here, double-click to open it in its own tab",
+    w.current ? "" : "click to look at it here, double-click to open it to edit",
   ]
     .filter((line) => line.length > 0)
     .join("\n");
@@ -365,7 +365,7 @@ function WorktreeRow({
           </button>
           <button
             className={s.wtBtn}
-            title="Open it in its own tab to edit"
+            title="Open it to edit"
             onClick={(e) => {
               e.stopPropagation();
               onEdit(w);
@@ -447,7 +447,7 @@ export function Sidebar({
   onStashContext: (selector: string, x: number, y: number) => void;
   /** Read-only, in this tab: selects the worktree's WIP row. */
   onViewWorktree: (w: Worktree) => void;
-  /** Opens the worktree as a tab of its own, or brings that tab forward. */
+  /** Opens the worktree under this repository's tab, or brings it forward. */
   onEditWorktree: (w: Worktree) => void;
   onWorktreeContext: (w: Worktree, x: number, y: number) => void;
   /** Single click on a ref row - select its commit and scroll to it. */

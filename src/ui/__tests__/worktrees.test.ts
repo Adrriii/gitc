@@ -1,6 +1,7 @@
 import {
   branchesElsewhere,
   isActive,
+  groupTabs,
   isWip,
   mainTabOf,
   samePath,
@@ -126,6 +127,28 @@ eq("a different directory is different", samePath("/work/agent", "/work/agent2")
     mainTabOf([repo, agent], repo, [{ ...fromAgent[0]!, current: true }, { ...fromAgent[1]!, current: false }]),
     undefined,
   );
+}
+
+// Which tabs the bar folds into their repository's.
+{
+  const tab = (id: string, path: string, host: string | null = null): Tab => ({ id, name: id, path, host, workspaces: ["default"] });
+  const repo = tab("t1", "/work/repo");
+  const agent = tab("t2", "/work/repo/.wt/agent");
+  const other = tab("t3", "/work/other");
+  const remoteAgent = tab("t4", "/work/repo/.wt/agent", "box");
+  const mains = new Map([
+    ["t1", "/work/repo"],
+    ["t2", "/work/repo"],
+    ["t3", "/work/other"],
+    ["t4", "/work/repo"],
+  ]);
+  const shape = (tabs: Tab[], m: Map<string, string>) =>
+    groupTabs(tabs, m).map((g) => [g.head.id, ...g.members.map((t) => t.id)]);
+  eq("a worktree goes under its repository", shape([repo, other, agent], mains), [["t1", "t2"], ["t3"]]);
+  eq("even from left of it", shape([agent, repo], mains), [["t1", "t2"]]);
+  eq("alone when its repository is not open", shape([agent, other], mains), [["t2"], ["t3"]]);
+  eq("alone on another machine", shape([repo, remoteAgent], mains), [["t1"], ["t4"]]);
+  eq("alone until its main tree is known", shape([repo, agent], new Map([["t1", "/work/repo"]])), [["t1"], ["t2"]]);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

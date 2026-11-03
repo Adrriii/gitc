@@ -5,7 +5,7 @@
  * open - gets everything: staging, committing, every operation. Anyone
  * else's, which with coding agents usually means an agent's, is looked at
  * and never touched: its uncommitted work is a graph row you can select and
- * read, and editing it means opening it as a tab of its own, deliberately.
+ * read, and editing it means opening it, deliberately, from the repository's tab.
  */
 import type { Tab, Worktree } from "./types";
 
@@ -103,6 +103,43 @@ export function mainTabOf(tabs: Tab[], from: Tab, worktrees: Worktree[]): Tab | 
   const main = worktrees.find((w) => w.main);
   if (main === undefined || main.current) return undefined;
   return tabs.find((t) => t.id !== from.id && t.host === from.host && samePath(t.path, main.path));
+}
+
+/** A repository's tab and the tabs open on its other worktrees, shown as one. */
+export interface TabGroup {
+  head: Tab;
+  members: Tab[];
+}
+
+/**
+ * The tab strip as the bar draws it: a worktree's tab folds into its
+ * repository's tab when that one is open on the same machine, and stands on
+ * its own otherwise - there is nowhere else for it to go.
+ *
+ * @param mains Each tab's main working tree, where it is known yet. A tab not
+ *   in it is drawn alone until it is.
+ */
+export function groupTabs(tabs: Tab[], mains: Map<string, string>): TabGroup[] {
+  const headOf = (t: Tab): Tab | undefined => {
+    const main = mains.get(t.id);
+    if (main === undefined || samePath(t.path, main)) return undefined;
+    return tabs.find((h) => h.id !== t.id && h.host === t.host && samePath(h.path, main));
+  };
+
+  const groups: TabGroup[] = [];
+  const byHead = new Map<string, TabGroup>();
+  // Heads first, so a worktree's tab left of its repository still joins it.
+  for (const t of tabs) {
+    if (headOf(t) !== undefined) continue;
+    const g: TabGroup = { head: t, members: [] };
+    groups.push(g);
+    byHead.set(t.id, g);
+  }
+  for (const t of tabs) {
+    const h = headOf(t);
+    if (h !== undefined) byHead.get(h.id)?.members.push(t);
+  }
+  return groups;
 }
 
 /** The summary the row and the list both show: "3 changed, 1 new". */

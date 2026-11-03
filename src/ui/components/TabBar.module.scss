@@ -56,6 +56,31 @@
   }
 }
 
+// A repository with one of its worktrees in front names both, the worktree in
+// full, so the tab grows past the usual cap rather than cut it.
+.wide {
+  max-width: none;
+}
+
+.worktree {
+  flex: none;
+  white-space: nowrap;
+}
+
+// The worktrees open from this repository, as a count that opens their list.
+.more {
+  flex: none;
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 10px;
+  color: var(--fg-dim);
+
+  &:hover {
+    background: var(--bg-3);
+    color: var(--fg);
+  }
+}
+
 .ico {
   opacity: 0.55;
   flex: none;

@@ -966,9 +966,9 @@ export function App() {
   // Two ways into another checkout, and the difference is ownership. VIEW
   // stays in this tab and only reads: its WIP row is selected, and the panel
   // lists its changes with nothing that stages, discards or commits. EDIT
-  // opens it as a tab of its own, which is a deliberate step - with coding
-  // agents, the checkout next door is usually somebody else's work in
-  // progress.
+  // opens it for real, folded into this repository's tab, which is a
+  // deliberate step - with coding agents, the checkout next door is usually
+  // somebody else's work in progress.
 
   const worktrees = data?.worktrees ?? NO_WORKTREES;
   worktreesRef.current = worktrees;
@@ -991,7 +991,7 @@ export function App() {
   );
 
   /**
-   * Opens another worktree as a tab of its own, or brings its tab forward.
+   * Opens another worktree under this repository's tab, or brings it forward.
    *
    * Asks first when it looks like somebody is in there - its HEAD or index
    * moved within the last few seconds, or it is locked - measured fresh
@@ -1116,7 +1116,7 @@ export function App() {
         });
         items.push({
           label: `Open ${label} to edit`,
-          hint: "in a tab of its own",
+          hint: "from this repository's tab",
           action: () => void editWorktree(w),
         });
         items.push({ separator: true });

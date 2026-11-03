@@ -325,7 +325,7 @@ export function Panel({
   onCommitted: () => void;
   /** A new message for one commit, as git wants it: subject, blank line, body. */
   onReword: (hash: string, message: string) => void;
-  /** Opens another worktree in its own tab, from its read-only view. */
+  /** Opens another worktree to edit, from its read-only view. */
   onEditWorktree: (w: Worktree) => void;
 }) {
   const [files, setFiles] = useState<FileChange[]>([]);
