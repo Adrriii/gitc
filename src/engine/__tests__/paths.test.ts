@@ -1,5 +1,5 @@
 import { inRepo, safeArgument, safeRemoteUrl } from "../paths.ts";
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -132,6 +132,12 @@ try {
 } catch {
   dirLink = false;
   console.log("  --   directory link case skipped (not permitted on this machine)");
+}
+// Some logons can make a junction and still not open anything through it,
+// and then nothing can escape through one either: the case has no subject.
+if (dirLink && !existsSync(join(repoDir, "escape", "secret.txt"))) {
+  dirLink = false;
+  console.log("  --   directory link case skipped (links are not followed on this machine)");
 }
 
 /** A file symlink has no unprivileged equivalent, so this one may skip. */
