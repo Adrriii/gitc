@@ -41,7 +41,7 @@ function leaf(path: string): string {
  * the tab bar agree. git's own name for a linked worktree is usually that
  * already; the main one has none.
  */
-export function worktreeLabel(w: Worktree): string {
+export function worktreeLabel(w: Pick<Worktree, "name" | "path">): string {
   const name = leaf(w.path);
   return name.length > 0 ? name : w.name;
 }

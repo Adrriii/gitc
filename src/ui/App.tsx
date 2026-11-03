@@ -991,6 +991,42 @@ export function App() {
   );
 
   /**
+   * Opens a worktree, and the worktree of the same name in each other
+   * repository of the workspace on that machine, so their tabs can follow it
+   * (see followWorktree). The one asked for opens last, which leaves it in
+   * front.
+   */
+  const openWithNamesakes = useCallback(
+    async (w: Worktree, from: Tab) => {
+      const cur = sessionRef.current;
+      const label = worktreeLabel(w);
+      const paths: string[] = [];
+      for (const t of cur?.tabs ?? []) {
+        if (cur === null || t.id === from.id || t.host !== from.host || !t.workspaces.includes(cur.workspace)) continue;
+        try {
+          const r = await api.worktrees(t.id);
+          for (const x of r.worktrees) {
+            if (x.main || x.prunable || worktreeLabel(x) !== label || samePath(x.path, w.path)) continue;
+            const known = [...paths, ...cur.tabs.filter((o) => o.host === from.host).map((o) => o.path)];
+            if (!known.some((p) => samePath(p, x.path))) paths.push(x.path);
+          }
+        } catch {
+          // A repository that cannot answer just does not follow.
+        }
+      }
+      for (const p of paths) {
+        try {
+          await api.open(p, from.host ?? undefined);
+        } catch {
+          // Nor does one that will not open.
+        }
+      }
+      await open(w.path, from.host ?? undefined);
+    },
+    [open],
+  );
+
+  /**
    * Opens another worktree under this repository's tab, or brings it forward.
    *
    * Asks first when it looks like somebody is in there - its HEAD or index
@@ -1005,7 +1041,7 @@ export function App() {
         return;
       }
       const tab = activeTab;
-      const go = () => void open(w.path, tab.host ?? undefined);
+      const go = () => void openWithNamesakes(w, tab);
 
       let fresh: Omit<Worktree, "status"> = w;
       try {
@@ -1045,7 +1081,7 @@ export function App() {
         },
       });
     },
-    [activeTab, open, setConfirm],
+    [activeTab, openWithNamesakes, setConfirm],
   );
 
   /**
