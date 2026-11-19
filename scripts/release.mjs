@@ -102,7 +102,7 @@ function die(message, detail) {
  * `shell` is off by default and deliberately so: a release commit message is
  * several paragraphs with quotes and blank lines in it, and handing that to a
  * Windows shell to re-parse would rewrite the message or fail outright.
- * Arguments go straight to the process. Only npm and gh need the shell, being
+ * Arguments go straight to the process. Only gh needs the shell, being
  * .cmd shims that cannot be spawned directly on Windows.
  */
 function run(cmd, args, { allowFail = false, quiet = true, cwd = root, shell = false } = {}) {
@@ -121,7 +121,7 @@ function run(cmd, args, { allowFail = false, quiet = true, cwd = root, shell = f
 
 const git = (...args) => run("git", args);
 const gh = (...args) => run("gh", args, { shell: windows });
-const npm = (args, options = {}) => run("npm", args, { shell: windows, ...options });
+const cargo = (args, options = {}) => run("cargo", args, options);
 
 /** For the steps that change something: honours --dry-run. */
 function act(description, fn) {
@@ -136,9 +136,12 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // --- version -----------------------------------------------------------------
 
-const pkgPath = join(root, "package.json");
-const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
-if (pkg.name !== "gitc") die(`this is not the gitc package (found "${pkg.name}")`);
+const manifestPath = join(root, "Cargo.toml");
+const manifest = readFileSync(manifestPath, "utf8");
+const VERSION_LINE = /^version = "([^"]+)"$/m;
+if (!/^name = "gitc"$/m.test(manifest)) die("this is not the gitc crate");
+const pkg = { version: (VERSION_LINE.exec(manifest) ?? [])[1] ?? "" };
+if (pkg.version.length === 0) die("Cargo.toml has no version line");
 
 function bumped(current, kind) {
   // The numbers only: a current version of 0.5.0-rc.2 bumps from 0.5.0.
@@ -218,7 +221,7 @@ if (!/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(version)) {
 const prerelease = version.includes("-");
 
 const tag = `v${version}`;
-const binary = join(root, "dist", windows ? "gitc.exe" : "gitc");
+const binary = join(root, "target", "release", windows ? "gitc.exe" : "gitc");
 
 console.log(`releasing gitc ${version}${dryRun ? "  (dry run)" : ""}`);
 
@@ -256,22 +259,23 @@ if (behind !== "0") die(`origin/${branch} has ${behind} commit(s) you do not - p
 step(`Setting the version to ${version}`);
 
 if (pkg.version === version) {
-  skip(`package.json already says ${version}`);
+  skip(`Cargo.toml already says ${version}`);
 } else {
-  act(`bump package.json from ${pkg.version} to ${version}`, () => {
-    npm(["version", version, "--no-git-tag-version"]);
-    info(`package.json ${pkg.version} -> ${version}`);
+  act(`bump Cargo.toml from ${pkg.version} to ${version}`, () => {
+    writeFileSync(manifestPath, manifest.replace(VERSION_LINE, `version = "${version}"`));
+    info(`Cargo.toml ${pkg.version} -> ${version}`);
   });
 }
 
 // --- 3. build ----------------------------------------------------------------
 
-step("Building - typecheck, tests, UI, binary");
+step("Building - tests, then the release binary");
 
-act("run npm run build", () => {
+act("run cargo test and cargo build --release", () => {
   // Inherited output: this is the long step, and watching the tests go past is
   // the point of running it locally at all.
-  npm(["run", "build"], { quiet: false });
+  cargo(["test", "--release"], { quiet: false });
+  cargo(["build", "--release"], { quiet: false });
 
   if (!existsSync(binary)) die(`the build did not produce ${binary}`);
   const reported = run(binary, ["--version"]).out;

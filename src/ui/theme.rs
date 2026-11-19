@@ -1,0 +1,602 @@
+use eframe::egui::{self, Color32};
+
+use super::settings::Settings;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Palette {
+    pub bg_0: Color32,
+    pub bg_1: Color32,
+    pub bg_2: Color32,
+    pub bg_3: Color32,
+    pub bg_4: Color32,
+    pub bg_inset: Color32,
+    pub line: Color32,
+    pub line_strong: Color32,
+    pub line_hard: Color32,
+    pub fg_bright: Color32,
+    pub fg: Color32,
+    pub fg_dim: Color32,
+    pub fg_muted: Color32,
+    pub fg_faint: Color32,
+    pub accent: Color32,
+    pub accent_hover: Color32,
+    pub accent_line: Color32,
+    pub accent_bg: Color32,
+    pub accent_fg: Color32,
+    pub chip_head: Color32,
+    pub chip_head_fg: Color32,
+    pub green: Color32,
+    pub green_bg: Color32,
+    pub green_line: Color32,
+    pub green_fg: Color32,
+    pub red: Color32,
+    pub red_bg: Color32,
+    pub red_line: Color32,
+    pub red_fg: Color32,
+    pub amber: Color32,
+    pub amber_bg: Color32,
+    pub amber_fg: Color32,
+    pub purple: Color32,
+    pub cyan: Color32,
+    pub syn_keyword: Color32,
+    pub syn_type: Color32,
+    pub syn_number: Color32,
+    pub syn_string: Color32,
+    pub syn_regexp: Color32,
+    pub syn_title: Color32,
+    pub syn_variable: Color32,
+    pub syn_comment: Color32,
+    pub syn_doctag: Color32,
+    pub syn_meta: Color32,
+    pub syn_tag: Color32,
+    pub syn_punct: Color32,
+    pub lane_0: Color32,
+    pub lane_1: Color32,
+    pub lane_2: Color32,
+    pub lane_3: Color32,
+    pub lane_4: Color32,
+    pub lane_5: Color32,
+    pub lane_6: Color32,
+    pub lane_7: Color32,
+    pub lane_8: Color32,
+    pub stash: Color32,
+}
+
+pub struct Preset {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub blurb: &'static str,
+    pub light: bool,
+    pub colors: Palette,
+}
+
+/// Token name, label and group title, in the order the theme editor lists them.
+pub const TOKENS: &[(&str, &str, &str)] = &[
+    ("bg-0", "Floor", "Surfaces"),
+    ("bg-1", "Chrome", "Surfaces"),
+    ("bg-2", "Raised", "Surfaces"),
+    ("bg-3", "Hover", "Surfaces"),
+    ("bg-4", "Active", "Surfaces"),
+    ("bg-inset", "Inset", "Surfaces"),
+    ("line", "Hairline", "Lines"),
+    ("line-strong", "Divider", "Lines"),
+    ("line-hard", "Outer edge", "Lines"),
+    ("fg-bright", "Bright", "Text"),
+    ("fg", "Normal", "Text"),
+    ("fg-dim", "Dim", "Text"),
+    ("fg-muted", "Muted", "Text"),
+    ("fg-faint", "Faint", "Text"),
+    ("accent", "Accent", "Accent"),
+    ("accent-hover", "Accent hover", "Accent"),
+    ("accent-line", "Accent line", "Accent"),
+    ("accent-bg", "Accent surface", "Accent"),
+    ("accent-fg", "On accent", "Accent"),
+    ("chip-head", "Checked-out chip", "Accent"),
+    ("chip-head-fg", "On that chip", "Accent"),
+    ("green", "Added", "Status"),
+    ("green-bg", "Added surface", "Status"),
+    ("green-line", "Added line", "Status"),
+    ("green-fg", "Added text", "Status"),
+    ("red", "Removed", "Status"),
+    ("red-bg", "Removed surface", "Status"),
+    ("red-line", "Removed line", "Status"),
+    ("red-fg", "Removed text", "Status"),
+    ("amber", "Warning", "Status"),
+    ("amber-bg", "Warning surface", "Status"),
+    ("amber-fg", "Warning text", "Status"),
+    ("purple", "Purple", "Status"),
+    ("cyan", "Cyan", "Status"),
+    ("syn-keyword", "Keyword", "Syntax"),
+    ("syn-type", "Type", "Syntax"),
+    ("syn-number", "Number", "Syntax"),
+    ("syn-string", "String", "Syntax"),
+    ("syn-regexp", "Regexp", "Syntax"),
+    ("syn-title", "Function", "Syntax"),
+    ("syn-variable", "Variable", "Syntax"),
+    ("syn-comment", "Comment", "Syntax"),
+    ("syn-doctag", "Doc tag", "Syntax"),
+    ("syn-meta", "Meta", "Syntax"),
+    ("syn-tag", "Tag", "Syntax"),
+    ("syn-punct", "Punctuation", "Syntax"),
+    ("lane-0", "master / main", "Graph lanes"),
+    ("lane-1", "Lane 1", "Graph lanes"),
+    ("lane-2", "Lane 2", "Graph lanes"),
+    ("lane-3", "Lane 3", "Graph lanes"),
+    ("lane-4", "Lane 4", "Graph lanes"),
+    ("lane-5", "Lane 5", "Graph lanes"),
+    ("lane-6", "Lane 6", "Graph lanes"),
+    ("lane-7", "Lane 7", "Graph lanes"),
+    ("lane-8", "Lane 8", "Graph lanes"),
+    ("stash", "Stash", "Graph lanes"),
+];
+
+/// Group title and blurb, in the order the theme editor shows them.
+pub const GROUPS: &[(&str, &str)] = &[
+    ("Surfaces", "Backgrounds, from the app floor up. Every panel sits on one of these."),
+    ("Lines", "Separators. The hairline does most of the work."),
+    ("Text", "From the brightest heading to the faintest hint."),
+    ("Accent", "Selection, focus, and the active tab."),
+    ("Status", "Additions, deletions and warnings, in the diff and everywhere else."),
+    ("Syntax", "Code colouring in diffs and the conflict editor."),
+    ("Graph lanes", "Assigned to branches in order. They need to stay apart from each other."),
+];
+
+pub const PRESETS: &[Preset] = &[
+    MIDNIGHT_PRESET,
+    Preset { id: "graphite", name: "Graphite", blurb: "Neutral greys, teal accent.", light: false, colors: GRAPHITE },
+    Preset { id: "ember", name: "Ember", blurb: "Warm, low contrast, amber accent.", light: false, colors: EMBER },
+    Preset { id: "daylight", name: "Daylight", blurb: "A light palette.", light: true, colors: DAYLIGHT },
+];
+
+impl Palette {
+    pub fn get(&self, token: &str) -> Option<Color32> {
+        Some(match token {
+            "bg-0" => self.bg_0,
+            "bg-1" => self.bg_1,
+            "bg-2" => self.bg_2,
+            "bg-3" => self.bg_3,
+            "bg-4" => self.bg_4,
+            "bg-inset" => self.bg_inset,
+            "line" => self.line,
+            "line-strong" => self.line_strong,
+            "line-hard" => self.line_hard,
+            "fg-bright" => self.fg_bright,
+            "fg" => self.fg,
+            "fg-dim" => self.fg_dim,
+            "fg-muted" => self.fg_muted,
+            "fg-faint" => self.fg_faint,
+            "accent" => self.accent,
+            "accent-hover" => self.accent_hover,
+            "accent-line" => self.accent_line,
+            "accent-bg" => self.accent_bg,
+            "accent-fg" => self.accent_fg,
+            "chip-head" => self.chip_head,
+            "chip-head-fg" => self.chip_head_fg,
+            "green" => self.green,
+            "green-bg" => self.green_bg,
+            "green-line" => self.green_line,
+            "green-fg" => self.green_fg,
+            "red" => self.red,
+            "red-bg" => self.red_bg,
+            "red-line" => self.red_line,
+            "red-fg" => self.red_fg,
+            "amber" => self.amber,
+            "amber-bg" => self.amber_bg,
+            "amber-fg" => self.amber_fg,
+            "purple" => self.purple,
+            "cyan" => self.cyan,
+            "syn-keyword" => self.syn_keyword,
+            "syn-type" => self.syn_type,
+            "syn-number" => self.syn_number,
+            "syn-string" => self.syn_string,
+            "syn-regexp" => self.syn_regexp,
+            "syn-title" => self.syn_title,
+            "syn-variable" => self.syn_variable,
+            "syn-comment" => self.syn_comment,
+            "syn-doctag" => self.syn_doctag,
+            "syn-meta" => self.syn_meta,
+            "syn-tag" => self.syn_tag,
+            "syn-punct" => self.syn_punct,
+            "lane-0" => self.lane_0,
+            "lane-1" => self.lane_1,
+            "lane-2" => self.lane_2,
+            "lane-3" => self.lane_3,
+            "lane-4" => self.lane_4,
+            "lane-5" => self.lane_5,
+            "lane-6" => self.lane_6,
+            "lane-7" => self.lane_7,
+            "lane-8" => self.lane_8,
+            "stash" => self.stash,
+            _ => return None,
+        })
+    }
+
+    pub fn set(&mut self, token: &str, color: Color32) {
+        match token {
+            "bg-0" => self.bg_0 = color,
+            "bg-1" => self.bg_1 = color,
+            "bg-2" => self.bg_2 = color,
+            "bg-3" => self.bg_3 = color,
+            "bg-4" => self.bg_4 = color,
+            "bg-inset" => self.bg_inset = color,
+            "line" => self.line = color,
+            "line-strong" => self.line_strong = color,
+            "line-hard" => self.line_hard = color,
+            "fg-bright" => self.fg_bright = color,
+            "fg" => self.fg = color,
+            "fg-dim" => self.fg_dim = color,
+            "fg-muted" => self.fg_muted = color,
+            "fg-faint" => self.fg_faint = color,
+            "accent" => self.accent = color,
+            "accent-hover" => self.accent_hover = color,
+            "accent-line" => self.accent_line = color,
+            "accent-bg" => self.accent_bg = color,
+            "accent-fg" => self.accent_fg = color,
+            "chip-head" => self.chip_head = color,
+            "chip-head-fg" => self.chip_head_fg = color,
+            "green" => self.green = color,
+            "green-bg" => self.green_bg = color,
+            "green-line" => self.green_line = color,
+            "green-fg" => self.green_fg = color,
+            "red" => self.red = color,
+            "red-bg" => self.red_bg = color,
+            "red-line" => self.red_line = color,
+            "red-fg" => self.red_fg = color,
+            "amber" => self.amber = color,
+            "amber-bg" => self.amber_bg = color,
+            "amber-fg" => self.amber_fg = color,
+            "purple" => self.purple = color,
+            "cyan" => self.cyan = color,
+            "syn-keyword" => self.syn_keyword = color,
+            "syn-type" => self.syn_type = color,
+            "syn-number" => self.syn_number = color,
+            "syn-string" => self.syn_string = color,
+            "syn-regexp" => self.syn_regexp = color,
+            "syn-title" => self.syn_title = color,
+            "syn-variable" => self.syn_variable = color,
+            "syn-comment" => self.syn_comment = color,
+            "syn-doctag" => self.syn_doctag = color,
+            "syn-meta" => self.syn_meta = color,
+            "syn-tag" => self.syn_tag = color,
+            "syn-punct" => self.syn_punct = color,
+            "lane-0" => self.lane_0 = color,
+            "lane-1" => self.lane_1 = color,
+            "lane-2" => self.lane_2 = color,
+            "lane-3" => self.lane_3 = color,
+            "lane-4" => self.lane_4 = color,
+            "lane-5" => self.lane_5 = color,
+            "lane-6" => self.lane_6 = color,
+            "lane-7" => self.lane_7 = color,
+            "lane-8" => self.lane_8 = color,
+            "stash" => self.stash = color,
+            _ => {}
+        }
+    }
+
+    /// Lane colour by graph colour index; past the lanes is the stash colour.
+    pub fn lane(&self, index: usize) -> Color32 {
+        match index {
+            0 => self.lane_0,
+            1 => self.lane_1,
+            2 => self.lane_2,
+            3 => self.lane_3,
+            4 => self.lane_4,
+            5 => self.lane_5,
+            6 => self.lane_6,
+            7 => self.lane_7,
+            8 => self.lane_8,
+            _ => self.stash,
+        }
+    }
+
+    /// The preset the settings name, with the user's overrides on top.
+    pub fn from_settings(settings: &Settings) -> (Palette, bool) {
+        let preset = preset(&settings.theme_preset);
+        let mut palette = preset.colors;
+        for (token, hex) in &settings.theme_overrides {
+            if let Some(color) = parse_hex(hex) {
+                palette.set(token, color);
+            }
+        }
+        (palette, preset.light)
+    }
+
+    pub fn apply(&self, ctx: &egui::Context, light: bool) {
+        let mut visuals = if light { egui::Visuals::light() } else { egui::Visuals::dark() };
+        visuals.panel_fill = self.bg_1;
+        visuals.window_fill = self.bg_2;
+        visuals.extreme_bg_color = self.bg_inset;
+        visuals.faint_bg_color = self.bg_2;
+        visuals.code_bg_color = self.bg_inset;
+        visuals.window_stroke = egui::Stroke::new(1.0, self.line_strong);
+        visuals.override_text_color = Some(self.fg);
+        visuals.hyperlink_color = self.accent;
+        visuals.selection.bg_fill = self.accent_bg;
+        visuals.selection.stroke = egui::Stroke::new(1.0, self.accent);
+        visuals.warn_fg_color = self.amber;
+        visuals.error_fg_color = self.red;
+        let w = &mut visuals.widgets;
+        w.noninteractive.bg_fill = self.bg_1;
+        w.noninteractive.weak_bg_fill = self.bg_1;
+        w.noninteractive.bg_stroke = egui::Stroke::new(1.0, self.line);
+        w.noninteractive.fg_stroke = egui::Stroke::new(1.0, self.fg);
+        w.inactive.bg_fill = self.bg_3;
+        w.inactive.weak_bg_fill = self.bg_2;
+        w.inactive.bg_stroke = egui::Stroke::new(1.0, self.line_strong);
+        w.inactive.fg_stroke = egui::Stroke::new(1.0, self.fg);
+        w.hovered.bg_fill = self.bg_4;
+        w.hovered.weak_bg_fill = self.bg_3;
+        w.hovered.bg_stroke = egui::Stroke::new(1.0, self.line_strong);
+        w.hovered.fg_stroke = egui::Stroke::new(1.0, self.fg_bright);
+        w.active.bg_fill = self.accent_bg;
+        w.active.weak_bg_fill = self.bg_4;
+        w.active.bg_stroke = egui::Stroke::new(1.0, self.accent);
+        w.active.fg_stroke = egui::Stroke::new(1.0, self.fg_bright);
+        w.open.bg_fill = self.bg_3;
+        w.open.weak_bg_fill = self.bg_3;
+        ctx.set_visuals(visuals);
+    }
+}
+
+/// The preset with this id, or the default one.
+pub fn preset(id: &str) -> &'static Preset {
+    PRESETS.iter().find(|p| p.id == id).unwrap_or(&MIDNIGHT_PRESET)
+}
+
+const MIDNIGHT_PRESET: Preset = Preset {
+    id: "midnight",
+    name: "Midnight",
+    blurb: "The default: near-black and dense.",
+    light: false,
+    colors: MIDNIGHT,
+};
+
+pub fn parse_hex(hex: &str) -> Option<Color32> {
+    let h = hex.trim().trim_start_matches('#');
+    let byte = |i: usize| h.get(i..i + 2).and_then(|s| u8::from_str_radix(s, 16).ok());
+    match h.len() {
+        6 => Some(Color32::from_rgb(byte(0)?, byte(2)?, byte(4)?)),
+        8 => Some(Color32::from_rgba_unmultiplied(byte(0)?, byte(2)?, byte(4)?, byte(6)?)),
+        _ => None,
+    }
+}
+
+pub fn to_hex(color: Color32) -> String {
+    format!("#{:02x}{:02x}{:02x}", color.r(), color.g(), color.b())
+}
+
+const MIDNIGHT: Palette = Palette {
+    bg_0: Color32::from_rgb(15, 17, 21),
+    bg_1: Color32::from_rgb(19, 21, 25),
+    bg_2: Color32::from_rgb(23, 26, 32),
+    bg_3: Color32::from_rgb(28, 32, 39),
+    bg_4: Color32::from_rgb(34, 38, 46),
+    bg_inset: Color32::from_rgb(11, 13, 16),
+    line: Color32::from_rgb(30, 33, 39),
+    line_strong: Color32::from_rgb(42, 46, 54),
+    line_hard: Color32::from_rgb(8, 9, 11),
+    fg_bright: Color32::from_rgb(236, 238, 241),
+    fg: Color32::from_rgb(201, 204, 209),
+    fg_dim: Color32::from_rgb(154, 160, 168),
+    fg_muted: Color32::from_rgb(111, 117, 126),
+    fg_faint: Color32::from_rgb(84, 90, 99),
+    accent: Color32::from_rgb(79, 140, 255),
+    accent_hover: Color32::from_rgb(107, 157, 255),
+    accent_line: Color32::from_rgb(47, 95, 176),
+    accent_bg: Color32::from_rgb(22, 38, 63),
+    accent_fg: Color32::from_rgb(213, 227, 255),
+    chip_head: Color32::from_rgb(22, 50, 79),
+    chip_head_fg: Color32::from_rgb(207, 227, 255),
+    green: Color32::from_rgb(63, 185, 80),
+    green_bg: Color32::from_rgb(16, 38, 26),
+    green_line: Color32::from_rgb(42, 92, 52),
+    green_fg: Color32::from_rgb(126, 231, 135),
+    red: Color32::from_rgb(248, 81, 73),
+    red_bg: Color32::from_rgb(43, 20, 22),
+    red_line: Color32::from_rgb(110, 43, 40),
+    red_fg: Color32::from_rgb(255, 157, 151),
+    amber: Color32::from_rgb(210, 153, 34),
+    amber_bg: Color32::from_rgb(42, 32, 19),
+    amber_fg: Color32::from_rgb(227, 179, 65),
+    purple: Color32::from_rgb(163, 113, 247),
+    cyan: Color32::from_rgb(57, 197, 207),
+    syn_keyword: Color32::from_rgb(86, 156, 214),
+    syn_type: Color32::from_rgb(78, 201, 176),
+    syn_number: Color32::from_rgb(181, 206, 168),
+    syn_string: Color32::from_rgb(206, 145, 120),
+    syn_regexp: Color32::from_rgb(209, 105, 105),
+    syn_title: Color32::from_rgb(220, 220, 170),
+    syn_variable: Color32::from_rgb(156, 220, 254),
+    syn_comment: Color32::from_rgb(106, 153, 85),
+    syn_doctag: Color32::from_rgb(96, 139, 78),
+    syn_meta: Color32::from_rgb(197, 134, 192),
+    syn_tag: Color32::from_rgb(128, 128, 128),
+    syn_punct: Color32::from_rgb(215, 186, 125),
+    lane_0: Color32::from_rgb(79, 140, 255),
+    lane_1: Color32::from_rgb(63, 185, 80),
+    lane_2: Color32::from_rgb(210, 153, 34),
+    lane_3: Color32::from_rgb(163, 113, 247),
+    lane_4: Color32::from_rgb(57, 197, 207),
+    lane_5: Color32::from_rgb(248, 81, 73),
+    lane_6: Color32::from_rgb(219, 97, 162),
+    lane_7: Color32::from_rgb(126, 231, 135),
+    lane_8: Color32::from_rgb(255, 157, 92),
+    stash: Color32::from_rgb(139, 147, 161),
+};
+
+const GRAPHITE: Palette = Palette {
+    bg_0: Color32::from_rgb(23, 24, 26),
+    bg_1: Color32::from_rgb(28, 29, 32),
+    bg_2: Color32::from_rgb(33, 35, 39),
+    bg_3: Color32::from_rgb(40, 42, 47),
+    bg_4: Color32::from_rgb(48, 51, 57),
+    bg_inset: Color32::from_rgb(18, 19, 21),
+    line: Color32::from_rgb(38, 40, 45),
+    line_strong: Color32::from_rgb(52, 55, 62),
+    line_hard: Color32::from_rgb(14, 15, 17),
+    fg_bright: Color32::from_rgb(241, 241, 243),
+    fg: Color32::from_rgb(210, 210, 212),
+    fg_dim: Color32::from_rgb(164, 165, 169),
+    fg_muted: Color32::from_rgb(119, 121, 126),
+    fg_faint: Color32::from_rgb(92, 94, 99),
+    accent: Color32::from_rgb(77, 182, 172),
+    accent_hover: Color32::from_rgb(102, 201, 192),
+    accent_line: Color32::from_rgb(47, 109, 102),
+    accent_bg: Color32::from_rgb(22, 48, 46),
+    accent_fg: Color32::from_rgb(214, 242, 238),
+    chip_head: Color32::from_rgb(27, 63, 59),
+    chip_head_fg: Color32::from_rgb(205, 238, 234),
+    green: Color32::from_rgb(63, 185, 80),
+    green_bg: Color32::from_rgb(16, 38, 26),
+    green_line: Color32::from_rgb(42, 92, 52),
+    green_fg: Color32::from_rgb(126, 231, 135),
+    red: Color32::from_rgb(248, 81, 73),
+    red_bg: Color32::from_rgb(43, 20, 22),
+    red_line: Color32::from_rgb(110, 43, 40),
+    red_fg: Color32::from_rgb(255, 157, 151),
+    amber: Color32::from_rgb(210, 153, 34),
+    amber_bg: Color32::from_rgb(42, 32, 19),
+    amber_fg: Color32::from_rgb(227, 179, 65),
+    purple: Color32::from_rgb(163, 113, 247),
+    cyan: Color32::from_rgb(57, 197, 207),
+    syn_keyword: Color32::from_rgb(86, 156, 214),
+    syn_type: Color32::from_rgb(78, 201, 176),
+    syn_number: Color32::from_rgb(181, 206, 168),
+    syn_string: Color32::from_rgb(206, 145, 120),
+    syn_regexp: Color32::from_rgb(209, 105, 105),
+    syn_title: Color32::from_rgb(220, 220, 170),
+    syn_variable: Color32::from_rgb(156, 220, 254),
+    syn_comment: Color32::from_rgb(106, 153, 85),
+    syn_doctag: Color32::from_rgb(96, 139, 78),
+    syn_meta: Color32::from_rgb(197, 134, 192),
+    syn_tag: Color32::from_rgb(128, 128, 128),
+    syn_punct: Color32::from_rgb(215, 186, 125),
+    lane_0: Color32::from_rgb(77, 182, 172),
+    lane_1: Color32::from_rgb(124, 179, 66),
+    lane_2: Color32::from_rgb(201, 162, 39),
+    lane_3: Color32::from_rgb(149, 117, 205),
+    lane_4: Color32::from_rgb(79, 195, 247),
+    lane_5: Color32::from_rgb(229, 115, 115),
+    lane_6: Color32::from_rgb(186, 104, 200),
+    lane_7: Color32::from_rgb(174, 213, 129),
+    lane_8: Color32::from_rgb(255, 183, 77),
+    stash: Color32::from_rgb(141, 146, 150),
+};
+
+const EMBER: Palette = Palette {
+    bg_0: Color32::from_rgb(21, 18, 15),
+    bg_1: Color32::from_rgb(26, 22, 19),
+    bg_2: Color32::from_rgb(32, 27, 23),
+    bg_3: Color32::from_rgb(39, 33, 28),
+    bg_4: Color32::from_rgb(47, 40, 34),
+    bg_inset: Color32::from_rgb(16, 13, 11),
+    line: Color32::from_rgb(38, 32, 27),
+    line_strong: Color32::from_rgb(55, 47, 39),
+    line_hard: Color32::from_rgb(11, 9, 8),
+    fg_bright: Color32::from_rgb(244, 239, 232),
+    fg: Color32::from_rgb(214, 206, 196),
+    fg_dim: Color32::from_rgb(168, 159, 147),
+    fg_muted: Color32::from_rgb(124, 115, 104),
+    fg_faint: Color32::from_rgb(96, 88, 80),
+    accent: Color32::from_rgb(224, 140, 60),
+    accent_hover: Color32::from_rgb(240, 160, 85),
+    accent_line: Color32::from_rgb(138, 86, 32),
+    accent_bg: Color32::from_rgb(51, 34, 15),
+    accent_fg: Color32::from_rgb(255, 230, 201),
+    chip_head: Color32::from_rgb(58, 37, 16),
+    chip_head_fg: Color32::from_rgb(255, 223, 184),
+    green: Color32::from_rgb(139, 191, 90),
+    green_bg: Color32::from_rgb(27, 36, 18),
+    green_line: Color32::from_rgb(69, 107, 44),
+    green_fg: Color32::from_rgb(191, 224, 147),
+    red: Color32::from_rgb(226, 96, 79),
+    red_bg: Color32::from_rgb(44, 21, 18),
+    red_line: Color32::from_rgb(122, 50, 39),
+    red_fg: Color32::from_rgb(247, 164, 149),
+    amber: Color32::from_rgb(210, 153, 34),
+    amber_bg: Color32::from_rgb(42, 32, 19),
+    amber_fg: Color32::from_rgb(227, 179, 65),
+    purple: Color32::from_rgb(163, 113, 247),
+    cyan: Color32::from_rgb(57, 197, 207),
+    syn_keyword: Color32::from_rgb(86, 156, 214),
+    syn_type: Color32::from_rgb(78, 201, 176),
+    syn_number: Color32::from_rgb(181, 206, 168),
+    syn_string: Color32::from_rgb(206, 145, 120),
+    syn_regexp: Color32::from_rgb(209, 105, 105),
+    syn_title: Color32::from_rgb(220, 220, 170),
+    syn_variable: Color32::from_rgb(156, 220, 254),
+    syn_comment: Color32::from_rgb(106, 153, 85),
+    syn_doctag: Color32::from_rgb(96, 139, 78),
+    syn_meta: Color32::from_rgb(197, 134, 192),
+    syn_tag: Color32::from_rgb(128, 128, 128),
+    syn_punct: Color32::from_rgb(215, 186, 125),
+    lane_0: Color32::from_rgb(224, 140, 60),
+    lane_1: Color32::from_rgb(139, 191, 90),
+    lane_2: Color32::from_rgb(217, 180, 92),
+    lane_3: Color32::from_rgb(185, 138, 214),
+    lane_4: Color32::from_rgb(92, 184, 196),
+    lane_5: Color32::from_rgb(226, 96, 79),
+    lane_6: Color32::from_rgb(209, 114, 155),
+    lane_7: Color32::from_rgb(168, 207, 126),
+    lane_8: Color32::from_rgb(240, 160, 85),
+    stash: Color32::from_rgb(155, 141, 125),
+};
+
+const DAYLIGHT: Palette = Palette {
+    bg_0: Color32::from_rgb(255, 255, 255),
+    bg_1: Color32::from_rgb(246, 247, 249),
+    bg_2: Color32::from_rgb(238, 240, 243),
+    bg_3: Color32::from_rgb(230, 233, 237),
+    bg_4: Color32::from_rgb(219, 223, 229),
+    bg_inset: Color32::from_rgb(240, 242, 245),
+    line: Color32::from_rgb(223, 227, 232),
+    line_strong: Color32::from_rgb(198, 204, 212),
+    line_hard: Color32::from_rgb(185, 192, 201),
+    fg_bright: Color32::from_rgb(11, 15, 20),
+    fg: Color32::from_rgb(36, 41, 47),
+    fg_dim: Color32::from_rgb(74, 81, 88),
+    fg_muted: Color32::from_rgb(107, 115, 124),
+    fg_faint: Color32::from_rgb(140, 148, 157),
+    accent: Color32::from_rgb(9, 105, 218),
+    accent_hover: Color32::from_rgb(31, 124, 232),
+    accent_line: Color32::from_rgb(143, 186, 240),
+    accent_bg: Color32::from_rgb(221, 234, 252),
+    accent_fg: Color32::from_rgb(8, 48, 94),
+    chip_head: Color32::from_rgb(221, 234, 252),
+    chip_head_fg: Color32::from_rgb(8, 48, 94),
+    green: Color32::from_rgb(26, 127, 55),
+    green_bg: Color32::from_rgb(220, 255, 228),
+    green_line: Color32::from_rgb(149, 211, 165),
+    green_fg: Color32::from_rgb(17, 99, 41),
+    red: Color32::from_rgb(207, 34, 46),
+    red_bg: Color32::from_rgb(255, 235, 233),
+    red_line: Color32::from_rgb(240, 179, 174),
+    red_fg: Color32::from_rgb(164, 14, 38),
+    amber: Color32::from_rgb(154, 103, 0),
+    amber_bg: Color32::from_rgb(255, 248, 197),
+    amber_fg: Color32::from_rgb(122, 82, 0),
+    purple: Color32::from_rgb(130, 80, 223),
+    cyan: Color32::from_rgb(27, 124, 131),
+    syn_keyword: Color32::from_rgb(207, 34, 46),
+    syn_type: Color32::from_rgb(149, 56, 0),
+    syn_number: Color32::from_rgb(5, 80, 174),
+    syn_string: Color32::from_rgb(10, 48, 105),
+    syn_regexp: Color32::from_rgb(17, 99, 41),
+    syn_title: Color32::from_rgb(130, 80, 223),
+    syn_variable: Color32::from_rgb(149, 56, 0),
+    syn_comment: Color32::from_rgb(110, 119, 129),
+    syn_doctag: Color32::from_rgb(87, 96, 106),
+    syn_meta: Color32::from_rgb(130, 80, 223),
+    syn_tag: Color32::from_rgb(17, 99, 41),
+    syn_punct: Color32::from_rgb(36, 41, 47),
+    lane_0: Color32::from_rgb(9, 105, 218),
+    lane_1: Color32::from_rgb(26, 127, 55),
+    lane_2: Color32::from_rgb(154, 103, 0),
+    lane_3: Color32::from_rgb(130, 80, 223),
+    lane_4: Color32::from_rgb(27, 124, 131),
+    lane_5: Color32::from_rgb(207, 34, 46),
+    lane_6: Color32::from_rgb(191, 57, 137),
+    lane_7: Color32::from_rgb(45, 164, 78),
+    lane_8: Color32::from_rgb(188, 76, 0),
+    stash: Color32::from_rgb(142, 149, 157),
+};

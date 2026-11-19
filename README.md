@@ -2,8 +2,6 @@
 
 # gitc
 
-*git + scriptc*
-
 <img src="icons/gitc-128.png" width="128" height="128" alt="gitc">
 
 **A fast, minimal git client.**
@@ -14,11 +12,9 @@
 
 ## What it is
 
-gitc is a desktop git client stemming from experimenting with [scriptc](https://scriptc.dev/), an actual Typescript compiler to native code.
+gitc is a desktop git client written in Rust. It ships as **one native executable** that draws its own window: no browser, no runtime, nothing else to install.
 
-It ships as **one executable, around 2 MB**. The engine is TypeScript compiled to native code, and the interface is served to a chromeless browser window on localhost.
-
-Its initial version has been made overnight with Claude Opus 4.8.
+Its first versions were TypeScript compiled to native code by [scriptc](https://scriptc.dev/), with the interface served to a browser window; 1.0 is a complete rewrite in Rust.
 
 ## Status
 
@@ -68,56 +64,36 @@ it is.
 
 - **Windows** or **Linux**
 - **git** in the `PATH`
-- a **Chromium-based browser** (Edge, Chrome, or Chromium) for the display
-
-gitc looks for the browser in the usual places. If yours lives somewhere
-else - Flatpak, snap, a custom prefix - point `GITC_BROWSER` at it.
 
 ## Building from source
 
-**[Node 24 or newer](https://nodejs.org)** — scriptc, the compiler that turns
-the engine into a binary, requires it. Plus a C toolchain:
-
-| Platform | Needs | Why |
-| -------- | ----- | --- |
-| Linux, macOS | `clang` | scriptc drives it directly |
-| Windows | [`zig`](https://ziglang.org/download/) on `PATH` | scriptc's runtime needs mingw's CRT; a stock clang targets MSVC's, and the build fails on an undefined `ssize_t`. scriptc reaches mingw by calling `zig cc` — there is no `zigcc` binary to install, only zig |
+[Rust](https://rustup.rs) stable, nothing else:
 
 ```sh
-npm install
-npm run build      # typecheck, test, bundle the UI, then compile the binary
+cargo build --release
+cargo test
 ```
 
-The result is `dist/gitc` (`dist/gitc.exe` on Windows). Run it with a
+The result is `target/release/gitc` (`gitc.exe` on Windows). Run it with a
 repository path, or with none to reopen your last session:
 
 ```sh
-./dist/gitc /path/to/repo
-./dist/gitc --version
+./target/release/gitc /path/to/repo --portable
+./target/release/gitc --version
 ```
 
-The build checks for both up front and tells you what is missing rather than
-failing somewhere inside the compiler.
-
-For development, `npm run dev` starts the engine and a Vite dev server with hot
-reloading:
-
-```sh
-npm run dev
-```
+`--portable` skips the self-install, which is what you want for a build you
+are trying out.
 
 ## How it works
 
 | Layer | What it does |
 | ----- | ------------ |
-| Engine | TypeScript compiled to a native binary, serving a small HTTP API on localhost |
-| Reads | Parse `.git` directly — refs, HEAD, config and in-progress state — for speed on large repositories |
+| Engine | Rust, in the same process as the window |
+| Reads | Parse `.git` directly (refs, HEAD, config and in-progress state) for speed on large repositories |
 | Writes | Delegated to the `git` CLI, always. git's own rebase and merge are correct; a reimplementation would not be |
-| UI | React, bundled by Vite and baked into the binary, rendered in a chromeless browser window |
-
-Because the UI is served over localhost rather than embedded in a native
-window, gitc has no windowing toolkit to ship and no browser to bundle — it
-borrows the one already on your machine.
+| UI | [egui](https://github.com/emilk/egui), drawn by the GPU |
+| Remote repositories | `ssh <host> gitc --stdio`: the gitc on the other machine answers over the ssh channel, nothing listens on a port |
 
 ## Licence
 

@@ -1,12 +1,3 @@
-node_modules/
+target/
+.wt/
 tools/
-dist/
-build/
-*.exe
-*.pdb
-*.ll
-
-# Written by scripts/version.mjs and scripts/embed.mjs at build time.
-src/generated/
-
-.gitc-browser-profile/
