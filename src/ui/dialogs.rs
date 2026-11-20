@@ -636,30 +636,38 @@ pub fn show_toasts(app: &mut App, ctx: &egui::Context) {
                     ToastKind::Warn => (palette.amber, "warning", palette.amber_bg),
                     ToastKind::Error => (palette.red, "warning", palette.red_bg),
                 };
-                let response = egui::Frame::new()
+                let frame = egui::Frame::new()
                     .fill(blend(palette.bg_2, bg))
                     .stroke(egui::Stroke::new(1.0, accent))
                     .corner_radius(5.0)
-                    .inner_margin(10.0)
-                    .show(ui, |ui| {
-                        ui.set_width(360.0);
-                        ui.horizontal(|ui| {
-                            icons::show(ui, icon, 14.0, accent);
-                            ui.add(egui::Label::new(RichText::new(&toast.title).color(palette.fg_bright)).wrap());
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                                if icons::button(ui, "close", 10.0, "").clicked() {
-                                    dismiss = Some(toast.id);
-                                }
+                    .inner_margin(10.0);
+                let response = ui
+                    .scope_builder(egui::UiBuilder::new().sense(egui::Sense::click()), |ui| {
+                        frame.show(ui, |ui| {
+                            ui.set_width(360.0);
+                            ui.horizontal(|ui| {
+                                icons::show(ui, icon, 14.0, accent);
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                                    if icons::button(ui, "close", 10.0, "").clicked() {
+                                        dismiss = Some(toast.id);
+                                    }
+                                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
+                                        ui.add(
+                                            egui::Label::new(RichText::new(&toast.title).color(palette.fg_bright))
+                                                .wrap(),
+                                        );
+                                    });
+                                });
                             });
+                            if !toast.detail.is_empty() {
+                                ui.add(
+                                    egui::Label::new(RichText::new(&toast.detail).color(palette.fg_dim).size(12.0))
+                                        .wrap(),
+                                );
+                            }
                         });
-                        if !toast.detail.is_empty() {
-                            ui.add(
-                                egui::Label::new(RichText::new(&toast.detail).color(palette.fg_dim).size(12.0)).wrap(),
-                            );
-                        }
                     })
-                    .response
-                    .interact(egui::Sense::click());
+                    .response;
                 if response.hovered() {
                     hold = Some(toast.id);
                 }
