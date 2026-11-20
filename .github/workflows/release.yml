@@ -109,9 +109,7 @@ jobs:
         run: |
           newest=$(objdump -T ${{ matrix.built }} | grep -o 'GLIBC_[0-9.]*' | sort -V | tail -1)
           echo "newest glibc symbol: $newest"
-          test "$(printf '%s
-GLIBC_2.28
-' "$newest" | sort -V | tail -1)" = "GLIBC_2.28"
+          test "$(printf '%s\nGLIBC_2.28\n' "$newest" | sort -V | tail -1)" = "GLIBC_2.28"
 
       - name: Check the binary reports its version
         shell: bash
