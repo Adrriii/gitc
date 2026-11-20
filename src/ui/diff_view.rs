@@ -9,6 +9,7 @@ mod patch;
 #[path = "diff_view_words.rs"]
 mod words;
 
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use base64::Engine as _;
@@ -119,9 +120,20 @@ fn request_if_needed(app: &mut App, id: &str) {
     let req =
         Request::Diff { id: id.to_string(), target: key.target.clone(), path: key.path.clone(), whole: key.whole };
     let path = key.path.clone();
+    let full = (!key.whole && highlight::supported(&path)).then(|| Request::Diff {
+        id: id.to_string(),
+        target: key.target.clone(),
+        path: key.path.clone(),
+        whole: true,
+    });
     let tab = id.to_string();
     app.jobs.run(
-        move || api::call::<FileDiff>(req).map(|d| prepare(d, &path)),
+        move || {
+            api::call::<FileDiff>(req).map(|d| {
+                let whole = full.filter(|_| !d.hunks.is_empty()).and_then(|r| api::call::<FileDiff>(r).ok());
+                prepare(d, whole.as_ref(), &path)
+            })
+        },
         move |app, result| arrived(app, &tab, seq, key, result),
     );
 }
@@ -191,28 +203,26 @@ fn arrived(app: &mut App, tab: &str, seq: u64, key: Key, result: Result<Loaded, 
     }
 }
 
-/// Highlights each hunk's old and new side as separate documents and finds the changed words. Runs off the UI thread.
-fn prepare(diff: FileDiff, path: &str) -> Loaded {
-    let total: usize = diff.hunks.iter().flat_map(|h| &h.lines).map(|l| l.text.len() + 1).sum();
-    let colour = total <= highlight::MAX_CHARS && highlight::supported(path);
+/// Highlights the old and new side of `whole` (of each hunk when it is missing) and finds the changed words.
+/// Runs off the UI thread.
+fn prepare(diff: FileDiff, whole: Option<&FileDiff>, path: &str) -> Loaded {
+    let source = whole.unwrap_or(&diff);
+    let (old, new) = (side_tokens(source, path, true), side_tokens(source, path, false));
     let extra = diff
         .hunks
         .iter()
         .map(|hunk| {
             let lines = &hunk.lines;
-            let mut extra = vec![LineExtra::default(); lines.len()];
-            if colour {
-                for skip in ["add", "del"] {
-                    let side: Vec<usize> =
-                        (0..lines.len()).filter(|&i| lines.get(i).is_some_and(|l| l.kind != skip)).collect();
-                    let texts: Vec<&str> = side.iter().filter_map(|&i| lines.get(i)).map(|l| l.text.as_str()).collect();
-                    for (i, toks) in side.iter().zip(highlight::tokens(path, &texts)) {
-                        if let Some(e) = extra.get_mut(*i) {
-                            e.syn = toks;
-                        }
-                    }
-                }
-            }
+            let mut extra: Vec<LineExtra> = lines
+                .iter()
+                .map(|l| {
+                    let toks = match l.kind.as_str() {
+                        "del" => l.old_no.and_then(|n| old.get(&n)),
+                        _ => l.new_no.and_then(|n| new.get(&n)),
+                    };
+                    LineExtra { syn: toks.cloned().unwrap_or_default(), marks: Vec::new() }
+                })
+                .collect();
             let kinds: Vec<&str> = lines.iter().map(|l| l.kind.as_str()).collect();
             for (i, partner) in words::pair_runs(&kinds).into_iter().enumerate() {
                 let (Some(j), Some(line)) = (partner, lines.get(i)) else { continue };
@@ -230,6 +240,25 @@ fn prepare(diff: FileDiff, path: &str) -> Loaded {
         })
         .collect();
     Loaded { diff, extra }
+}
+
+/// Tokens by line number for one side of `diff`, each hunk's side parsed as one document.
+fn side_tokens(diff: &FileDiff, path: &str, old: bool) -> HashMap<u64, Vec<Token>> {
+    let mut out = HashMap::new();
+    let total: usize = diff.hunks.iter().flat_map(|h| &h.lines).map(|l| l.text.len() + 1).sum();
+    if total > highlight::MAX_CHARS {
+        return out;
+    }
+    for hunk in &diff.hunks {
+        let side: Vec<(u64, &str)> = hunk
+            .lines
+            .iter()
+            .filter_map(|l| if old { l.old_no } else { l.new_no }.map(|n| (n, l.text.as_str())))
+            .collect();
+        let texts: Vec<&str> = side.iter().map(|(_, t)| *t).collect();
+        out.extend(side.iter().map(|(n, _)| *n).zip(highlight::tokens(path, &texts)));
+    }
+    out
 }
 
 fn path_bar(app: &mut App, ui: &mut Ui, id: &str, repo_path: &str, remote: bool) {
@@ -587,4 +616,31 @@ fn group(ui: &mut Ui, p: &Palette, items: &[(&str, bool, &str)]) -> Option<usize
 
 fn text_width(ui: &Ui, text: &str, size: f32) -> f32 {
     ui.painter().layout_no_wrap(text.to_string(), FontId::proportional(size), Color32::WHITE).size().x
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::types::{DiffLine, Hunk};
+
+    fn line(kind: &str, old_no: Option<u64>, new_no: Option<u64>, text: &str) -> DiffLine {
+        DiffLine { kind: kind.into(), old_no, new_no, text: text.into(), no_newline: false }
+    }
+
+    #[test]
+    fn a_hunk_cut_inside_a_comment_is_coloured_from_the_whole_file() {
+        let cut =
+            vec![line("context", Some(2), Some(2), "still comment"), line("add", None, Some(3), "more comment */")];
+        let all = vec![
+            line("context", Some(1), Some(1), "/* open"),
+            line("context", Some(2), Some(2), "still comment"),
+            line("add", None, Some(3), "more comment */"),
+        ];
+        let hunk = |lines: Vec<DiffLine>| Hunk { lines, ..Default::default() };
+        let diff = FileDiff { hunks: vec![hunk(cut)], ..Default::default() };
+        let whole = FileDiff { hunks: vec![hunk(all)], ..Default::default() };
+        let loaded = prepare(diff, Some(&whole), "x.js");
+        let first = loaded.extra.first().and_then(|h| h.first()).map(|e| e.syn.clone()).unwrap_or_default();
+        assert_eq!(first, vec![Token { start: 0, end: "still comment".len(), syn: highlight::Syn::Comment }]);
+    }
 }
