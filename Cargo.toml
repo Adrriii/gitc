@@ -1,6 +1,6 @@
 [package]
 name = "gitc"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2024"
 license = "AGPL-3.0-only"
 description = "A fast, minimal git client: commit graph, branching, rebase and conflict resolution in a single native binary."
